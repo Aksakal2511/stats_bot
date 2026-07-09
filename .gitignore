@@ -1,0 +1,11 @@
+.env
+logs/
+analysis/
+__pycache__/
+.pytest_cache/
+*.pyc
+.DS_Store
+
+# Generated/heavy historical policy artifacts. Keep active runtime bundles under
+# strategy/z6_recency45_weekday_v1, strategy/z6_local_v1, etc.
+strategy/policy_cube/

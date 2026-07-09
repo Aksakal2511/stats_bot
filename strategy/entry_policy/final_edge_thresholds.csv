@@ -1,0 +1,15 @@
+entry_day_type,entry_session_bucket,entry_edge_threshold
+weekday,ASIA_LOW_LIQUIDITY,0.16
+weekday,ASIA_ACTIVE,0.20
+weekday,EUROPE_OPEN,0.22
+weekday,US_PREOPEN,0.20
+weekday,US_OPEN_EXPANSION,0.21
+weekday,US_LATE_SESSION,0.25
+weekday,US_AFTERHOURS,0.25
+weekend,ASIA_LOW_LIQUIDITY,0.13
+weekend,ASIA_ACTIVE,0.12
+weekend,EUROPE_OPEN,0.13
+weekend,US_PREOPEN,0.12
+weekend,US_OPEN_EXPANSION,0.12
+weekend,US_LATE_SESSION,0.12
+weekend,US_AFTERHOURS,0.12

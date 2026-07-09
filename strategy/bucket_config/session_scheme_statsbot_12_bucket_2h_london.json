@@ -1,0 +1,67 @@
+{
+  "name": "statsbot_12_bucket_2h_london",
+  "timezone": "Europe/London",
+  "description": "Stats bot London session map using twelve fixed 2-hour buckets across the full day.",
+  "rules": [
+    {
+      "session_bucket": "ASIA_DEEP_LOW",
+      "start_hour": 0,
+      "end_hour": 2
+    },
+    {
+      "session_bucket": "ASIA_PRE_ACTIVE",
+      "start_hour": 2,
+      "end_hour": 4
+    },
+    {
+      "session_bucket": "ASIA_CORE_EARLY",
+      "start_hour": 4,
+      "end_hour": 6
+    },
+    {
+      "session_bucket": "ASIA_EUROPE_HANDOVER",
+      "start_hour": 6,
+      "end_hour": 8
+    },
+    {
+      "session_bucket": "EUROPE_OPEN",
+      "start_hour": 8,
+      "end_hour": 10
+    },
+    {
+      "session_bucket": "EUROPE_MIDDAY",
+      "start_hour": 10,
+      "end_hour": 12
+    },
+    {
+      "session_bucket": "US_PREOPEN",
+      "start_hour": 12,
+      "end_hour": 14
+    },
+    {
+      "session_bucket": "US_OPEN_EARLY",
+      "start_hour": 14,
+      "end_hour": 16
+    },
+    {
+      "session_bucket": "US_OPEN_LATE",
+      "start_hour": 16,
+      "end_hour": 18
+    },
+    {
+      "session_bucket": "US_LATE_CORE",
+      "start_hour": 18,
+      "end_hour": 20
+    },
+    {
+      "session_bucket": "US_AFTERHOURS_EARLY",
+      "start_hour": 20,
+      "end_hour": 22
+    },
+    {
+      "session_bucket": "US_AFTERHOURS_LATE",
+      "start_hour": 22,
+      "end_hour": 24
+    }
+  ]
+}

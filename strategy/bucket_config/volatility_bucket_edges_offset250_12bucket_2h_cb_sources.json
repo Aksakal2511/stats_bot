@@ -1,0 +1,204 @@
+{
+  "global": {
+    "p33": 2.762814398229588,
+    "p66": 4.909121856344038,
+    "row_count": 9028391
+  },
+  "min_partition_rows": 100,
+  "partitions": [
+    {
+      "day_type": "weekday",
+      "p33": 2.7206240573605447,
+      "p66": 4.270602400722066,
+      "row_count": 534066,
+      "session_bucket": "ASIA_CORE_EARLY",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 3.4464636263710005,
+      "p66": 5.328451052392693,
+      "row_count": 524736,
+      "session_bucket": "ASIA_DEEP_LOW",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 2.6200075701484793,
+      "p66": 4.122693623133136,
+      "row_count": 537849,
+      "session_bucket": "ASIA_EUROPE_HANDOVER",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 3.3668521532514792,
+      "p66": 5.054202375859986,
+      "row_count": 534209,
+      "session_bucket": "ASIA_PRE_ACTIVE",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 2.7520992416363823,
+      "p66": 4.303641023023263,
+      "row_count": 536772,
+      "session_bucket": "EUROPE_MIDDAY",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 2.844001936905287,
+      "p66": 4.435197322572936,
+      "row_count": 536738,
+      "session_bucket": "EUROPE_OPEN",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 3.256070604821092,
+      "p66": 5.127929738101018,
+      "row_count": 527499,
+      "session_bucket": "US_AFTERHOURS_EARLY",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 2.703858969644609,
+      "p66": 4.325246788691229,
+      "row_count": 527578,
+      "session_bucket": "US_AFTERHOURS_LATE",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 4.351458556351154,
+      "p66": 6.539598569777374,
+      "row_count": 533014,
+      "session_bucket": "US_LATE_CORE",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 6.44202428312812,
+      "p66": 9.531459849801738,
+      "row_count": 525484,
+      "session_bucket": "US_OPEN_EARLY",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 5.39216427945252,
+      "p66": 7.805704291106637,
+      "row_count": 528053,
+      "session_bucket": "US_OPEN_LATE",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekday",
+      "p33": 3.34384912274689,
+      "p66": 5.495862999915305,
+      "row_count": 522042,
+      "session_bucket": "US_PREOPEN",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 1.5269481933697289,
+      "p66": 2.7110263803472403,
+      "row_count": 223706,
+      "session_bucket": "ASIA_CORE_EARLY",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 1.8747074954998715,
+      "p66": 3.187828856101749,
+      "row_count": 217206,
+      "session_bucket": "ASIA_DEEP_LOW",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 1.3849351488517185,
+      "p66": 2.5706846644036365,
+      "row_count": 223439,
+      "session_bucket": "ASIA_EUROPE_HANDOVER",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 1.78176167399491,
+      "p66": 3.0511127738458517,
+      "row_count": 221886,
+      "session_bucket": "ASIA_PRE_ACTIVE",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 1.3675505007327198,
+      "p66": 2.6090075790835323,
+      "row_count": 223486,
+      "session_bucket": "EUROPE_MIDDAY",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 1.4213080656042136,
+      "p66": 2.8499619682815984,
+      "row_count": 222618,
+      "session_bucket": "EUROPE_OPEN",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 1.7331568153165167,
+      "p66": 3.2307626337564,
+      "row_count": 221122,
+      "session_bucket": "US_AFTERHOURS_EARLY",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 2.417212669549157,
+      "p66": 4.772471484143581,
+      "row_count": 220015,
+      "session_bucket": "US_AFTERHOURS_LATE",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 1.8386075787501908,
+      "p66": 3.2538726651817873,
+      "row_count": 221393,
+      "session_bucket": "US_LATE_CORE",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 2.091256556417643,
+      "p66": 3.74481036947837,
+      "row_count": 222330,
+      "session_bucket": "US_OPEN_EARLY",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 2.0905004804469765,
+      "p66": 3.5807383798736505,
+      "row_count": 222460,
+      "session_bucket": "US_OPEN_LATE",
+      "used_global_fallback": false
+    },
+    {
+      "day_type": "weekend",
+      "p33": 1.554542959276299,
+      "p66": 3.08056793402752,
+      "row_count": 220690,
+      "session_bucket": "US_PREOPEN",
+      "used_global_fallback": false
+    }
+  ],
+  "smoothing_seconds": 30,
+  "source": "cb"
+}

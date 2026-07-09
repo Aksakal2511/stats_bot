@@ -1,0 +1,7 @@
+numpy
+pandas
+requests
+python-dotenv
+websocket-client
+py-clob-client-v2
+pytest
