@@ -42,6 +42,27 @@ def test_stream_partial_price_update_preserves_other_book_side() -> None:
     assert math.isclose(snapshot.mid, 0.415)
 
 
+def test_signed_order_post_uses_dedicated_entry_client() -> None:
+    calls: list[tuple[object, object]] = []
+
+    class EntryClient:
+        def post_order(self, order, order_type):
+            calls.append((order, order_type))
+            return {"orderID": "entry-order", "status": "live"}
+
+    client = object.__new__(PolymarketClient)
+    client.client = object()
+    client._entry_client = EntryClient()
+    client._OrderType = SimpleNamespace(GTC="GTC")
+    client._ensure_private_client = lambda: True
+
+    result = client.post_signed_buy_order(SignedBuyOrder("up", 0.42, 5.0, "signed-order"))
+
+    assert result.ok is True
+    assert result.order_id == "entry-order"
+    assert calls == [("signed-order", "GTC")]
+
+
 def test_event_submission_is_single_flight_for_market() -> None:
     started = threading.Event()
     release = threading.Event()

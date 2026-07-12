@@ -1,6 +1,7 @@
 numpy
 pandas
 requests
+httpx[http2]
 python-dotenv
 websocket-client
 py-clob-client-v2

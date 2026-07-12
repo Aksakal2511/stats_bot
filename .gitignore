@@ -6,6 +6,22 @@ __pycache__/
 *.pyc
 .DS_Store
 
-# Generated/heavy historical policy artifacts. Keep active runtime bundles under
-# strategy/z6_recency45_weekday_v1, strategy/z6_local_v1, etc.
+# Generated/heavy historical policy artifacts. Keep the active runtime bundle
+# under strategy/z6_recency45_weekday_v1.
 strategy/policy_cube/
+
+# Historical research/runtime artifacts not required for the active production
+# bot package.
+scripts/live_capture_recovery_audit.py
+scripts/live_policy_audit.py
+scripts/recovery_edge_bump_audit.py
+scripts/recovery_guard_design_audit.py
+scripts/regime_guard_audit.py
+strategy/entry_policy/
+strategy/exit_policy/
+strategy/macro_local_v1/
+strategy/research_reference/
+strategy/z6_local_v1/
+strategy/bucket_config/*
+!strategy/bucket_config/
+!strategy/bucket_config/volatility_bucket_edges_offset250_12bucket_2h_cb_sources.json

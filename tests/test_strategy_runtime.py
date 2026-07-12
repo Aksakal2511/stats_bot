@@ -56,27 +56,30 @@ def test_submission_fill_attempt_counts_counts_filled_windows_and_retries() -> N
     ) == (2, 5)
 
 
-def test_execution_health_warms_until_ten_submissions() -> None:
-    assert _execution_health_text(deque([439.0] * 9, maxlen=20)) == "Warming (9/10 submissions)"
+def test_execution_health_warms_until_five_posts() -> None:
+    values = deque([439.0] * 4, maxlen=10)
+    assert _execution_health_text(values, values, values).startswith("Warming (4/5 POSTs)")
 
 
-def test_execution_health_uses_available_samples_from_ten_to_twenty() -> None:
-    samples = deque([400.0] * 8 + [893.0, 950.0], maxlen=20)
-    assert _execution_health_text(samples) == "Healthy (median: 400ms, P90: 893ms)"
+def test_execution_health_reports_all_three_latency_definitions() -> None:
+    client = deque([12.0] * 10, maxlen=10)
+    clob = deque([400.0] * 9 + [900.0], maxlen=10)
+    path = deque([430.0] * 9 + [930.0], maxlen=10)
+    text = _execution_health_text(client, clob, path)
+    assert text.startswith("Healthy (10/10 POSTs)")
+    assert "client P95 12ms" in text
+    assert "CLOB P50/P90 400/400ms" in text
+    assert "path P90 430ms" in text
 
 
-def test_execution_health_uses_rolling_median_and_nearest_rank_p90() -> None:
-    healthy = deque([400.0] * 17 + [893.0, 950.0, 950.0], maxlen=20)
-    degraded_median = deque([800.0] * 20, maxlen=20)
-    degraded_p90 = deque([400.0] * 17 + [1000.0, 1000.0, 1000.0], maxlen=20)
-    poor_median = deque([801.0] * 20, maxlen=20)
-    poor_p90 = deque([400.0] * 17 + [2001.0, 2001.0, 2001.0], maxlen=20)
+def test_execution_health_uses_ten_post_degraded_and_poor_thresholds() -> None:
+    client = deque([12.0] * 10, maxlen=10)
+    path = deque([500.0] * 10, maxlen=10)
+    degraded = deque([400.0] * 8 + [1100.0, 1100.0], maxlen=10)
+    poor = deque([400.0] * 8 + [1600.0, 1600.0], maxlen=10)
 
-    assert _execution_health_text(healthy) == "Healthy (median: 400ms, P90: 893ms)"
-    assert _execution_health_text(degraded_median).startswith("Degraded")
-    assert _execution_health_text(degraded_p90).startswith("Degraded")
-    assert _execution_health_text(poor_median).startswith("Poor")
-    assert _execution_health_text(poor_p90).startswith("Poor")
+    assert _execution_health_text(client, degraded, path).startswith("Degraded")
+    assert _execution_health_text(client, poor, path).startswith("Poor")
 
 
 def _bucket_midpoint(label: str) -> float:

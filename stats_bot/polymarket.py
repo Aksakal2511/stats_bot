@@ -22,6 +22,10 @@ GAMMA_HTTP_TIMEOUT_SECONDS = 2.0
 BOOK_HTTP_TIMEOUT_SECONDS = 1.0
 MARKET_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 USER_WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/user"
+ORDER_TRANSPORT_KEEPALIVE_SECONDS = 600.0
+ORDER_TRANSPORT_WARM_INTERVAL_SECONDS = 3.0
+ORDER_TRANSPORT_TIMEOUT_SECONDS = 5.0
+ORDER_TRANSPORT_WARM_TIMEOUT_SECONDS = 0.75
 
 
 @dataclass(frozen=True)
@@ -62,6 +66,7 @@ class OrderResult:
     message: str = ""
     matched_shares: float = 0.0
     price: float | None = None
+    transport_metrics: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +82,135 @@ class MarketResolution:
     outcome: str | None
     source: str
     resolved: bool
+
+
+class _DedicatedOrderTransport:
+    """A private, warm HTTP/2 transport used only for authenticated order POSTs."""
+
+    def __init__(self) -> None:
+        import httpx
+
+        self._httpx = httpx
+        self._client = httpx.Client(
+            http2=True,
+            trust_env=False,
+            timeout=httpx.Timeout(ORDER_TRANSPORT_TIMEOUT_SECONDS, connect=1.0),
+            limits=httpx.Limits(
+                max_connections=1,
+                max_keepalive_connections=1,
+                keepalive_expiry=ORDER_TRANSPORT_KEEPALIVE_SECONDS,
+            ),
+        )
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._metrics_lock = threading.Lock()
+        self._last_io_completed_at: float | None = None
+        self._last_warm_completed_at: float | None = None
+        self._last_warm_ok: bool | None = None
+        self._last_post_metrics: dict[str, Any] = {}
+
+    @staticmethod
+    def _headers(headers: dict[str, str] | None) -> dict[str, str]:
+        result = dict(headers or {})
+        result["User-Agent"] = "stats-bot-entry-transport"
+        result["Accept"] = "*/*"
+        result["Content-Type"] = "application/json"
+        return result
+
+    def post(self, endpoint: str, headers=None, data=None, params=None):
+        """Match the SDK's `_post` contract without using its shared global client."""
+        from py_clob_client_v2.exceptions import PolyApiException
+
+        started = time.perf_counter()
+        with self._metrics_lock:
+            idle_seconds = (
+                max(0.0, started - self._last_io_completed_at)
+                if self._last_io_completed_at is not None
+                else None
+            )
+            warm_age_seconds = (
+                max(0.0, started - self._last_warm_completed_at)
+                if self._last_warm_completed_at is not None
+                else None
+            )
+            warm_ok = self._last_warm_ok
+        response = None
+        error_type = ""
+        try:
+            response = self._client.request(
+                "POST",
+                endpoint,
+                headers=self._headers(headers),
+                content=data.encode("utf-8") if isinstance(data, str) else data,
+                params=params,
+            )
+        except self._httpx.RequestError as exc:
+            error_type = type(exc).__name__
+            raise PolyApiException(error_msg=f"Dedicated order transport: {exc}") from exc
+        finally:
+            completed = time.perf_counter()
+            metrics = {
+                "wire_elapsed_ms": round((completed - started) * 1000.0, 3),
+                "connection_idle_seconds": round(idle_seconds, 3) if idle_seconds is not None else "",
+                "warm_probe_age_seconds": round(warm_age_seconds, 3) if warm_age_seconds is not None else "",
+                "warm_probe_ok": "" if warm_ok is None else int(warm_ok),
+                "http_version": response.http_version if response is not None else "",
+                "http_status": response.status_code if response is not None else "",
+                "cf_ray": response.headers.get("cf-ray", "") if response is not None else "",
+                "server_timing": response.headers.get("server-timing", "") if response is not None else "",
+                "transport_error_type": error_type,
+            }
+            with self._metrics_lock:
+                self._last_io_completed_at = completed
+                self._last_post_metrics = metrics
+        if response.status_code != 200:
+            raise PolyApiException(response)
+        try:
+            return response.json()
+        except ValueError:
+            return response.text
+
+    def warm(self) -> bool:
+        """Keep the actual order connection warm; failures never affect trading state."""
+        ok = False
+        try:
+            response = self._client.get(
+                f"{POLYMARKET_HOST}/ok",
+                headers={"User-Agent": "stats-bot-entry-transport", "Accept": "*/*"},
+                timeout=self._httpx.Timeout(ORDER_TRANSPORT_WARM_TIMEOUT_SECONDS),
+            )
+            ok = response.status_code == 200
+        except self._httpx.RequestError:
+            pass
+        finally:
+            completed = time.perf_counter()
+            with self._metrics_lock:
+                self._last_io_completed_at = completed
+                self._last_warm_completed_at = completed
+                self._last_warm_ok = ok
+        return ok
+
+    def last_post_metrics(self) -> dict[str, Any]:
+        with self._metrics_lock:
+            return dict(self._last_post_metrics)
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+
+        def run() -> None:
+            self.warm()
+            while not self._stop.wait(ORDER_TRANSPORT_WARM_INTERVAL_SECONDS):
+                self.warm()
+
+        self._thread = threading.Thread(target=run, name="stats-bot-order-transport-warm", daemon=True)
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+        self._client.close()
 
 
 def _lazy_import_clob():
@@ -200,6 +334,8 @@ class PolymarketClient:
     def __init__(self, *, env_path: Path, live: bool):
         self.live = live
         self.client = None
+        self._entry_client = None
+        self._entry_transport: _DedicatedOrderTransport | None = None
         self.wallet_address: str | None = None
         self._http = requests.Session()
         self._http.trust_env = False
@@ -328,6 +464,9 @@ class PolymarketClient:
                     socket.close()
             except Exception:
                 pass
+        if self._entry_transport is not None:
+            self._entry_transport.close()
+            self._entry_transport = None
 
     def start_streams(self, market: MarketInfo, callback) -> None:
         """Start fresh market/user subscriptions for the active five-minute market."""
@@ -499,6 +638,19 @@ class PolymarketClient:
                 signature_type=self._sig_type,
                 funder=self._funder,
             )
+            # The SDK's default HTTP/2 client is module-global. Keep the order-posting
+            # path on an independent client so balance/order polling cannot occupy it.
+            self._entry_transport = _DedicatedOrderTransport()
+            self._entry_client = ClobClient(
+                host=POLYMARKET_HOST,
+                chain_id=POLYGON,
+                key=self._pk,
+                creds=creds,
+                signature_type=self._sig_type,
+                funder=self._funder,
+            )
+            self._entry_client._post = self._entry_transport.post
+            self._entry_transport.start()
             try:
                 self.wallet_address = str(base.get_address())
             except Exception:
@@ -806,10 +958,13 @@ class PolymarketClient:
         if not self._ensure_private_client() or self.client is None:
             return OrderResult(False, None, "NO_CLIENT", "Polymarket client unavailable", price=signed_order.price)
         try:
-            resp = self.client.post_order(signed_order.order, self._OrderType.GTC)
+            entry_client = self._entry_client or self.client
+            resp = entry_client.post_order(signed_order.order, self._OrderType.GTC)
+            transport = getattr(self, "_entry_transport", None)
+            transport_metrics = transport.last_post_metrics() if transport else None
             order_id = _extract_order_id(resp)
             if not order_id:
-                return OrderResult(False, None, "NO_ORDER_ID", str(resp), price=signed_order.price)
+                return OrderResult(False, None, "NO_ORDER_ID", str(resp), price=signed_order.price, transport_metrics=transport_metrics)
             matched = _extract_matched(resp)
             avg_price = _extract_avg_price(resp, signed_order.price)
             return OrderResult(
@@ -819,9 +974,12 @@ class PolymarketClient:
                 str(resp),
                 matched_shares=matched,
                 price=avg_price,
+                transport_metrics=transport_metrics,
             )
         except Exception as exc:
-            return OrderResult(False, None, "ERROR", str(exc), price=signed_order.price)
+            transport = getattr(self, "_entry_transport", None)
+            metrics = transport.last_post_metrics() if transport else None
+            return OrderResult(False, None, "ERROR", str(exc), price=signed_order.price, transport_metrics=metrics)
 
     def place_immediate_sell(
         self,

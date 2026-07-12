@@ -30,7 +30,6 @@ from .strategy import (
     build_policy_key,
     evaluate_exit,
     finite_float,
-    load_entry_edge_thresholds,
     load_exit_thresholds,
     load_policy_cube,
     load_volatility_edges,
@@ -62,8 +61,8 @@ SIDE_MOMENTUM_GUARD_WINDOW_SECONDS = 20
 SIDE_MOMENTUM_GUARD_THRESHOLD_BPS = 2.5
 PRESIGN_ENTRY_TOLERANCE_TICKS = 1
 EXECUTION_LATE_WARNING_SECONDS = 1.0
-EXECUTION_HEALTH_MIN_SAMPLES = 10
-EXECUTION_HEALTH_WINDOW = 20
+EXECUTION_HEALTH_MIN_SAMPLES = 5
+EXECUTION_HEALTH_WINDOW = 10
 
 
 class _LondonFormatter(logging.Formatter):
@@ -196,24 +195,47 @@ def _submission_fill_attempt_counts(
     return fills, attempts
 
 
-def _execution_health_text(submit_elapsed_ms: collections.deque[float]) -> str:
-    values = [float(value) for value in submit_elapsed_ms if math.isfinite(float(value)) and float(value) >= 0.0]
-    if len(values) < EXECUTION_HEALTH_MIN_SAMPLES:
-        return f"Warming ({len(values)}/{EXECUTION_HEALTH_MIN_SAMPLES} submissions)"
-    recent = sorted(values[-EXECUTION_HEALTH_WINDOW:])
-    midpoint = len(recent) // 2
-    if len(recent) % 2:
-        median_ms = recent[midpoint]
-    else:
-        median_ms = (recent[midpoint - 1] + recent[midpoint]) / 2.0
-    p90_ms = recent[math.ceil(0.90 * len(recent)) - 1]
-    if median_ms > 800.0 or p90_ms > 2000.0:
+def _execution_health_text(
+    client_pipeline_ms: collections.deque[float],
+    clob_ack_ms: collections.deque[float],
+    decision_to_response_ms: collections.deque[float],
+) -> str:
+    """One concise health line, with local, venue, and end-to-end latency separated."""
+
+    def valid(values: collections.deque[float]) -> list[float]:
+        return [float(value) for value in values if math.isfinite(float(value)) and float(value) >= 0.0]
+
+    def percentile(values: list[float], fraction: float) -> float:
+        ordered = sorted(values)
+        return ordered[math.ceil(fraction * len(ordered)) - 1]
+
+    client = valid(client_pipeline_ms)[-EXECUTION_HEALTH_WINDOW:]
+    clob = valid(clob_ack_ms)[-EXECUTION_HEALTH_WINDOW:]
+    path = valid(decision_to_response_ms)[-EXECUTION_HEALTH_WINDOW:]
+    count = len(clob)
+    if count == 0:
+        return "Warming (0/5 POSTs) | client: NA | CLOB: NA | path: NA"
+
+    client_p95 = percentile(client, 0.95) if client else 0.0
+    clob_p50 = percentile(clob, 0.50)
+    clob_p90 = percentile(clob, 0.90)
+    path_p90 = percentile(path, 0.90) if path else 0.0
+    summary = (
+        f"client P95 {client_p95:.0f}ms | CLOB P50/P90 {clob_p50:.0f}/{clob_p90:.0f}ms "
+        f"| path P90 {path_p90:.0f}ms"
+    )
+    if count < EXECUTION_HEALTH_MIN_SAMPLES:
+        return f"Warming ({count}/{EXECUTION_HEALTH_MIN_SAMPLES} POSTs) | {summary}"
+
+    slow_over_1s = sum(value > 1000.0 for value in clob)
+    slow_over_1_5s = sum(value > 1500.0 for value in clob)
+    if clob_p50 > 800.0 or slow_over_1_5s >= 2 or max(clob) > 3000.0:
         status = "Poor"
-    elif median_ms >= 500.0 or p90_ms >= 1000.0:
+    elif clob_p50 >= 450.0 or slow_over_1s >= 2:
         status = "Degraded"
     else:
         status = "Healthy"
-    return f"{status} (median: {median_ms:.0f}ms, P90: {p90_ms:.0f}ms)"
+    return f"{status} ({count}/10 POSTs) | {summary}"
 
 
 class StatsBot:
@@ -249,15 +271,23 @@ class StatsBot:
                 f"{self.macro_policy.strategy_id} requires flat market-minimum shares with a 5-share fallback"
             )
         t0 = time.time()
-        log.info("  init: loading legacy exit-policy support...")
-        self.policy_cube: PolicyCube = load_policy_cube(config.policy_file)
-        log.info(f"  init: legacy exit support loaded in {time.time() - t0:.2f}s")
+        if config.exit_policy_mode == "hold_to_resolution":
+            log.info("  init: legacy exit-policy support skipped (hold_to_resolution)...")
+            self.policy_cube = PolicyCube({})
+        else:
+            log.info("  init: loading legacy exit-policy support...")
+            self.policy_cube = load_policy_cube(config.policy_file)
+            log.info(f"  init: legacy exit support loaded in {time.time() - t0:.2f}s")
         t0 = time.time()
-        log.info("  init: loading thresholds and volatility edges...")
-        self.exit_thresholds = load_exit_thresholds(config.exit_thresholds_file)
-        self.entry_edge_thresholds = load_entry_edge_thresholds(config.entry_edge_thresholds_file)
+        log.info("  init: loading active volatility support...")
+        self.exit_thresholds = (
+            load_exit_thresholds(config.exit_thresholds_file)
+            if config.exit_policy_mode != "hold_to_resolution"
+            else {}
+        )
+        self.entry_edge_thresholds = {}
         self.volatility_edges = load_volatility_edges(config.volatility_edges_file)
-        log.info(f"  init: thresholds/edges loaded in {time.time() - t0:.2f}s")
+        log.info(f"  init: active volatility support loaded in {time.time() - t0:.2f}s")
 
         self.balance = config.starting_balance
         self.wallet_balance_live: float | None = None
@@ -315,9 +345,9 @@ class StatsBot:
         self.entry_fills_by_window: dict[str, int] = {}
         self.entry_attempts_by_window: dict[str, int] = {}
         self.entry_attempt_orders_by_window: dict[str, list[PendingEntryOrder]] = {}
-        self.recent_submit_elapsed_ms: collections.deque[float] = collections.deque(
-            maxlen=EXECUTION_HEALTH_WINDOW
-        )
+        self.recent_client_pipeline_ms: collections.deque[float] = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
+        self.recent_clob_ack_ms: collections.deque[float] = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
+        self.recent_decision_to_response_ms: collections.deque[float] = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
         self.last_entry_attempt_time_by_window: dict[str, datetime] = {}
         self.window_errors: list[str] = []
         self.recent_events: collections.deque[RuntimeEvent] = collections.deque(maxlen=10)
@@ -395,8 +425,18 @@ class StatsBot:
             "submit_started_ts_utc": fields.get("submit_started_ts_utc", ""),
             "response_ts_utc": fields.get("response_ts_utc", ""),
             "submit_elapsed_ms": fields.get("submit_elapsed_ms", ""),
+            "wire_elapsed_ms": fields.get("wire_elapsed_ms", ""),
+            "local_submit_overhead_ms": fields.get("local_submit_overhead_ms", ""),
             "entry_path_elapsed_ms": fields.get("entry_path_elapsed_ms", ""),
             "worker_queue_delay_ms": fields.get("worker_queue_delay_ms", ""),
+            "connection_idle_seconds": fields.get("connection_idle_seconds", ""),
+            "warm_probe_age_seconds": fields.get("warm_probe_age_seconds", ""),
+            "warm_probe_ok": fields.get("warm_probe_ok", ""),
+            "http_version": fields.get("http_version", ""),
+            "http_status": fields.get("http_status", ""),
+            "cf_ray": fields.get("cf_ray", ""),
+            "server_timing": fields.get("server_timing", ""),
+            "transport_error_type": fields.get("transport_error_type", ""),
             "execution_state": getattr(self, "_entry_submission_state", "IDLE"),
             "submission_id": fields.get("submission_id", ""),
             "order_id": fields.get("order_id", ""),
@@ -1289,11 +1329,26 @@ class StatsBot:
             result = submission_result.result
             completed = submission_result.completed_at_utc
             elapsed_ms = submission_result.submit_elapsed_ms
-            recent_submit_elapsed_ms = getattr(self, "recent_submit_elapsed_ms", None)
-            if recent_submit_elapsed_ms is None:
-                recent_submit_elapsed_ms = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
-                self.recent_submit_elapsed_ms = recent_submit_elapsed_ms
-            recent_submit_elapsed_ms.append(elapsed_ms)
+            transport_metrics = result.transport_metrics or {}
+            wire_elapsed_ms = finite_float(transport_metrics.get("wire_elapsed_ms"))
+            if wire_elapsed_ms is None:
+                wire_elapsed_ms = elapsed_ms
+            local_overhead_ms = max(0.0, elapsed_ms - wire_elapsed_ms)
+            client_pipeline_ms = submission_result.queue_delay_ms + local_overhead_ms
+            decision_to_response_ms = max(0.0, (completed - submission.decision_at_utc).total_seconds() * 1000.0)
+            recent_client_pipeline_ms = getattr(self, "recent_client_pipeline_ms", None)
+            recent_clob_ack_ms = getattr(self, "recent_clob_ack_ms", None)
+            recent_decision_to_response_ms = getattr(self, "recent_decision_to_response_ms", None)
+            if recent_client_pipeline_ms is None or recent_clob_ack_ms is None or recent_decision_to_response_ms is None:
+                recent_client_pipeline_ms = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
+                recent_clob_ack_ms = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
+                recent_decision_to_response_ms = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
+                self.recent_client_pipeline_ms = recent_client_pipeline_ms
+                self.recent_clob_ack_ms = recent_clob_ack_ms
+                self.recent_decision_to_response_ms = recent_decision_to_response_ms
+            recent_client_pipeline_ms.append(client_pipeline_ms)
+            recent_clob_ack_ms.append(wire_elapsed_ms)
+            recent_decision_to_response_ms.append(decision_to_response_ms)
             with self._entry_submission_lock:
                 current = self._entry_submission
                 if current is None or current.submission_id != submission.submission_id:
@@ -1306,8 +1361,18 @@ class StatsBot:
                 submit_started_ts_utc=submission_result.worker_started_at_utc.isoformat(),
                 response_ts_utc=completed.isoformat(),
                 submit_elapsed_ms=round(elapsed_ms, 3),
-                entry_path_elapsed_ms=round((completed - submission.decision_at_utc).total_seconds() * 1000.0, 3),
+                wire_elapsed_ms=round(wire_elapsed_ms, 3),
+                local_submit_overhead_ms=round(local_overhead_ms, 3),
+                entry_path_elapsed_ms=round(decision_to_response_ms, 3),
                 worker_queue_delay_ms=round(submission_result.queue_delay_ms, 3),
+                connection_idle_seconds=result.transport_metrics.get("connection_idle_seconds", "") if result.transport_metrics else "",
+                warm_probe_age_seconds=result.transport_metrics.get("warm_probe_age_seconds", "") if result.transport_metrics else "",
+                warm_probe_ok=result.transport_metrics.get("warm_probe_ok", "") if result.transport_metrics else "",
+                http_version=result.transport_metrics.get("http_version", "") if result.transport_metrics else "",
+                http_status=result.transport_metrics.get("http_status", "") if result.transport_metrics else "",
+                cf_ray=result.transport_metrics.get("cf_ray", "") if result.transport_metrics else "",
+                server_timing=result.transport_metrics.get("server_timing", "") if result.transport_metrics else "",
+                transport_error_type=result.transport_metrics.get("transport_error_type", "") if result.transport_metrics else "",
                 submission_id=submission.submission_id,
                 order_id=result.order_id or "",
                 order_status=result.status,
@@ -2801,10 +2866,14 @@ class StatsBot:
             self.entry_fills_by_window, self.entry_attempts_by_window
         )
         lines.append(f"    submission        : {submission_fills} / {submission_attempts} fills/attempts")
-        recent_submit_elapsed_ms = getattr(
-            self, "recent_submit_elapsed_ms", collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
+        lines.append(
+            "    Execution health  : "
+            + _execution_health_text(
+                getattr(self, "recent_client_pipeline_ms", collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)),
+                getattr(self, "recent_clob_ack_ms", collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)),
+                getattr(self, "recent_decision_to_response_ms", collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)),
+            )
         )
-        lines.append(f"    Execution health  : {_execution_health_text(recent_submit_elapsed_ms)}")
         if self.peak_drawdown_kill_active:
             lines.append("    kill_switch       : ACTIVE (new entries disabled)")
         if stake_decision is not None:
