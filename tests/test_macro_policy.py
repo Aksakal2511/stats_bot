@@ -64,6 +64,32 @@ def test_z6_sessions_use_london_clock() -> None:
     assert policy.macro_session(datetime(2026, 7, 1, 18, 0, tzinfo=LONDON)) == ("US_LATE", "h18_24")
 
 
+def test_us_late_session_policy_lookup_is_populated() -> None:
+    policy = MacroLocalPolicy(POLICY)
+    snapshot = {
+        "timestamp_london": datetime(2026, 7, 1, 19, 0, tzinfo=LONDON),
+        "day_type": "weekday",
+        "canonical_tte_seconds": 130.0,
+        "elapsed_seconds_since_market_start": 170.0,
+        "cb_signed_bps_raw": 4.0,
+        "local_volatility_1h_bps": 35.0,
+        "local_volatility_status": "ready",
+        "up_bid": 0.44,
+        "up_ask": 0.45,
+        "up_mid": 0.445,
+        "up_spread": 0.01,
+        "down_bid": 0.54,
+        "down_ask": 0.55,
+        "down_mid": 0.545,
+        "down_spread": 0.01,
+    }
+    decision = policy.evaluate(snapshot, start_block_seconds=45)
+    assert snapshot["macro_session"] == "US_LATE"
+    assert decision.policy_record is not None
+    assert decision.policy_key is not None
+    assert decision.policy_key[1] == "h18_24"
+
+
 def test_entry_profiles_match_fixed_clean_ffm_oos_spec() -> None:
     policy = MacroLocalPolicy(POLICY)
     for day_type in ("weekday", "weekend"):
