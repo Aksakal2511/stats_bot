@@ -28,13 +28,13 @@ Both require `STATS_STAKE_MODE=min_order_size` with `STATS_MIN_ORDER_SIZE_FALLBA
 The compact strategy fields are:
 
 ```text
-strategy          : z6_recency45_weekday_v1 (frozen 2026-06-27)
+strategy          : z6_recency45_weekday_v1 (frozen 2026-07-13)
 day/session       : weekday/US_OPEN
-entry_profile     : weekday/US_OPEN | C=4c@90-239s | MR=5c@60-255s
+entry_profile     : weekday/US_OPEN | C=4c@60-239s | MR=4c@60-255s
 local_vol_1h      : 34.812 bps (ready)
 selected_move_z   : -0.731
 move_z_bucket     : z_01
-value / edge      : 0.612 / 0.072 (need 0.050)
+value / edge      : 0.612 / 0.072 (need 0.040)
 trade_style       : mean_reversion
 support / level   : 184 / final
 submission        : 28 / 31 fills/attempts

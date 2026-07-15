@@ -2,7 +2,7 @@
 
 ## Production Model
 
-The active model is `z6_recency45_weekday_v1`, trained on offset250 observations from `2026-02-14` through `2026-06-27`. Its source of truth is:
+The active model is `z6_recency45_weekday_v1`, trained on clean/FFM-omitted offset250 observations from `2026-02-14` through `2026-07-13`. Its source of truth is:
 
 ```text
 strategy/z6_recency45_weekday_v1/policy_bundle.json
@@ -59,7 +59,7 @@ TTE and selected-side price buckets exactly match those stored in the bundle.
 
 ## Entry Decision
 
-Both UP and DOWN are evaluated independently. The default edge/TTE profile is `0.05 / 60-255`; London day/session/style overrides are loaded from `entry_profiles.json`. A side is eligible when:
+Both UP and DOWN are evaluated independently. The shipped profile is continuation `0.04 / 60-239` and mean reversion `0.04 / 60-255`, loaded from `entry_profiles.json`. A side is eligible when:
 
 ```text
 elapsed >= 45 seconds
@@ -87,6 +87,6 @@ If both sides qualify, choose larger edge, then larger value, then UP as a deter
 - Raw BTC-momentum blocker
 - Dynamic staking and anti-martingale bonus
 
-The old files remain for research history but cannot influence `z6_recency45_weekday_v1` entries.
+The old files remain for research history or optional `bps_loss_only` exit experiments, but they are not required by the shipped `hold_to_resolution` default and cannot influence `z6_recency45_weekday_v1` entries.
 
 The runtime-only `$15` peak-realised drawdown kill switch remains active as an overnight capital stop. It is not a policy feature and does not select trades.

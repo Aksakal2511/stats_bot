@@ -178,7 +178,7 @@ The whole game is calibration plus execution.
 
 ```text
 Strategy ID       : z6_recency45_weekday_v1
-Training window   : 2026-02-14 through 2026-06-27
+Training window   : 2026-02-14 through 2026-07-13
 Signal source     : Coinbase BTC-USD
 Settlement labels : resolved Polymarket/Gamma outcomes
 Entry prices      : 0.20-0.80 selected-side ask
@@ -187,7 +187,7 @@ Start gate        : elapsed >= 45 seconds
 Stake             : flat market-minimum shares, 5-share fallback
 Exit              : hold to resolution
 Execution         : event_driven_ws by default
-Fast limit        : ask + 1/2/3 ticks by execution health, residual-edge guarded
+Fast limit        : ask + 1/2/2 ticks by execution health, residual-edge guarded
 Position limit    : one filled trade per five-minute market
 ```
 
@@ -280,23 +280,20 @@ support, not always literal historical trade count.
 The default profile is:
 
 ```text
-continuation    : 5c edge, 60-255s TTE
-mean reversion  : 5c edge, 60-255s TTE
+continuation    : 4c edge, 60-239s TTE
+mean reversion  : 4c edge, 60-255s TTE
 ```
 
 Current day/session/style overrides are stored in
 `strategy/z6_recency45_weekday_v1/entry_profiles.json` and documented in
 `strategy/z6_recency45_weekday_v1/README.md`.
 
-As of this README, the active overrides are:
+As of this README, the active shipped profile is:
 
 | Day | Session | Style | Edge | TTE |
 |---|---|---|---:|---:|
-| Weekday | EUROPE | Mean reversion | 0.05 | 120-179 |
-| Weekday | US_OPEN | Continuation | 0.04 | 90-239 |
-| Weekend | EUROPE | Continuation | 0.04 | 60-255 |
-| Weekend | EUROPE | Mean reversion | 0.03 | 60-255 |
-| Weekend | US_OPEN | Mean reversion | 0.07 | 60-255 |
+| All | All | Continuation | 0.04 | 60-239 |
+| All | All | Mean reversion | 0.04 | 60-255 |
 
 ## Active Entry Rules
 
@@ -717,7 +714,8 @@ pushing.
 - Historical replay can estimate counterfactual fills, but cannot prove exactly
   what the CLOB would have done live.
 - Current active entry depends only on Coinbase as the signal provider.
-- Policy data is frozen through `2026-06-27`; refreshing it requires rebuilding
+- Policy data is frozen through `2026-07-13`; refreshing it requires rebuilding
   research artifacts in `policy_finder` and exporting a new runtime bundle.
-- The large generated `strategy/policy_cube/` artifacts are intentionally not
-  committed to GitHub.
+- The legacy generated `strategy/policy_cube/`, `strategy/entry_policy/` and
+  `strategy/exit_policy/` artifacts are intentionally not committed to GitHub.
+  The shipped default uses `hold_to_resolution` and does not need them.

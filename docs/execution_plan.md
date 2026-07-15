@@ -6,7 +6,7 @@ The strategic layer is `z6_recency45_weekday_v1`. Execution can run as `event_dr
 
 1. Maintain in-memory UP and DOWN books from the public Polymarket market WebSocket.
 2. Re-evaluate UP and DOWN when either the BTC signal or Polymarket book changes.
-3. Require edge of at least `0.05` at the displayed ask and at `ask + 0.01`.
+3. Require edge of at least the active style profile, currently `0.04`, at the displayed ask and at `ask + 0.01`.
 4. Atomically reserve the market entry before handing the pre-signed order to the submission worker.
 5. Submit through the persistent entry-only worker and isolated keepalive HTTP connection at no more than `ask + 1 tick` when edge remains valid.
 6. Use the authenticated user WebSocket to trigger prompt fill reconciliation.

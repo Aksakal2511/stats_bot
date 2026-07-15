@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pytest
 
 from stats_bot.guards import DrawdownGuard, BpsYesGuard, SessionStyleDrawdownGuard, normalised_5_share_pnl
 from stats_bot.bot import (
@@ -42,6 +43,19 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY_FILE = ROOT / "strategy" / "policy_cube" / "policy_cube_dual_side_hold_values_offset250_12bucket_2h_cb_sources.jsonl"
 ENTRY_THRESHOLDS_FILE = ROOT / "strategy" / "entry_policy" / "offset250_12bucket_2h_cb_sources_hold_value_style_thresholds.csv"
 EXIT_THRESHOLDS_FILE = ROOT / "strategy" / "exit_policy" / "offset250_12bucket_2h_hold_exit_thresholds.csv"
+LEGACY_POLICY_ARTIFACTS_AVAILABLE = all(
+    path.exists()
+    for path in (
+        POLICY_FILE,
+        ENTRY_THRESHOLDS_FILE,
+        EXIT_THRESHOLDS_FILE,
+        ROOT / "strategy" / "entry_policy" / "final_edge_thresholds.csv",
+    )
+)
+requires_legacy_policy_artifacts = pytest.mark.skipif(
+    not LEGACY_POLICY_ARTIFACTS_AVAILABLE,
+    reason="legacy policy-cube/threshold artifacts are optional and not shipped with the default macro policy",
+)
 
 
 def test_policy_support_level_handles_missing_snapshot() -> None:
@@ -199,6 +213,7 @@ def test_london_session_map_matches_offset250_12bucket_2h_scheme() -> None:
         assert actual == session
 
 
+@requires_legacy_policy_artifacts
 def test_policy_cube_and_exit_thresholds_load() -> None:
     cube = load_policy_cube(POLICY_FILE)
     thresholds = load_exit_thresholds(EXIT_THRESHOLDS_FILE)
@@ -229,6 +244,7 @@ def test_policy_cube_and_exit_thresholds_load() -> None:
     assert old_entry_edges[("weekday", "US_OPEN_EXPANSION")].enabled is True
 
 
+@requires_legacy_policy_artifacts
 def test_entry_viability_chooses_best_executable_side_value() -> None:
     cube = load_policy_cube(POLICY_FILE)
     thresholds = load_exit_thresholds(EXIT_THRESHOLDS_FILE)
@@ -258,6 +274,7 @@ def test_entry_viability_chooses_best_executable_side_value() -> None:
     assert decision.threshold_bps == thresholds[(record.key[0], record.key[1])]
 
 
+@requires_legacy_policy_artifacts
 def test_exit_logic_is_side_symmetric() -> None:
     cube = load_policy_cube(POLICY_FILE)
     entry_edges = load_entry_edge_thresholds(ENTRY_THRESHOLDS_FILE)
@@ -291,6 +308,7 @@ def test_exit_logic_is_side_symmetric() -> None:
     assert down_exit.signed_bps_materially_against
 
 
+@requires_legacy_policy_artifacts
 def test_entry_window_blocks_first_45_seconds() -> None:
     cube = load_policy_cube(POLICY_FILE)
     thresholds = load_exit_thresholds(EXIT_THRESHOLDS_FILE)
