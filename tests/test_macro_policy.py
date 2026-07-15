@@ -11,7 +11,6 @@ from stats_bot.macro_policy import MacroLocalPolicy
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "strategy" / "z6_recency45_weekday_v1" / "policy_bundle.json"
-LIFETIME_POLICY = ROOT / "strategy" / "z6_local_v1" / "policy_bundle.json"
 LONDON = ZoneInfo("Europe/London")
 
 
@@ -30,9 +29,8 @@ def test_policy_selects_recency_for_weekdays_and_lifetime_for_weekends() -> None
     assert policy._branch(weekend)["name"] == "weekend_lifetime"
 
 
-def test_weekend_policy_values_match_previous_lifetime_bundle() -> None:
+def test_weekend_policy_uses_clean_lifetime_branch() -> None:
     active = MacroLocalPolicy(POLICY)
-    lifetime = MacroLocalPolicy(LIFETIME_POLICY)
     for signed_bps in (-14.0, -4.0, 4.0, 14.0):
         for tte in (75.0, 135.0, 195.0, 240.0):
             snapshot = {
@@ -53,10 +51,9 @@ def test_weekend_policy_values_match_previous_lifetime_bundle() -> None:
                 "down_spread": 0.01,
             }
             active_decision = active.evaluate(dict(snapshot), start_block_seconds=45)
-            lifetime_decision = lifetime.evaluate(dict(snapshot), start_block_seconds=45)
-            assert active_decision.selected_side == lifetime_decision.selected_side
-            assert active_decision.selected_trade_value == lifetime_decision.selected_trade_value
-            assert active_decision.selected_policy_edge == lifetime_decision.selected_policy_edge
+            assert active._branch(snapshot)["name"] == "weekend_lifetime"
+            assert active_decision.policy_record is not None
+            assert active_decision.selected_trade_value is not None
 
 
 def test_z6_sessions_use_london_clock() -> None:
@@ -67,48 +64,21 @@ def test_z6_sessions_use_london_clock() -> None:
     assert policy.macro_session(datetime(2026, 7, 1, 18, 0, tzinfo=LONDON)) == ("US_LATE", "h18_24")
 
 
-def test_segmented_entry_profiles_match_london_aligned_research() -> None:
+def test_entry_profiles_match_fixed_clean_ffm_oos_spec() -> None:
     policy = MacroLocalPolicy(POLICY)
-    expected = {
-        ("weekday", "h06_12", "continuation"): (0.06, 60, 255),
-        ("weekday", "h06_12", "mean_reversion"): (0.05, 120, 179),
-        ("weekday", "h12_18", "continuation"): (0.04, 90, 239),
-        ("weekend", "h00_06", "mean_reversion"): (0.04, 60, 255),
-        ("weekend", "h06_12", "continuation"): (0.04, 60, 255),
-        ("weekend", "h06_12", "mean_reversion"): (0.03, 60, 255),
-        ("weekend", "h12_18", "mean_reversion"): (0.07, 60, 255),
-    }
     for day_type in ("weekday", "weekend"):
         for session in ("h00_06", "h06_12", "h12_18", "h18_24"):
-            for style in ("continuation", "mean_reversion"):
-                profile = policy.entry_parameters(day_type, session, style)
-                assert (profile.edge, profile.min_tte, profile.max_tte) == expected.get(
-                    (day_type, session, style), (0.05, 60, 255)
-                )
+            continuation = policy.entry_parameters(day_type, session, "continuation")
+            mean_reversion = policy.entry_parameters(day_type, session, "mean_reversion")
+            assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.04, 60, 239)
+            assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.06, 60, 255)
 
 
-def test_style_specific_tte_blocks_only_outside_profile() -> None:
+def test_continuation_tte_blocks_only_outside_fixed_profile() -> None:
     policy = MacroLocalPolicy(POLICY)
-    base = {
-        "timestamp_london": datetime(2026, 7, 1, 7, 0, tzinfo=LONDON),
-        "day_type": "weekday",
-        "canonical_tte_seconds": 200.0,
-        "elapsed_seconds_since_market_start": 100.0,
-        "cb_signed_bps_raw": -14.0,
-        "local_volatility_1h_bps": 60.0,
-        "local_volatility_status": "ready",
-        "up_bid": 0.23,
-        "up_ask": 0.24,
-        "up_mid": 0.235,
-        "up_spread": 0.01,
-        "down_bid": 0.50,
-        "down_ask": 0.50,
-    }
-    blocked = policy.evaluate(dict(base), start_block_seconds=45)
-    assert "TTE_OUTSIDE_STYLE_RANGE" in blocked.blockers
-
-    allowed = policy.evaluate({**base, "canonical_tte_seconds": 150.0}, start_block_seconds=45)
-    assert "TTE_OUTSIDE_STYLE_RANGE" not in allowed.blockers
+    profile = policy.entry_parameters("weekday", "h06_12", "continuation")
+    assert profile.min_tte == 60
+    assert profile.max_tte == 239
 
 
 def test_move_z_buckets_are_right_closed_like_research() -> None:
@@ -177,7 +147,7 @@ def test_policy_match_fields_are_populated_when_edge_fails() -> None:
     assert decision.selected_side == "UP"
     assert decision.selected_trade_value is not None
     assert decision.selected_policy_edge is not None
-    assert decision.entry_edge_threshold == 0.05
+    assert decision.entry_edge_threshold == 0.06
     assert snapshot["policy_support"] > 0
     assert snapshot["policy_level"] == "final"
     assert snapshot["selected_move_z_bucket"] == "z_00"

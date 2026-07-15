@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from stats_bot.guards import DrawdownGuard, BpsYesGuard, normalised_5_share_pnl
+from stats_bot.guards import DrawdownGuard, BpsYesGuard, SessionStyleDrawdownGuard, normalised_5_share_pnl
 from stats_bot.bot import (
     PresignLadderState,
     StatsBot,
@@ -450,8 +450,11 @@ def test_live_presigned_entry_uses_cached_wallet_without_refreshing() -> None:
         target_notional=2.0,
         min_order_size=5.0,
         spread_ticks=2,
+        edge_at_ask=0.09,
         edge_at_limit=0.08,
         required_edge=0.05,
+        execution_health_status="Healthy",
+        tolerance_ticks=1,
     )
     signed = SignedBuyOrder(token_id="up", price=0.40, shares=5.0, order=object())
     bot._presign_pop = lambda *args: signed
@@ -597,6 +600,89 @@ def test_fast_presigned_quote_requires_edge_at_signed_limit() -> None:
     assert strong is not None
     assert strong.price == 0.43
     assert round(strong.edge_at_limit, 6) == 0.11
+
+
+def test_fast_presigned_quote_widens_limit_by_execution_health_without_breaking_edge() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "min_entry_price": 0.15,
+            "max_entry_price": 0.80,
+            "weekend_min_entry_price": 0.15,
+            "weekend_max_entry_price": 0.80,
+            "stake_mode": "min_order_size",
+            "stake_usd": 5.0,
+            "min_order_size_fallback": 5.0,
+            "dust_share_threshold": 0.01,
+        },
+    )()
+    market_start = datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc)
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=market_start,
+        market_end_utc=market_start + timedelta(seconds=300),
+        tick_size=0.01,
+        min_order_size=5.0,
+    )
+    book = BookSnapshot(
+        bid=0.41,
+        ask=0.42,
+        mid=0.415,
+        spread=0.01,
+        bid_depth_total=10,
+        ask_depth_total=10,
+        best_bid_depth=5,
+        best_ask_depth=5,
+        captured_at_utc=market_start,
+    )
+    bot._side_book = lambda side: book
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("weekday", "US", "180-209", "z_00", "p40_to_p50", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.41,
+        selected_ask=0.42,
+        selected_mid=0.415,
+        selected_spread=0.01,
+        selected_trade_value=0.50,
+        selected_policy_edge=0.08,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.05,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+
+    bot.recent_clob_ack_ms = deque([500.0, 520.0, 530.0, 540.0, 550.0], maxlen=10)
+    degraded = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
+    assert degraded is not None
+    assert degraded.execution_health_status == "Degraded"
+    assert degraded.tolerance_ticks == 2
+    assert degraded.price == 0.44
+    assert round(degraded.edge_at_ask, 6) == 0.08
+    assert round(degraded.edge_at_limit, 6) == 0.06
+    assert round(degraded.required_edge, 6) == 0.03
+
+    bot.recent_clob_ack_ms = deque([900.0, 920.0, 930.0, 940.0, 950.0], maxlen=10)
+    poor = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
+    assert poor is not None
+    assert poor.execution_health_status == "Poor"
+    assert poor.tolerance_ticks == 3
+    assert poor.price == 0.45
+    assert round(poor.edge_at_ask, 6) == 0.08
+    assert round(poor.edge_at_limit, 6) == 0.05
+    assert round(poor.required_edge, 6) == 0.02
+
+    weak = EntryDecision(**{**decision.__dict__, "selected_trade_value": 0.465, "selected_policy_edge": 0.045})
+    assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, weak) is None
 
 
 def test_paper_fast_limit_entry_fills_current_ask_after_limit_edge_check() -> None:
@@ -817,6 +903,81 @@ def test_dynamic_entry_sizing_uses_bankroll_share_tiers() -> None:
         assert shares == target_shares
         assert notional == round(target_shares * 0.50, 6)
         assert min_order_size == 5.0
+
+
+def test_ladder_entry_sizing_initializes_tier_and_uses_downgrade_buffer() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "paper_trading": True,
+            "stake_mode": "ladder_shares",
+            "stake_usd": 5.0,
+            "min_order_size_fallback": 5.0,
+        },
+    )()
+    bot.wallet_balance_live = None
+    market_start = datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc)
+    market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=market_start,
+        market_end_utc=market_start + timedelta(seconds=300),
+        tick_size=0.01,
+        min_order_size=5.0,
+    )
+
+    bot.balance = 1000.0
+    shares, notional, min_order_size = bot._entry_target_size(price=0.50, market=market)
+    assert shares == 32.0
+    assert notional == 16.0
+    assert min_order_size == 5.0
+
+    bot.balance = 949.0
+    shares, _, _ = bot._entry_target_size(price=0.50, market=market)
+    assert shares == 32.0
+
+    bot.balance = 899.0
+    decision = bot._ladder_stake_decision()
+    assert decision.target_shares == 26.0
+    assert decision.reason == "Downgraded below $900 buffer"
+
+
+def test_ladder_entry_sizing_requires_closed_trade_before_scale_up_after_external_balance_change() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type("Config", (), {"paper_trading": True, "stake_mode": "ladder_shares"})()
+    bot.wallet_balance_live = None
+
+    bot.balance = 950.0
+    assert bot._ladder_stake_decision().target_shares == 26.0
+
+    bot.balance = 1000.0
+    pending = bot._ladder_stake_decision()
+    assert pending.target_shares == 26.0
+    assert pending.reason == "Scale-up pending above $1,000 until one closed trade"
+
+    bot._record_staking_closed_trade(1.0)
+    promoted = bot._ladder_stake_decision()
+    assert promoted.target_shares == 32.0
+    assert promoted.reason is None
+
+
+def test_ladder_entry_sizing_promotes_when_closed_trade_crosses_tier() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type("Config", (), {"paper_trading": True, "stake_mode": "ladder_shares"})()
+    bot.wallet_balance_live = None
+
+    bot.balance = 950.0
+    assert bot._ladder_stake_decision().target_shares == 26.0
+
+    bot.balance = 1001.0
+    bot._record_staking_closed_trade(51.0)
+    assert bot._ladder_stake_decision().target_shares == 32.0
 
 
 def test_dynamic_entry_sizing_disables_bonus_before_force_min_drawdown() -> None:
@@ -1124,6 +1285,70 @@ def test_drawdown_guard_no_longer_blocks_entries() -> None:
     assert blockers == ()
     assert guard.paused_cell_details(1780000000) == []
     assert guard.paused_cells == set()
+
+
+def test_session_style_drawdown_guard_blocks_only_matching_slice() -> None:
+    guard = SessionStyleDrawdownGuard(drawdown_per_share_usd=3.0)
+    closed_at = datetime(2026, 7, 13, 8, 0, tzinfo=timezone.utc)
+
+    key, pnl, activated = guard.record_closed_trade(
+        london_date="2026-07-13",
+        session_label="h06_12",
+        trade_style="mean_reversion",
+        pnl=10.0,
+        closed_at_utc=closed_at,
+        threshold_usd=15.0,
+    )
+    assert key == "2026-07-13|h06_12|mean_reversion"
+    assert pnl == 10.0
+    assert not activated
+    assert guard.entry_blocker(
+        london_date="2026-07-13",
+        session_label="h06_12",
+        session_name="EUROPE",
+        trade_style="mean_reversion",
+        threshold_usd=15.0,
+    ) == ()
+
+    _, pnl, activated = guard.record_closed_trade(
+        london_date="2026-07-13",
+        session_label="h06_12",
+        trade_style="mean_reversion",
+        pnl=-16.0,
+        closed_at_utc=closed_at,
+        threshold_usd=15.0,
+    )
+    assert round(pnl, 2) == -6.0
+    assert activated
+    assert guard.entry_blocker(
+        london_date="2026-07-13",
+        session_label="h06_12",
+        session_name="EUROPE",
+        trade_style="mean_reversion",
+        threshold_usd=15.0,
+    ) == ("SESSION_STYLE_DRAWDOWN",)
+
+    assert guard.entry_blocker(
+        london_date="2026-07-13",
+        session_label="h06_12",
+        session_name="EUROPE",
+        trade_style="continuation",
+        threshold_usd=15.0,
+    ) == ()
+    assert guard.entry_blocker(
+        london_date="2026-07-13",
+        session_label="h12_18",
+        session_name="US_OPEN",
+        trade_style="mean_reversion",
+        threshold_usd=15.0,
+    ) == ()
+    assert guard.entry_blocker(
+        london_date="2026-07-14",
+        session_label="h06_12",
+        session_name="EUROPE",
+        trade_style="mean_reversion",
+        threshold_usd=15.0,
+    ) == ()
 
 
 def test_live_cancel_reconciles_fill_before_clearing_pending_order() -> None:

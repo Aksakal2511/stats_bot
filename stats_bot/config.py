@@ -101,6 +101,15 @@ class BotConfig:
     exit_retry_cadence_seconds: float
     dust_share_threshold: float
     observe_first_window: bool
+    pressure_defence_enabled: bool
+    pressure_min_held_mid: float
+    pressure_max_held_mid: float
+    pressure_max_tte_seconds: int
+    pressure_z_threshold: float
+    pressure_lookback_seconds: int
+    pressure_hedge_fraction: float
+    pressure_max_hedge_ask: float
+    pressure_hedge_limit_price: float
     max_loop_seconds: float | None
     once: bool
 
@@ -113,7 +122,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stake-usd", type=float, default=None, help="Fixed dollar stake per trade when stake mode is fixed_usd. Default: $5.")
     parser.add_argument(
         "--stake-mode",
-        choices=["fixed_usd", "min_order_size", "dynamic_shares"],
+        choices=["fixed_usd", "min_order_size", "dynamic_shares", "ladder_shares"],
         default=None,
         help="Entry sizing mode. Defaults to fixed_usd in paper and flat market min-order shares in live.",
     )
@@ -221,8 +230,8 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         raise SystemExit("STATS_EXIT_POLICY_MODE must be hold_to_resolution or bps_loss_only.")
     stake_mode_default = "fixed_usd" if paper_trading else "min_order_size"
     stake_mode = (args.stake_mode or os.getenv("STATS_STAKE_MODE", stake_mode_default)).strip().lower()
-    if stake_mode not in {"fixed_usd", "min_order_size", "dynamic_shares"}:
-        raise SystemExit("STATS_STAKE_MODE must be fixed_usd, min_order_size, or dynamic_shares.")
+    if stake_mode not in {"fixed_usd", "min_order_size", "dynamic_shares", "ladder_shares"}:
+        raise SystemExit("STATS_STAKE_MODE must be fixed_usd, min_order_size, dynamic_shares, or ladder_shares.")
 
     observe_default = False if paper_trading else True
     observe_first_window = _bool_env("STATS_OBSERVE_FIRST_WINDOW", observe_default)
@@ -289,6 +298,15 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         exit_retry_cadence_seconds=max(0.1, _float_env("STATS_EXIT_RETRY_CADENCE_SECONDS", 1.0)),
         dust_share_threshold=max(0.0, _float_env("STATS_DUST_SHARE_THRESHOLD", 0.01)),
         observe_first_window=observe_first_window,
+        pressure_defence_enabled=_bool_env("STATS_PRESSURE_DEFENCE_ENABLED", True),
+        pressure_min_held_mid=max(0.0, _float_env("STATS_PRESSURE_MIN_HELD_MID", 0.70)),
+        pressure_max_held_mid=min(1.0, _float_env("STATS_PRESSURE_MAX_HELD_MID", 0.90)),
+        pressure_max_tte_seconds=max(0, _int_env("STATS_PRESSURE_MAX_TTE_SECONDS", 60)),
+        pressure_z_threshold=max(0.0, _float_env("STATS_PRESSURE_Z_THRESHOLD", 2.0)),
+        pressure_lookback_seconds=max(1, _int_env("STATS_PRESSURE_LOOKBACK_SECONDS", 10)),
+        pressure_hedge_fraction=max(0.0, min(1.0, _float_env("STATS_PRESSURE_HEDGE_FRACTION", 1.0))),
+        pressure_max_hedge_ask=max(0.0, min(1.0, _float_env("STATS_PRESSURE_MAX_HEDGE_ASK", 0.46))),
+        pressure_hedge_limit_price=max(0.01, min(0.99, _float_env("STATS_PRESSURE_HEDGE_LIMIT_PRICE", 0.99))),
         max_loop_seconds=max_loop_seconds,
         once=bool(args.once),
     )

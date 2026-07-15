@@ -16,12 +16,13 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .binance import BinanceTickerFeed, adverse_z
 from .coinbase import CoinbaseFeed
 from .config import REPO_ROOT, BotConfig, build_config, parse_args
 from .features import compute_live_snapshot
-from .guards import DrawdownGuard, BpsYesGuard
+from .guards import DrawdownGuard, BpsYesGuard, SessionStyleDrawdownGuard
 from .macro_policy import MacroLocalPolicy
-from .models import OpenPosition, PendingEntryOrder, RuntimeEvent
+from .models import HedgeLeg, OpenPosition, PendingEntryOrder, RuntimeEvent
 from .polymarket import BookSnapshot, MarketInfo, OrderResult, PolymarketClient, SignedBuyOrder, WINDOW_SECONDS, round_price
 from .strategy import (
     EntryDecision,
@@ -53,6 +54,30 @@ DYNAMIC_SHARE_TIERS: tuple[tuple[float, float], ...] = (
     (125.0, 12.0),
     (150.0, 15.0),
 )
+LADDER_SHARE_TIERS: tuple[tuple[float, float, float | None], ...] = (
+    (0.0, 5.0, None),
+    (100.0, 6.0, 85.0),
+    (150.0, 7.0, 130.0),
+    (200.0, 9.0, 175.0),
+    (250.0, 11.0, 220.0),
+    (300.0, 13.0, 265.0),
+    (400.0, 17.0, 360.0),
+    (500.0, 20.0, 450.0),
+    (750.0, 26.0, 675.0),
+    (1000.0, 32.0, 900.0),
+    (1500.0, 45.0, 1350.0),
+    (2000.0, 57.0, 1800.0),
+    (2500.0, 70.0, 2250.0),
+    (3000.0, 82.0, 2700.0),
+    (4000.0, 107.0, 3600.0),
+    (5000.0, 132.0, 4500.0),
+    (6000.0, 157.0, 5400.0),
+    (7000.0, 182.0, 6300.0),
+    (7500.0, 195.0, 6750.0),
+    (8000.0, 207.0, 7200.0),
+    (9000.0, 232.0, 8100.0),
+    (10000.0, 257.0, 9000.0),
+)
 STAKE_DRAWDOWN_DISABLE_BONUS_PCT = 5.0
 STAKE_DRAWDOWN_FORCE_MIN_PCT = 8.0
 STAKE_DRAWDOWN_RECOVERY_PCT = 14.0
@@ -60,9 +85,14 @@ STAKE_DRAWDOWN_RECOVERY_EXIT_PCT = 8.0
 SIDE_MOMENTUM_GUARD_WINDOW_SECONDS = 20
 SIDE_MOMENTUM_GUARD_THRESHOLD_BPS = 2.5
 PRESIGN_ENTRY_TOLERANCE_TICKS = 1
+DEGRADED_ENTRY_TOLERANCE_TICKS = 2
+POOR_ENTRY_TOLERANCE_TICKS = 3
+DEGRADED_ENTRY_MIN_RESIDUAL_EDGE = 0.03
+POOR_ENTRY_MIN_RESIDUAL_EDGE = 0.02
 EXECUTION_LATE_WARNING_SECONDS = 1.0
 EXECUTION_HEALTH_MIN_SAMPLES = 5
 EXECUTION_HEALTH_WINDOW = 10
+SESSION_STYLE_DRAWDOWN_PER_SHARE_USD = 3.0
 
 
 class _LondonFormatter(logging.Formatter):
@@ -133,8 +163,11 @@ class FastEntryQuote:
     min_order_size: float
     spread_ticks: int | None
     book: BookSnapshot
+    edge_at_ask: float
     edge_at_limit: float
     required_edge: float
+    execution_health_status: str = "Healthy"
+    tolerance_ticks: int = PRESIGN_ENTRY_TOLERANCE_TICKS
 
 
 @dataclass(frozen=True)
@@ -195,6 +228,45 @@ def _submission_fill_attempt_counts(
     return fills, attempts
 
 
+def _valid_latency_values(values: collections.deque[float]) -> list[float]:
+    return [float(value) for value in values if math.isfinite(float(value)) and float(value) >= 0.0]
+
+
+def _latency_percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    return ordered[math.ceil(fraction * len(ordered)) - 1]
+
+
+def _execution_health_status(clob_ack_ms: collections.deque[float]) -> str:
+    clob = _valid_latency_values(clob_ack_ms)[-EXECUTION_HEALTH_WINDOW:]
+    if len(clob) < EXECUTION_HEALTH_MIN_SAMPLES:
+        return "Warming"
+    clob_p50 = _latency_percentile(clob, 0.50)
+    slow_over_1s = sum(value > 1000.0 for value in clob)
+    slow_over_1_5s = sum(value > 1500.0 for value in clob)
+    if clob_p50 > 800.0 or slow_over_1_5s >= 2 or max(clob) > 3000.0:
+        return "Poor"
+    if clob_p50 >= 450.0 or slow_over_1s >= 2:
+        return "Degraded"
+    return "Healthy"
+
+
+def _entry_tolerance_ticks_for_execution_health(status: str) -> int:
+    if status == "Poor":
+        return POOR_ENTRY_TOLERANCE_TICKS
+    if status == "Degraded":
+        return DEGRADED_ENTRY_TOLERANCE_TICKS
+    return PRESIGN_ENTRY_TOLERANCE_TICKS
+
+
+def _required_limit_edge_for_execution_health(status: str, base_required_edge: float) -> float:
+    if status == "Poor":
+        return min(base_required_edge, POOR_ENTRY_MIN_RESIDUAL_EDGE)
+    if status == "Degraded":
+        return min(base_required_edge, DEGRADED_ENTRY_MIN_RESIDUAL_EDGE)
+    return base_required_edge
+
+
 def _execution_health_text(
     client_pipeline_ms: collections.deque[float],
     clob_ack_ms: collections.deque[float],
@@ -202,39 +274,24 @@ def _execution_health_text(
 ) -> str:
     """One concise health line, with local, venue, and end-to-end latency separated."""
 
-    def valid(values: collections.deque[float]) -> list[float]:
-        return [float(value) for value in values if math.isfinite(float(value)) and float(value) >= 0.0]
-
-    def percentile(values: list[float], fraction: float) -> float:
-        ordered = sorted(values)
-        return ordered[math.ceil(fraction * len(ordered)) - 1]
-
-    client = valid(client_pipeline_ms)[-EXECUTION_HEALTH_WINDOW:]
-    clob = valid(clob_ack_ms)[-EXECUTION_HEALTH_WINDOW:]
-    path = valid(decision_to_response_ms)[-EXECUTION_HEALTH_WINDOW:]
+    client = _valid_latency_values(client_pipeline_ms)[-EXECUTION_HEALTH_WINDOW:]
+    clob = _valid_latency_values(clob_ack_ms)[-EXECUTION_HEALTH_WINDOW:]
+    path = _valid_latency_values(decision_to_response_ms)[-EXECUTION_HEALTH_WINDOW:]
     count = len(clob)
     if count == 0:
         return "Warming (0/5 POSTs) | client: NA | CLOB: NA | path: NA"
 
-    client_p95 = percentile(client, 0.95) if client else 0.0
-    clob_p50 = percentile(clob, 0.50)
-    clob_p90 = percentile(clob, 0.90)
-    path_p90 = percentile(path, 0.90) if path else 0.0
+    client_p95 = _latency_percentile(client, 0.95) if client else 0.0
+    clob_p50 = _latency_percentile(clob, 0.50)
+    clob_p90 = _latency_percentile(clob, 0.90)
+    path_p90 = _latency_percentile(path, 0.90) if path else 0.0
     summary = (
         f"client P95 {client_p95:.0f}ms | CLOB P50/P90 {clob_p50:.0f}/{clob_p90:.0f}ms "
         f"| path P90 {path_p90:.0f}ms"
     )
     if count < EXECUTION_HEALTH_MIN_SAMPLES:
         return f"Warming ({count}/{EXECUTION_HEALTH_MIN_SAMPLES} POSTs) | {summary}"
-
-    slow_over_1s = sum(value > 1000.0 for value in clob)
-    slow_over_1_5s = sum(value > 1500.0 for value in clob)
-    if clob_p50 > 800.0 or slow_over_1_5s >= 2 or max(clob) > 3000.0:
-        status = "Poor"
-    elif clob_p50 >= 450.0 or slow_over_1s >= 2:
-        status = "Degraded"
-    else:
-        status = "Healthy"
+    status = _execution_health_status(clob_ack_ms)
     return f"{status} ({count}/10 POSTs) | {summary}"
 
 
@@ -266,9 +323,9 @@ class StatsBot:
         )
         if configured_shape != tested_shape:
             raise ValueError(f"Runtime entry shape {configured_shape} does not match frozen policy {tested_shape}")
-        if config.stake_mode != "min_order_size" or config.min_order_size_fallback != float(expected["shares"]):
+        if config.stake_mode not in {"min_order_size", "ladder_shares"} or config.min_order_size_fallback != float(expected["shares"]):
             raise ValueError(
-                f"{self.macro_policy.strategy_id} requires flat market-minimum shares with a 5-share fallback"
+                f"{self.macro_policy.strategy_id} requires a 5-share fallback-compatible stake mode"
             )
         t0 = time.time()
         if config.exit_policy_mode == "hold_to_resolution":
@@ -301,6 +358,8 @@ class StatsBot:
         self.trade_style_losses: collections.Counter[str] = collections.Counter()
         self.staking_high_water: float | None = None
         self.staking_positive_streak_pnl = 0.0
+        self.ladder_stake_tier_index: int | None = None
+        self.ladder_pending_tier_index: int | None = None
         self.recovery_active = False
         self.recovery_anchor_bankroll: float | None = None
         self.regime_recovery = RegimeRecoveryState()
@@ -328,8 +387,21 @@ class StatsBot:
         self._last_execution_event_at: datetime | None = None
         self._last_policy_trigger: tuple[str, datetime, datetime | None] | None = None
         self.coinbase = CoinbaseFeed(on_update=self._on_execution_event)
+        self.binance_spot = BinanceTickerFeed(
+            name="binance_spot",
+            url="wss://stream.binance.com:9443/ws/btcusdt@trade",
+            on_update=self._on_execution_event,
+        )
+        self.binance_perp = BinanceTickerFeed(
+            name="binance_perp",
+            url="wss://fstream.binance.com/ws/btcusdt@trade",
+            on_update=self._on_execution_event,
+        )
         self.guard = BpsYesGuard()
         self.drawdown_guard = DrawdownGuard()
+        self.session_style_drawdown_guard = SessionStyleDrawdownGuard(
+            drawdown_per_share_usd=SESSION_STYLE_DRAWDOWN_PER_SHARE_USD
+        )
         self.peak_realized_pnl = 0.0
         self.peak_drawdown_usd = 0.0
         self.peak_drawdown_kill_active = False
@@ -354,6 +426,11 @@ class StatsBot:
         self.last_entry_decision: EntryDecision | None = None
         self.last_exit_decision: ExitDecision | None = None
         self.last_guard_blocker: str | None = None
+        self.last_pressure_defence: dict[str, Any] | None = None
+        self.pressure_hedges_submitted = 0
+        self.pressure_hedges_filled = 0
+        self.pressure_hedges_blocked = 0
+        self.last_session_style_guard_detail: dict[str, Any] | None = None
         self.startup_window_ts: int | None = None
         self.start_time = datetime.now(tz=timezone.utc)
         self.last_dashboard_at: datetime | None = None
@@ -368,12 +445,30 @@ class StatsBot:
         ws_started = self.coinbase.start()
         log.info(f"  init: Coinbase feed setup in {time.time() - t0:.2f}s")
         t0 = time.time()
+        binance_spot_started = self.binance_spot.start()
+        binance_perp_started = self.binance_perp.start()
+        log.info(
+            "  init: Binance pressure feeds %s in %.2fs",
+            "started" if binance_spot_started or binance_perp_started else "unavailable",
+            time.time() - t0,
+        )
+        t0 = time.time()
         minute_ready = self.coinbase.bootstrap_minute_history(self.start_time)
         log.info(
             f"  init: Coinbase minute-volatility history {'ready' if minute_ready else 'warming'} "
             f"in {time.time() - t0:.2f}s"
         )
         self._log_event("startup", "Coinbase WebSocket started" if ws_started else "Coinbase REST fallback active", {})
+        self._log_event(
+            "startup",
+            "Pressure defence enabled" if config.pressure_defence_enabled else "Pressure defence disabled",
+            {
+                "enabled": config.pressure_defence_enabled,
+                "min_held_mid": config.pressure_min_held_mid,
+                "max_held_mid": config.pressure_max_held_mid,
+                "z_threshold": config.pressure_z_threshold,
+            },
+        )
 
     def _init_session_logs(self) -> None:
         self.config.log_dir.mkdir(parents=True, exist_ok=True)
@@ -448,7 +543,10 @@ class StatsBot:
             "limit_price": fields.get("limit_price", ""),
             "trade_value": fields.get("trade_value", ""),
             "required_edge": fields.get("required_edge", ""),
+            "edge_at_ask": fields.get("edge_at_ask", ""),
             "edge_at_limit": fields.get("edge_at_limit", ""),
+            "execution_health_status": fields.get("execution_health_status", ""),
+            "entry_tolerance_ticks": fields.get("entry_tolerance_ticks", ""),
             "pending_entry": int(self.pending_entry is not None),
             "submission_inflight": int(getattr(self, "_entry_submission", None) is not None),
             "active_position": int(getattr(self, "active_position", None) is not None),
@@ -678,6 +776,7 @@ class StatsBot:
             self.startup_window_ts = window_ts
         self.guard.reset_window()
         self.window_errors = []
+        self.last_pressure_defence = None
         self.pm_rows = collections.OrderedDict()
         self.window_open_btc_price = None
         self.current_market = self.pm.find_market(window_ts)
@@ -764,6 +863,203 @@ class StatsBot:
             local_volatility_age_minutes=local_rv_age,
         )
 
+    def _coinbase_pressure_z(self, held_side: str) -> tuple[float | None, float | None, float | None]:
+        return adverse_z(
+            self.coinbase.history_rows(),
+            held_side=held_side,
+            lookback_seconds=self.config.pressure_lookback_seconds,
+            min_returns=600,
+        )
+
+    def _provider_pressure(self, held_side: str) -> dict[str, Any]:
+        providers = {
+            "coinbase": self._coinbase_pressure_z(held_side),
+            "binance_spot": adverse_z(
+                self.binance_spot.history_rows(),
+                held_side=held_side,
+                lookback_seconds=self.config.pressure_lookback_seconds,
+                min_returns=600,
+            ),
+            "binance_perp": adverse_z(
+                self.binance_perp.history_rows(),
+                held_side=held_side,
+                lookback_seconds=self.config.pressure_lookback_seconds,
+                min_returns=600,
+            ),
+        }
+        best_source = ""
+        best_z: float | None = None
+        detail: dict[str, Any] = {}
+        for source, (ret_bps, z_value, rv_bps) in providers.items():
+            detail[f"{source}_ret_bps"] = ret_bps
+            detail[f"{source}_adverse_z"] = z_value
+            detail[f"{source}_rv_1h_bps"] = rv_bps
+            if z_value is not None and math.isfinite(z_value) and (best_z is None or z_value > best_z):
+                best_source = source
+                best_z = float(z_value)
+        detail["pressure_source"] = best_source
+        detail["pressure_z"] = best_z
+        return detail
+
+    def _polymarket_taker_fee(self, shares: float, price: float) -> float:
+        market = self.current_market
+        fee_rate = (
+            finite_float(market.fee_rate) if market is not None and market.fee_rate is not None else CRYPTO_TAKER_FEE_RATE_DEFAULT
+        )
+        if fee_rate is None:
+            fee_rate = CRYPTO_TAKER_FEE_RATE_DEFAULT
+        return float(shares) * float(fee_rate) * float(price) * (1.0 - float(price))
+
+    def _position_trade_style(self, position: OpenPosition) -> str:
+        trade_style = str(position.entry_snapshot.get("entry_trade_style") or "").strip().lower()
+        if trade_style in {"continuation", "mean_reversion"}:
+            return trade_style
+        key_parts = str(position.entry_policy_key_text or "").split("|")
+        bps_bucket = key_parts[3] if len(key_parts) > 3 else None
+        return str(trade_style_from_bps_bucket(position.held_side, bps_bucket) or "").strip().lower()
+
+    def _maybe_execute_pressure_defence(self, now_utc: datetime, snapshot: dict[str, Any] | None) -> None:
+        position = self.active_position
+        market = self.current_market
+        if position is None or market is None or snapshot is None:
+            return
+        if not self.config.pressure_defence_enabled:
+            return
+        if position.hedge_leg is not None or position.pressure_defence_status in {"submitted", "filled"}:
+            return
+        if self._position_trade_style(position) != "continuation":
+            return
+        held_prefix = position.held_side.lower()
+        held_mid = finite_float(snapshot.get(f"{held_prefix}_mid"))
+        tte = finite_float(snapshot.get("canonical_tte_seconds"))
+        if held_mid is None or tte is None:
+            return
+        if tte > self.config.pressure_max_tte_seconds:
+            position.pressure_defence_status = "idle"
+            return
+        if not (self.config.pressure_min_held_mid <= held_mid <= self.config.pressure_max_held_mid):
+            position.pressure_defence_status = "blocked"
+            position.pressure_defence_reason = "HELD_MID_OUTSIDE_PRESSURE_BAND"
+            self.last_pressure_defence = {
+                "status": "blocked",
+                "reason": position.pressure_defence_reason,
+                "held_mid": held_mid,
+                "tte": tte,
+            }
+            return
+        pressure = self._provider_pressure(position.held_side)
+        pressure_z = finite_float(pressure.get("pressure_z"))
+        if pressure_z is None or pressure_z < self.config.pressure_z_threshold:
+            position.pressure_defence_status = "armed"
+            return
+        hedge_side = "DOWN" if position.held_side == "UP" else "UP"
+        hedge_book = self._side_book(hedge_side)
+        hedge_ask = finite_float(hedge_book.ask)
+        if hedge_ask is None:
+            self.pressure_hedges_blocked += 1
+            position.pressure_defence_status = "blocked"
+            position.pressure_defence_reason = "NO_HEDGE_ASK"
+            self.last_pressure_defence = {"status": "blocked", "reason": "NO_HEDGE_ASK", "held_mid": held_mid, "tte": tte, **pressure}
+            return
+        if hedge_ask > self.config.pressure_max_hedge_ask:
+            self.pressure_hedges_blocked += 1
+            position.pressure_defence_status = "blocked"
+            position.pressure_defence_reason = "HEDGE_ASK_ABOVE_MAX"
+            self.last_pressure_defence = {
+                "status": "blocked",
+                "reason": "HEDGE_ASK_ABOVE_MAX",
+                "held_mid": held_mid,
+                "hedge_ask": hedge_ask,
+                "max_hedge_ask": self.config.pressure_max_hedge_ask,
+                "tte": tte,
+                **pressure,
+            }
+            return
+        hedge_shares = max(0.0, position.shares * self.config.pressure_hedge_fraction)
+        if hedge_shares <= self.config.dust_share_threshold:
+            return
+        hedge_token = self._selected_token_id(hedge_side)
+        limit_price = round_price(self.config.pressure_hedge_limit_price, market.tick_size)
+        position.pressure_defence_status = "submitted"
+        self.pressure_hedges_submitted += 1
+        if self.config.paper_trading:
+            matched = hedge_shares
+            fill_price = hedge_ask
+            order_id = f"paper-pressure-{uuid.uuid4().hex[:10]}"
+            status = "PAPER_MATCHED"
+            ok = True
+        else:
+            try:
+                signed = self.pm.create_signed_buy_order(
+                    token_id=hedge_token,
+                    price=limit_price,
+                    shares=hedge_shares,
+                    market=market,
+                )
+                result = self.pm.post_signed_buy_order(signed)
+            except Exception as exc:
+                result = OrderResult(False, None, "ERROR", str(exc), matched_shares=0.0, price=None)
+            matched = float(result.matched_shares or 0.0)
+            fill_price = finite_float(result.price) or hedge_ask
+            order_id = result.order_id
+            status = result.status
+            ok = result.ok
+        self._log_event(
+            "pressure_hedge_submitted",
+            status,
+            {
+                "ok": ok,
+                "held_side": position.held_side,
+                "hedge_side": hedge_side,
+                "held_mid": held_mid,
+                "hedge_ask": hedge_ask,
+                "limit_price": limit_price,
+                "shares": hedge_shares,
+                "matched_shares": matched,
+                "fill_price": fill_price,
+                **pressure,
+            },
+        )
+        if matched <= self.config.dust_share_threshold:
+            position.pressure_defence_status = "failed"
+            position.pressure_defence_reason = f"NO_MATCH:{status}"
+            self.last_pressure_defence = {"status": "failed", "reason": position.pressure_defence_reason, **pressure}
+            return
+        fee = self._polymarket_taker_fee(matched, fill_price)
+        cost = matched * fill_price
+        self.balance -= cost + fee
+        if not self.config.paper_trading and self.wallet_balance_live is not None:
+            self.wallet_balance_live = max(0.0, self.wallet_balance_live - cost - fee)
+        position.hedge_leg = HedgeLeg(
+            token_id=hedge_token,
+            side=hedge_side,
+            shares=matched,
+            avg_price=fill_price,
+            cost=cost,
+            fee=fee,
+            order_id=order_id,
+            trigger_source=str(pressure.get("pressure_source") or ""),
+            trigger_z=float(pressure_z),
+            trigger_time_utc=now_utc,
+            fill_time_utc=datetime.now(tz=timezone.utc),
+            limit_price=limit_price,
+            ask_at_trigger=hedge_ask,
+        )
+        position.pressure_defence_status = "filled"
+        position.pressure_defence_reason = ""
+        self.pressure_hedges_filled += 1
+        self.last_pressure_defence = {
+            "status": "filled",
+            "held_mid": held_mid,
+            "hedge_side": hedge_side,
+            "hedge_ask": hedge_ask,
+            "hedge_price": fill_price,
+            "hedge_shares": matched,
+            "hedge_fee": fee,
+            "tte": tte,
+            **pressure,
+        }
+
     def _selected_token_id(self, side: str) -> str:
         assert self.current_market is not None
         return self.current_market.token_up if side.upper() == "UP" else self.current_market.token_down
@@ -824,6 +1120,10 @@ class StatsBot:
             self.staking_high_water = None
         if not hasattr(self, "staking_positive_streak_pnl"):
             self.staking_positive_streak_pnl = 0.0
+        if not hasattr(self, "ladder_stake_tier_index"):
+            self.ladder_stake_tier_index = None
+        if not hasattr(self, "ladder_pending_tier_index"):
+            self.ladder_pending_tier_index = None
         if not hasattr(self, "recovery_active"):
             self.recovery_active = False
         if not hasattr(self, "recovery_anchor_bankroll"):
@@ -899,6 +1199,67 @@ class StatsBot:
                 tier_index = index
         return tier_index, DYNAMIC_SHARE_TIERS[tier_index][1]
 
+    def _ladder_share_tier(self, bankroll: float) -> tuple[int, float]:
+        tier_index = 0
+        for index, (threshold, shares, _downgrade_below) in enumerate(LADDER_SHARE_TIERS):
+            if bankroll >= threshold:
+                tier_index = index
+        return tier_index, LADDER_SHARE_TIERS[tier_index][1]
+
+    def _ladder_stake_decision(self) -> DynamicStakeDecision:
+        self._ensure_staking_state()
+        bankroll = self._bankroll_for_sizing()
+        eligible_index, _eligible_shares = self._ladder_share_tier(bankroll)
+        current_index = self.ladder_stake_tier_index
+        reason: str | None = None
+
+        if current_index is None:
+            current_index = eligible_index
+            self.ladder_stake_tier_index = current_index
+            self.ladder_pending_tier_index = None
+        else:
+            _current_threshold, _current_shares, current_downgrade_below = LADDER_SHARE_TIERS[current_index]
+            if current_downgrade_below is not None and bankroll < current_downgrade_below:
+                current_index, _shares = self._ladder_share_tier(bankroll)
+                self.ladder_stake_tier_index = current_index
+                self.ladder_pending_tier_index = None
+                reason = f"Downgraded below ${current_downgrade_below:,.0f} buffer"
+            elif eligible_index > current_index:
+                self.ladder_pending_tier_index = eligible_index
+                pending_threshold = LADDER_SHARE_TIERS[eligible_index][0]
+                reason = f"Scale-up pending above ${pending_threshold:,.0f} until one closed trade"
+            elif eligible_index <= current_index:
+                self.ladder_pending_tier_index = None
+
+        threshold, target_shares, _downgrade_below = LADDER_SHARE_TIERS[int(self.ladder_stake_tier_index or 0)]
+        decision = DynamicStakeDecision(
+            target_shares=float(target_shares),
+            bankroll=float(bankroll),
+            high_water=float(threshold),
+            drawdown_pct=0.0,
+            reason=reason,
+        )
+        self.last_staking_decision = decision
+        return decision
+
+    def _record_ladder_closed_trade(self) -> None:
+        self._ensure_staking_state()
+        if self.ladder_stake_tier_index is None:
+            self._ladder_stake_decision()
+            return
+        bankroll = self._bankroll_for_sizing()
+        eligible_index, _eligible_shares = self._ladder_share_tier(bankroll)
+        current_index = int(self.ladder_stake_tier_index)
+        pending_index = self.ladder_pending_tier_index
+        if pending_index is not None and eligible_index >= pending_index and pending_index > current_index:
+            self.ladder_stake_tier_index = pending_index
+            self.ladder_pending_tier_index = None
+        elif pending_index is None and eligible_index > current_index:
+            self.ladder_stake_tier_index = eligible_index
+            self.ladder_pending_tier_index = None
+        elif eligible_index <= current_index:
+            self.ladder_pending_tier_index = None
+
     def _sync_recovery_mode(
         self,
         bankroll: float | None = None,
@@ -964,6 +1325,9 @@ class StatsBot:
 
     def _record_staking_closed_trade(self, pnl: float) -> None:
         self._ensure_staking_state()
+        if getattr(getattr(self, "config", None), "stake_mode", "") == "ladder_shares":
+            self._record_ladder_closed_trade()
+            return
         guard_bankroll = self._bankroll_for_drawdown_guard()
         high_water = self._sync_staking_high_water(guard_bankroll)
         recovery_active, _, _, drawdown_pct = self._sync_recovery_mode(guard_bankroll, high_water)
@@ -983,6 +1347,8 @@ class StatsBot:
             shares = float(min_order_size)
         elif self.config.stake_mode == "dynamic_shares":
             shares = max(self._dynamic_target_shares(), float(min_order_size))
+        elif self.config.stake_mode == "ladder_shares":
+            shares = max(self._ladder_stake_decision().target_shares, float(min_order_size))
         else:
             shares = self.config.stake_usd / max(price, 0.001)
         shares = round(max(0.0, shares), 4)
@@ -1018,16 +1384,24 @@ class StatsBot:
         if not (active_min_entry <= ask <= active_max_entry):
             return None
         tick = market.tick_size if market.tick_size > 0 else 0.01
-        tolerated = ask + (PRESIGN_ENTRY_TOLERANCE_TICKS * tick)
+        health_status = _execution_health_status(
+            getattr(self, "recent_clob_ack_ms", collections.deque(maxlen=EXECUTION_HEALTH_WINDOW))
+        )
+        tolerance_ticks = _entry_tolerance_ticks_for_execution_health(health_status)
+        tolerated = ask + (tolerance_ticks * tick)
         price = round_price(min(tolerated, active_max_entry), tick)
         if price + 1e-12 < ask:
             return None
         trade_value = finite_float(decision.selected_trade_value)
-        required_edge = self._required_entry_edge_at_fill(now_utc, decision)
-        if trade_value is None or required_edge is None:
+        base_required_edge = self._required_entry_edge_at_fill(now_utc, decision)
+        if trade_value is None or base_required_edge is None:
             return None
+        edge_at_ask = trade_value - ask
+        if edge_at_ask + 1e-12 < base_required_edge:
+            return None
+        required_edge_at_limit = _required_limit_edge_for_execution_health(health_status, base_required_edge)
         edge_at_limit = trade_value - price
-        if edge_at_limit + 1e-12 < required_edge:
+        if edge_at_limit + 1e-12 < required_edge_at_limit:
             return None
         shares, target_notional, min_order_size = self._entry_target_size(price=price, market=market)
         if shares <= self.config.dust_share_threshold or shares + 1e-9 < min_order_size:
@@ -1042,8 +1416,11 @@ class StatsBot:
             min_order_size=min_order_size,
             spread_ticks=spread_ticks,
             book=book,
+            edge_at_ask=edge_at_ask,
             edge_at_limit=edge_at_limit,
-            required_edge=required_edge,
+            required_edge=required_edge_at_limit,
+            execution_health_status=health_status,
+            tolerance_ticks=tolerance_ticks,
         )
 
     def _live_retry_cooldown_remaining(self, market_slug: str, now_utc: datetime) -> float:
@@ -1064,10 +1441,13 @@ class StatsBot:
         min_order_size: float,
         target_notional: float,
         execution_mode: str,
+        edge_at_ask: float | None = None,
         edge_at_limit: float | None = None,
         required_edge_at_limit: float | None = None,
+        execution_health_status: str | None = None,
+        entry_tolerance_ticks: int | None = None,
     ) -> dict[str, Any]:
-        stake_decision = self.last_staking_decision if self.config.stake_mode == "dynamic_shares" else None
+        stake_decision = self.last_staking_decision if self.config.stake_mode in {"dynamic_shares", "ladder_shares"} else None
         snapshot_with_meta = dict(snapshot)
         snapshot_with_meta.update(
             {
@@ -1087,8 +1467,11 @@ class StatsBot:
                 "entry_staking_high_water": stake_decision.high_water if stake_decision else None,
                 "entry_staking_drawdown_pct": stake_decision.drawdown_pct if stake_decision else None,
                 "entry_execution_mode": execution_mode,
+                "entry_edge_at_ask": edge_at_ask,
                 "entry_edge_at_limit": edge_at_limit,
                 "entry_required_edge_at_limit": required_edge_at_limit,
+                "entry_execution_health_status": execution_health_status,
+                "entry_tolerance_ticks": entry_tolerance_ticks,
             }
         )
         return snapshot_with_meta
@@ -1248,8 +1631,11 @@ class StatsBot:
                 min_order_size=min_order_size,
                 spread_ticks=spread_ticks,
                 book=book,
+                edge_at_ask=edge_at_limit,
                 edge_at_limit=edge_at_limit,
                 required_edge=required_edge,
+                execution_health_status="Maker",
+                tolerance_ticks=0,
             )
             execution_mode = "maker_post_only_async"
 
@@ -1265,8 +1651,11 @@ class StatsBot:
             min_order_size=quote.min_order_size,
             target_notional=quote.target_notional,
             execution_mode=execution_mode,
+            edge_at_ask=quote.edge_at_ask,
             edge_at_limit=quote.edge_at_limit,
             required_edge_at_limit=quote.required_edge,
+            execution_health_status=quote.execution_health_status,
+            entry_tolerance_ticks=quote.tolerance_ticks,
         )
         submission = EntrySubmission(
             submission_id=submission_id,
@@ -1307,7 +1696,10 @@ class StatsBot:
             limit_price=quote.price,
             trade_value=decision.selected_trade_value,
             required_edge=quote.required_edge,
+            edge_at_ask=quote.edge_at_ask,
             edge_at_limit=quote.edge_at_limit,
+            execution_health_status=quote.execution_health_status,
+            entry_tolerance_ticks=quote.tolerance_ticks,
             detail=execution_mode,
         )
         try:
@@ -1382,7 +1774,10 @@ class StatsBot:
                 observed_ask=submission.quote.book.ask,
                 limit_price=submission.quote.price,
                 required_edge=submission.quote.required_edge,
+                edge_at_ask=submission.quote.edge_at_ask,
                 edge_at_limit=submission.quote.edge_at_limit,
+                execution_health_status=submission.quote.execution_health_status,
+                entry_tolerance_ticks=submission.quote.tolerance_ticks,
                 detail=(result.message or "")[:240],
             )
             if not result.ok or not result.order_id:
@@ -1394,6 +1789,8 @@ class StatsBot:
                         "side": submission.policy_side,
                         "price": submission.quote.price,
                         "attempts": submission.attempt_count,
+                        "execution_health_status": submission.quote.execution_health_status,
+                        "entry_tolerance_ticks": submission.quote.tolerance_ticks,
                         "submit_elapsed_ms": round(elapsed_ms, 1),
                         "entry_path_elapsed_ms": round((completed - submission.decision_at_utc).total_seconds() * 1000.0, 1),
                         "message": result.message[:500],
@@ -1570,6 +1967,11 @@ class StatsBot:
             observed_ask=book.ask,
             trade_value=decision.selected_trade_value,
             required_edge=required_edge,
+            edge_at_ask=(
+                float(decision.selected_trade_value) - float(book.ask)
+                if decision.selected_trade_value is not None and book.ask is not None
+                else ""
+            ),
             edge_at_limit=(
                 float(decision.selected_trade_value) - float(book.ask)
                 if decision.selected_trade_value is not None and book.ask is not None
@@ -1656,8 +2058,11 @@ class StatsBot:
                         min_order_size=fast_quote.min_order_size,
                         target_notional=fast_quote.target_notional,
                         execution_mode="presigned_fast_limit",
+                        edge_at_ask=fast_quote.edge_at_ask,
                         edge_at_limit=fast_quote.edge_at_limit,
                         required_edge_at_limit=fast_quote.required_edge,
+                        execution_health_status=fast_quote.execution_health_status,
+                        entry_tolerance_ticks=fast_quote.tolerance_ticks,
                     )
                     attempt_count = int(self.entry_attempts_by_window.get(market.slug, 0)) + 1
                     self.entry_attempts_by_window[market.slug] = attempt_count
@@ -1680,8 +2085,11 @@ class StatsBot:
                                 "min_order_size": fast_quote.min_order_size,
                                 "stake_mode": self.config.stake_mode,
                                 "attempts": attempt_count,
+                                "edge_at_ask": fast_quote.edge_at_ask,
                                 "edge_at_limit": fast_quote.edge_at_limit,
                                 "required_edge_at_limit": fast_quote.required_edge,
+                                "execution_health_status": fast_quote.execution_health_status,
+                                "entry_tolerance_ticks": fast_quote.tolerance_ticks,
                                 "submit_elapsed_ms": round(submit_elapsed_ms, 1),
                                 "entry_path_elapsed_ms": round(entry_path_elapsed_ms, 1),
                                 "message": result.message[:500],
@@ -1716,8 +2124,11 @@ class StatsBot:
                             "min_order_size": fast_quote.min_order_size,
                             "stake_mode": self.config.stake_mode,
                             "spread_ticks": fast_quote.spread_ticks,
+                            "edge_at_ask": fast_quote.edge_at_ask,
                             "edge_at_limit": fast_quote.edge_at_limit,
                             "required_edge_at_limit": fast_quote.required_edge,
+                            "execution_health_status": fast_quote.execution_health_status,
+                            "entry_tolerance_ticks": fast_quote.tolerance_ticks,
                             "matched_shares": result.matched_shares,
                             "avg_price": result.price,
                             "submit_elapsed_ms": round(submit_elapsed_ms, 1),
@@ -1766,8 +2177,11 @@ class StatsBot:
                     min_order_size=fast_quote.min_order_size,
                     target_notional=fast_quote.target_notional,
                     execution_mode="presigned_fast_limit",
+                    edge_at_ask=fast_quote.edge_at_ask,
                     edge_at_limit=fast_quote.edge_at_limit,
                     required_edge_at_limit=fast_quote.required_edge,
+                    execution_health_status=fast_quote.execution_health_status,
+                    entry_tolerance_ticks=fast_quote.tolerance_ticks,
                 )
                 pseudo_id = f"paper-fast-entry-{int(time.time() * 1000)}"
                 self.pending_entry = PendingEntryOrder(
@@ -1796,8 +2210,11 @@ class StatsBot:
                         "min_order_size": fast_quote.min_order_size,
                         "stake_mode": self.config.stake_mode,
                         "spread_ticks": fast_quote.spread_ticks,
+                        "edge_at_ask": fast_quote.edge_at_ask,
                         "edge_at_limit": fast_quote.edge_at_limit,
                         "required_edge_at_limit": fast_quote.required_edge,
+                        "execution_health_status": fast_quote.execution_health_status,
+                        "entry_tolerance_ticks": fast_quote.tolerance_ticks,
                     },
                 )
                 self._open_position_from_entry(self.pending_entry, fast_quote.shares, fill_price, now_utc)
@@ -1843,6 +2260,8 @@ class StatsBot:
             min_order_size=min_order_size,
             target_notional=target_notional,
             execution_mode="maker_post_only",
+            execution_health_status="Maker",
+            entry_tolerance_ticks=0,
         )
         if self.config.paper_trading:
             pseudo_id = f"paper-entry-{int(time.time() * 1000)}"
@@ -2203,7 +2622,7 @@ class StatsBot:
         if decision.selected_side != pending.policy_side or decision.policy_key_text != pending.policy_key_text:
             self._cancel_pending_entry("POLICY_CHANGED")
             return
-        if self.config.stake_mode == "dynamic_shares" and self.current_market is not None:
+        if self.config.stake_mode in {"dynamic_shares", "ladder_shares"} and self.current_market is not None:
             current_shares, _, _ = self._entry_target_size(price=pending.price, market=self.current_market)
             if not math.isclose(current_shares, pending.target_shares, abs_tol=1e-9):
                 self._cancel_pending_entry("STAKE_TARGET_CHANGED")
@@ -2301,6 +2720,7 @@ class StatsBot:
             shares=position.exited_shares_accumulated,
             market_slug=position.market_slug,
         )
+        self._record_session_style_guard_closed_trade(position, trade_style, pnl, exit_time)
         self._record_regime_closed_trade(normalised_pnl, exit_time)
         self._record_staking_closed_trade(pnl)
         if pnl >= 0:
@@ -2336,6 +2756,13 @@ class StatsBot:
                         "settled",
                         "settled_outcome",
                         "settled_outcome_source",
+                        "hedge_side",
+                        "hedge_shares",
+                        "hedge_price",
+                        "hedge_cost",
+                        "hedge_fee",
+                        "hedge_trigger_source",
+                        "hedge_trigger_z",
                     ]
                 )
             writer.writerow(
@@ -2360,6 +2787,13 @@ class StatsBot:
                     int(settled),
                     settled_outcome or "",
                     settled_outcome_source or "",
+                    position.hedge_leg.side if position.hedge_leg else "",
+                    f"{position.hedge_leg.shares:.6f}" if position.hedge_leg else "",
+                    f"{position.hedge_leg.avg_price:.6f}" if position.hedge_leg else "",
+                    f"{position.hedge_leg.cost:.6f}" if position.hedge_leg else "",
+                    f"{position.hedge_leg.fee:.6f}" if position.hedge_leg else "",
+                    position.hedge_leg.trigger_source if position.hedge_leg else "",
+                    f"{position.hedge_leg.trigger_z:.6f}" if position.hedge_leg else "",
                 ]
             )
         self._log_event(
@@ -2373,6 +2807,10 @@ class StatsBot:
                 "side": position.held_side,
                 "settled_outcome": settled_outcome,
                 "settled_outcome_source": settled_outcome_source,
+                "hedged": position.hedge_leg is not None,
+                "hedge_side": position.hedge_leg.side if position.hedge_leg else None,
+                "hedge_trigger_source": position.hedge_leg.trigger_source if position.hedge_leg else None,
+                "hedge_trigger_z": position.hedge_leg.trigger_z if position.hedge_leg else None,
             },
         )
         if self.active_position is position:
@@ -2519,9 +2957,18 @@ class StatsBot:
             return False
         outcome = resolution.outcome
         won = outcome == position.held_side
-        proceeds = position.shares if won else 0.0
-        pnl = proceeds - position.entry_cost
-        if won:
+        primary_proceeds = position.shares if won else 0.0
+        hedge_proceeds = 0.0
+        hedge_cost = 0.0
+        hedge_fee = 0.0
+        if position.hedge_leg is not None:
+            hedge_won = outcome == position.hedge_leg.side
+            hedge_proceeds = position.hedge_leg.shares if hedge_won else 0.0
+            hedge_cost = position.hedge_leg.cost
+            hedge_fee = position.hedge_leg.fee
+        proceeds = primary_proceeds + hedge_proceeds
+        pnl = primary_proceeds - position.entry_cost + hedge_proceeds - hedge_cost - hedge_fee
+        if proceeds > 0:
             self.balance += proceeds
         self.session_pnl += pnl
         self.realized_pnl += pnl
@@ -2583,6 +3030,149 @@ class StatsBot:
     def _max_entry_price_for_snapshot(self, snapshot: dict[str, Any] | None) -> float:
         return self._entry_price_bounds_for_snapshot(snapshot)[1]
 
+    def _session_style_guard_context(
+        self,
+        london_dt: datetime | None,
+        trade_style: str | None,
+    ) -> dict[str, Any]:
+        if london_dt is None:
+            return {
+                "london_date": "",
+                "session_name": "",
+                "session_label": "",
+                "trade_style": str(trade_style or ""),
+            }
+        if hasattr(self, "macro_policy"):
+            session_name, session_label = self.macro_policy.macro_session(london_dt)
+        else:
+            start = int(london_dt.hour) // 6 * 6
+            session_label = f"h{start:02d}_{min(start + 6, 24):02d}"
+            session_name = {
+                "h00_06": "ASIA",
+                "h06_12": "EUROPE",
+                "h12_18": "US_OPEN",
+                "h18_24": "US_LATE",
+            }.get(session_label, session_label)
+        return {
+            "london_date": london_dt.date().isoformat(),
+            "session_name": str(session_name or session_label or ""),
+            "session_label": str(session_label or ""),
+            "trade_style": str(trade_style or "").strip().lower(),
+        }
+
+    def _session_style_guard_context_from_snapshot(
+        self,
+        now_utc: datetime,
+        snapshot: dict[str, Any] | None,
+        trade_style: str | None,
+    ) -> dict[str, Any]:
+        timestamp_london = snapshot.get("timestamp_london") if snapshot is not None else None
+        if not isinstance(timestamp_london, datetime):
+            timestamp_london = now_utc.astimezone(LONDON_ZONE)
+        return self._session_style_guard_context(timestamp_london, trade_style)
+
+    def _store_session_style_guard_detail(
+        self,
+        snapshot: dict[str, Any] | None,
+        detail: dict[str, Any] | None,
+    ) -> None:
+        self.last_session_style_guard_detail = detail
+        if snapshot is None:
+            return
+        detail = detail or {}
+        snapshot["session_style_guard_key"] = detail.get("key", "")
+        snapshot["session_style_guard_pnl"] = detail.get("closed_pnl")
+        snapshot["session_style_guard_peak_pnl"] = detail.get("peak_pnl")
+        snapshot["session_style_guard_drawdown"] = detail.get("drawdown_usd")
+        snapshot["session_style_guard_threshold"] = detail.get("threshold_usd")
+        snapshot["session_style_guard_active"] = bool(detail.get("active", False))
+        snapshot["session_style_guard_session"] = detail.get("session_name", "")
+        snapshot["session_style_guard_style"] = detail.get("trade_style", "")
+
+    def _session_style_guard_threshold_usd(
+        self,
+        decision: EntryDecision | None = None,
+        *,
+        shares: float | None = None,
+    ) -> float:
+        target_shares = finite_float(shares)
+        if target_shares is None and decision is not None and self.current_market is not None:
+            price = finite_float(decision.selected_ask or decision.selected_mid or decision.selected_bid)
+            if price is not None:
+                target_shares, _, _ = self._entry_target_size(price=price, market=self.current_market)
+        if target_shares is None or target_shares <= 0:
+            target_shares = float(getattr(self.config, "min_order_size_fallback", 5.0))
+        return float(target_shares) * SESSION_STYLE_DRAWDOWN_PER_SHARE_USD
+
+    def _session_style_entry_blockers(
+        self,
+        now_utc: datetime,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision | None,
+    ) -> tuple[str, ...]:
+        if snapshot is None or decision is None:
+            self._store_session_style_guard_detail(snapshot, None)
+            return ()
+        trade_style = str(decision.selected_trade_style or "").strip().lower()
+        if trade_style not in {"continuation", "mean_reversion"}:
+            self._store_session_style_guard_detail(snapshot, None)
+            return ()
+        if not hasattr(self, "session_style_drawdown_guard"):
+            self.session_style_drawdown_guard = SessionStyleDrawdownGuard(
+                drawdown_per_share_usd=SESSION_STYLE_DRAWDOWN_PER_SHARE_USD
+            )
+        context = self._session_style_guard_context_from_snapshot(now_utc, snapshot, trade_style)
+        threshold_usd = self._session_style_guard_threshold_usd(decision)
+        detail = self.session_style_drawdown_guard.details(**context, threshold_usd=threshold_usd)
+        self._store_session_style_guard_detail(snapshot, detail)
+        if detail["active"]:
+            return ("SESSION_STYLE_DRAWDOWN",)
+        return ()
+
+    def _record_session_style_guard_closed_trade(
+        self,
+        position: OpenPosition,
+        trade_style: str,
+        pnl: float,
+        exit_time: datetime,
+    ) -> None:
+        if not hasattr(self, "session_style_drawdown_guard"):
+            self.session_style_drawdown_guard = SessionStyleDrawdownGuard(
+                drawdown_per_share_usd=SESSION_STYLE_DRAWDOWN_PER_SHARE_USD
+            )
+        entry_london = position.entry_time_utc.astimezone(LONDON_ZONE)
+        context = self._session_style_guard_context(entry_london, trade_style)
+        threshold_usd = self._session_style_guard_threshold_usd(shares=position.exited_shares_accumulated)
+        key, closed_pnl, activated = self.session_style_drawdown_guard.record_closed_trade(
+            london_date=context["london_date"],
+            session_label=context["session_label"],
+            trade_style=context["trade_style"],
+            pnl=pnl,
+            closed_at_utc=exit_time,
+            threshold_usd=threshold_usd,
+        )
+        if activated:
+            detail = self.session_style_drawdown_guard.details(**context, threshold_usd=threshold_usd)
+            self._log_event(
+                "session_style_drawdown_activated",
+                (
+                    f"New {context['session_name']} {context['trade_style']} entries disabled "
+                    f"after ${detail['drawdown_usd']:.2f} slice drawdown"
+                ),
+                {
+                    "guard_key": key,
+                    "london_date": context["london_date"],
+                    "session_label": context["session_label"],
+                    "session_name": context["session_name"],
+                    "trade_style": context["trade_style"],
+                    "closed_pnl": closed_pnl,
+                    "peak_pnl": detail["peak_pnl"],
+                    "drawdown_usd": detail["drawdown_usd"],
+                    "threshold_usd": threshold_usd,
+                    "drawdown_per_share_usd": SESSION_STYLE_DRAWDOWN_PER_SHARE_USD,
+                },
+            )
+
     def _entry_decision_with_guard(self, now_utc: datetime, snapshot: dict[str, Any] | None) -> EntryDecision | None:
         decision = self.macro_policy.evaluate(snapshot, start_block_seconds=self.config.entry_start_block_seconds)
         self.last_guard_blocker = None
@@ -2593,6 +3183,10 @@ class StatsBot:
         if active and reason:
             self.last_guard_blocker = reason
             decision = self._entry_decision_with_blockers(decision, (reason,))
+        session_style_blockers = self._session_style_entry_blockers(now_utc, snapshot, decision)
+        if session_style_blockers:
+            self.last_guard_blocker = session_style_blockers[0]
+            decision = self._entry_decision_with_blockers(decision, session_style_blockers)
         return decision
 
     def _update_peak_drawdown_kill(self, now_utc: datetime) -> None:
@@ -2651,6 +3245,16 @@ class StatsBot:
                     f"({side} against {momentum:+.1f}bps/{SIDE_MOMENTUM_GUARD_WINDOW_SECONDS}s)"
                 )
             return "GLOBAL_SIDE_MOM_BLOCK"
+        if blocker == "SESSION_STYLE_DRAWDOWN":
+            if snapshot is None:
+                return "SESSION_STYLE_DRAWDOWN"
+            session = str(snapshot.get("session_style_guard_session") or "session")
+            style = str(snapshot.get("session_style_guard_style") or "style")
+            drawdown = finite_float(snapshot.get("session_style_guard_drawdown"))
+            threshold = finite_float(snapshot.get("session_style_guard_threshold"))
+            if drawdown is not None and threshold is not None:
+                return f"SESSION_STYLE_DRAWDOWN ({session} {style} DD ${drawdown:.2f} >= ${threshold:.2f})"
+            return f"SESSION_STYLE_DRAWDOWN ({session} {style})"
         return blocker
 
     def _format_entry_blockers(
@@ -2721,6 +3325,12 @@ class StatsBot:
                         "policy_level",
                         "entry_blockers",
                         "bps_yes_guard_blocker",
+                        "session_style_guard_key",
+                        "session_style_guard_pnl",
+                        "session_style_guard_peak_pnl",
+                        "session_style_guard_drawdown",
+                        "session_style_guard_threshold",
+                        "session_style_guard_active",
                         "execution_mode",
                         "execution_state",
                         "submission_inflight",
@@ -2794,6 +3404,12 @@ class StatsBot:
                     snapshot.get("policy_level", "") if snapshot else "",
                     "|".join(decision.blockers) if decision else "",
                     self.last_guard_blocker or "",
+                    snapshot.get("session_style_guard_key", "") if snapshot else "",
+                    _fmt(snapshot.get("session_style_guard_pnl"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("session_style_guard_peak_pnl"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("session_style_guard_drawdown"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("session_style_guard_threshold"), 6, "") if snapshot else "",
+                    int(bool(snapshot.get("session_style_guard_active"))) if snapshot else "",
                     self.config.execution_mode,
                     self._entry_submission_state,
                     int(self._entry_submission_inflight()),
@@ -2854,6 +3470,11 @@ class StatsBot:
             stake_decision = self._dynamic_stake_decision()
             stake_reason = f" ({stake_decision.reason})" if stake_decision.reason else ""
             lines.append(f"    target_shares     : {stake_decision.target_shares:.0f}{stake_reason}")
+        elif self.config.stake_mode == "ladder_shares":
+            lines.append(f"    stake_mode        : ladder_shares")
+            stake_decision = self._ladder_stake_decision()
+            stake_reason = f" ({stake_decision.reason})" if stake_decision.reason else ""
+            lines.append(f"    target_shares     : {stake_decision.target_shares:.0f}{stake_reason}")
         else:
             lines.append(f"    stake_mode        : fixed_usd")
             lines.append(f"    stake             : ${self.config.stake_usd:.2f}")
@@ -2874,9 +3495,15 @@ class StatsBot:
                 getattr(self, "recent_decision_to_response_ms", collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)),
             )
         )
+        if self.config.pressure_defence_enabled:
+            lines.append(
+                f"    pressure_hedges   : {self.pressure_hedges_filled}/"
+                f"{self.pressure_hedges_submitted} filled/submitted "
+                f"({self.pressure_hedges_blocked} blocked)"
+            )
         if self.peak_drawdown_kill_active:
             lines.append("    kill_switch       : ACTIVE (new entries disabled)")
-        if stake_decision is not None:
+        if stake_decision is not None and self.config.stake_mode == "dynamic_shares":
             lines.append(f"    high_water_dd     : {stake_decision.drawdown_pct:.1f}%")
             if stake_decision.recovery_active:
                 floor = stake_decision.recovery_floor if stake_decision.recovery_floor is not None else 0.0
@@ -2892,17 +3519,12 @@ class StatsBot:
             f"{self.trade_style_wins['mean_reversion']}/{self.trade_style_losses['mean_reversion']}"
         )
         if self.current_market:
-            fee_rate = self.current_market.fee_rate if self.current_market.fee_rate is not None else CRYPTO_TAKER_FEE_RATE_DEFAULT
-            lines.append(
-                ""
-            )
+            lines.append("")
             lines.append("  MARKET")
             lines.append(f"    slug              : {self.current_market.slug}")
             lines.append(f"    question          : {self.current_market.question[:92]}")
             lines.append(f"    tte_seconds       : {int(snapshot['canonical_tte_seconds']) if snapshot else 'NA'}")
             lines.append(f"    tick_size         : {self.current_market.tick_size:g}")
-            lines.append(f"    min_order_size    : {_fmt(self.current_market.min_order_size, 4)}")
-            lines.append(f"    taker_fee_rate    : {fee_rate}")
         else:
             lines.append("")
             lines.append("  MARKET")
@@ -2913,13 +3535,19 @@ class StatsBot:
         else:
             lines.append("")
             lines.append("  SIGNAL")
-            lines.append(f"    day/session       : {snapshot.get('day_type')}/{snapshot.get('macro_session') or 'NA'}")
             day_type, session_name, cont_profile, mr_profile = self.macro_policy.entry_profile(snapshot)
             lines.append(
                 f"    entry_profile     : {day_type}/{session_name} | "
                 f"C={cont_profile.edge * 100:.0f}c@{cont_profile.min_tte}-{cont_profile.max_tte}s | "
                 f"MR={mr_profile.edge * 100:.0f}c@{mr_profile.min_tte}-{mr_profile.max_tte}s"
             )
+            if bool(snapshot.get("session_style_guard_active")):
+                session = str(snapshot.get("session_style_guard_session") or "session")
+                style = str(snapshot.get("session_style_guard_style") or "style")
+                drawdown = finite_float(snapshot.get("session_style_guard_drawdown"))
+                threshold = finite_float(snapshot.get("session_style_guard_threshold"))
+                if drawdown is not None and threshold is not None:
+                    lines.append(f"    style_kill        : active ({session} {style} DD ${drawdown:.2f} >= ${threshold:.2f})")
             lines.append(f"    elapsed_seconds   : {_fmt(snapshot.get('elapsed_seconds_since_market_start'), 1)}")
             lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
             lines.append(f"    signed_bps        : {_fmt(snapshot.get('cb_signed_bps_raw'), 2)}")
@@ -2956,12 +3584,6 @@ class StatsBot:
             lines.append(
                 f"    value / edge      : {_fmt(decision.selected_trade_value)} / "
                 f"{_fmt(decision.selected_policy_edge)} (need {_fmt(decision.entry_edge_threshold)})"
-            )
-            active_min_entry, active_max_entry = self._entry_price_bounds_for_snapshot(snapshot)
-            lines.append(
-                f"    entry_window      : elapsed>={self.config.entry_start_block_seconds}s, "
-                f"tte={self.config.entry_min_tte_seconds}-{self.config.entry_max_tte_seconds}s, "
-                f"price={active_min_entry:.2f}-{active_max_entry:.2f}"
             )
             lines.append(f"    trade_style       : {decision.selected_trade_style or 'NA'}")
             policy_support, policy_level = _policy_support_level(snapshot)
@@ -3003,9 +3625,34 @@ class StatsBot:
             lines.append(f"    entry_edge_thresh : {self.active_position.entry_edge_threshold:.2f}")
             lines.append(f"    exit_policy_mode  : {self.config.exit_policy_mode}")
             lines.append(f"    policy_key        : {self.active_position.entry_policy_key_text}")
+            if self.active_position.hedge_leg is not None:
+                hedge = self.active_position.hedge_leg
+                lines.append(f"    hedge             : {hedge.side} {hedge.shares:.4f} @ {hedge.avg_price:.4f}")
+                lines.append(f"    hedge_fee         : {hedge.fee:.4f}")
+                lines.append(f"    hedge_trigger     : {hedge.trigger_source} z={hedge.trigger_z:.3f}")
+            elif self.config.pressure_defence_enabled:
+                lines.append(f"    pressure_defence  : {self.active_position.pressure_defence_status}")
+                if self.active_position.pressure_defence_reason:
+                    lines.append(f"    pressure_reason   : {self.active_position.pressure_defence_reason}")
             if self.active_position.exit_triggered:
                 lines.append(f"    exit_active       : {self.active_position.exit_reason}")
                 lines.append(f"    fok_attempted     : {self.active_position.fok_attempted}")
+        if self.config.pressure_defence_enabled and self.last_pressure_defence:
+            detail = self.last_pressure_defence
+            lines.append("")
+            lines.append("  PRESSURE DEFENCE")
+            lines.append(f"    status            : {detail.get('status')}")
+            if detail.get("reason"):
+                lines.append(f"    reason            : {detail.get('reason')}")
+            lines.append(f"    held_band         : {self.config.pressure_min_held_mid:.2f}-{self.config.pressure_max_held_mid:.2f}")
+            lines.append(f"    held_mid          : {_fmt(detail.get('held_mid'))}")
+            lines.append(f"    tte               : {_fmt(detail.get('tte'), 1)}")
+            lines.append(f"    pressure_z        : {_fmt(detail.get('pressure_z'), 3)}")
+            lines.append(f"    source            : {detail.get('pressure_source') or 'NA'}")
+            if detail.get("hedge_side"):
+                lines.append(f"    hedge_side        : {detail.get('hedge_side')}")
+                lines.append(f"    hedge_ask/price   : {_fmt(detail.get('hedge_ask'))} / {_fmt(detail.get('hedge_price'))}")
+                lines.append(f"    hedge_fee         : {_fmt(detail.get('hedge_fee'), 4)}")
         if self.guard.persistence_seconds or self.guard.cooldown_until_utc or self.guard.window_blocked:
             lines.append("")
             lines.append("  BPS YES GUARD")
@@ -3040,6 +3687,8 @@ class StatsBot:
             log.info(f"  stake mode  : flat_shares ({self.config.min_order_size_fallback:g} share fallback)")
         elif self.config.stake_mode == "dynamic_shares":
             log.info("  stake mode  : dynamic_shares (5-15 shares by raw wallet, high-water throttled)")
+        elif self.config.stake_mode == "ladder_shares":
+            log.info("  stake mode  : ladder_shares (wallet tier ladder with downgrade buffer)")
         else:
             log.info(f"  stake mode  : fixed_usd ${self.config.stake_usd:.2f}")
         log.info(
@@ -3053,7 +3702,9 @@ class StatsBot:
         log.info(f"  signal      : causal 1h Coinbase local RV; {session_names} London segments")
         log.info(
             "  entry       : pre-signed GTC fast limit when ready "
-            f"(ask+{PRESIGN_ENTRY_TOLERANCE_TICKS} tick); fallback post-only maker @ best_ask-1tick"
+            f"(ask+{PRESIGN_ENTRY_TOLERANCE_TICKS}/{DEGRADED_ENTRY_TOLERANCE_TICKS}/"
+            f"{POOR_ENTRY_TOLERANCE_TICKS} ticks by health, residual-edge guarded); "
+            "fallback post-only maker @ best_ask-1tick"
         )
         if not self.config.paper_trading:
             log.info(
@@ -3120,6 +3771,7 @@ class StatsBot:
                 exit_decision = None
                 force_exit_reason = None
                 if self.active_position is not None and snapshot is not None:
+                    self._maybe_execute_pressure_defence(now_utc, snapshot)
                     if self.config.exit_policy_mode == "hold_to_resolution":
                         exit_decision = self._hold_to_resolution_exit_decision(snapshot)
                     else:

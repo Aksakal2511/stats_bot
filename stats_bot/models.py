@@ -25,6 +25,24 @@ class PendingEntryOrder:
 
 
 @dataclass
+class HedgeLeg:
+    token_id: str
+    side: str
+    shares: float
+    avg_price: float
+    cost: float
+    fee: float
+    order_id: str | None
+    trigger_source: str
+    trigger_z: float
+    trigger_time_utc: datetime
+    fill_time_utc: datetime
+    limit_price: float
+    ask_at_trigger: float
+    status: str = "filled"
+
+
+@dataclass
 class OpenPosition:
     token_id: str
     market_slug: str
@@ -50,6 +68,9 @@ class OpenPosition:
     realized_pnl_accumulated: float = 0.0
     last_exit_attempt_utc: datetime | None = None
     fok_attempted: bool = False
+    hedge_leg: HedgeLeg | None = None
+    pressure_defence_status: str = "idle"
+    pressure_defence_reason: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
 

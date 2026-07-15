@@ -111,7 +111,17 @@ def test_event_submission_is_single_flight_for_market() -> None:
     bot._live_retry_cooldown_remaining = lambda *_args: 0.0
     bot._presigned_entries_available = lambda: True
     book = BookSnapshot(0.40, 0.41, 0.405, 0.01, None, None, None, None, datetime.now(tz=timezone.utc))
-    quote = FastEntryQuote(0.42, 5.0, 2.1, 5.0, 1, book, 0.12, 0.05)
+    quote = FastEntryQuote(
+        price=0.42,
+        shares=5.0,
+        target_notional=2.1,
+        min_order_size=5.0,
+        spread_ticks=1,
+        book=book,
+        edge_at_ask=0.13,
+        edge_at_limit=0.12,
+        required_edge=0.05,
+    )
     bot._fast_entry_quote = lambda *_args: quote
     signed = SignedBuyOrder("up", 0.42, 5.0, object())
 
@@ -220,7 +230,17 @@ def test_paper_fast_limit_uses_execution_worker() -> None:
     bot.pm = SimpleNamespace()
     market = _market()
     book = BookSnapshot(0.40, 0.41, 0.405, 0.01, None, None, None, None, datetime.now(tz=timezone.utc))
-    quote = FastEntryQuote(0.42, 5.0, 2.1, 5.0, 1, book, 0.12, 0.05)
+    quote = FastEntryQuote(
+        price=0.42,
+        shares=5.0,
+        target_notional=2.1,
+        min_order_size=5.0,
+        spread_ticks=1,
+        book=book,
+        edge_at_ask=0.13,
+        edge_at_limit=0.12,
+        required_edge=0.05,
+    )
     now = datetime.now(tz=timezone.utc)
     submission = EntrySubmission(
         submission_id="paper-test",

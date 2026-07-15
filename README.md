@@ -187,7 +187,7 @@ Start gate        : elapsed >= 45 seconds
 Stake             : flat market-minimum shares, 5-share fallback
 Exit              : hold to resolution
 Execution         : event_driven_ws by default
-Fast limit        : ask + 1 tick, only if edge still survives at limit
+Fast limit        : ask + 1/2/3 ticks by execution health, residual-edge guarded
 Position limit    : one filled trade per five-minute market
 ```
 
@@ -206,12 +206,17 @@ weekday price     : 0.20-0.80
 weekend price     : 0.20-0.80
 TTE               : 60-255 seconds
 start gate        : 45 seconds
-stake mode        : min_order_size
+stake mode        : min_order_size or ladder_shares
 fallback shares   : 5
 ```
 
 This is intentional. It prevents accidental live drift from the exact strategy
 that was researched and deployed.
+
+`ladder_shares` is an opt-in stake mode. It uses the live/paper wallet to choose
+share size from a bankroll ladder, keeps the current tier until the wallet falls
+through that tier's downgrade buffer, and only scales up after at least one
+closed trade confirms the wallet is still above the higher tier.
 
 ## Strategy Summary
 
@@ -494,6 +499,42 @@ STATS_ENTRY_MAX_TTE_SECONDS=255
 STATS_EXIT_POLICY_MODE=hold_to_resolution
 STATS_PAPER_FILL_MODEL=fast_limit
 STATS_PEAK_DRAWDOWN_KILL_USD=15
+```
+
+To enable bankroll ladder sizing instead of flat 5-share sizing:
+
+```text
+STATS_STAKE_MODE=ladder_shares
+```
+
+The ladder starts at 5 shares below `$100`, reaches 32 shares at `$1,000`, and
+uses wider downgrade buffers, for example `$1,000 -> 32 shares` does not
+downgrade until the wallet falls below `$900`.
+
+```text
+Wallet tier   Shares   Downgrade below
+$0            5        -
+$100          6        $85
+$150          7        $130
+$200          9        $175
+$250          11       $220
+$300          13       $265
+$400          17       $360
+$500          20       $450
+$750          26       $675
+$1,000        32       $900
+$1,500        45       $1,350
+$2,000        57       $1,800
+$2,500        70       $2,250
+$3,000        82       $2,700
+$4,000        107      $3,600
+$5,000        132      $4,500
+$6,000        157      $5,400
+$7,000        182      $6,300
+$7,500        195      $6,750
+$8,000        207      $7,200
+$9,000        232      $8,100
+$10,000       257      $9,000
 ```
 
 ## Running The Bot

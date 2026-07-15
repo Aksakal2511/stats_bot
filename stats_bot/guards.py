@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -71,6 +71,97 @@ class DrawdownGuard:
             return ()
         session_bucket = str(snapshot.get("session_bucket") or "")
         self.sync_session_bucket(session_bucket)
+        return ()
+
+
+@dataclass
+class SessionStyleDrawdownGuard:
+    """Block only the same London date + 6h session + trade style after peak drawdown."""
+
+    drawdown_per_share_usd: float = 3.0
+    closed_pnl_by_key: dict[str, float] = field(default_factory=dict)
+    peak_pnl_by_key: dict[str, float] = field(default_factory=dict)
+    triggered_at_by_key: dict[str, datetime] = field(default_factory=dict)
+
+    @staticmethod
+    def make_key(london_date: str | None, session_label: str | None, trade_style: str | None) -> str | None:
+        date = str(london_date or "").strip()
+        session = str(session_label or "").strip()
+        style = str(trade_style or "").strip().lower()
+        if not date or not session or style not in {"continuation", "mean_reversion"}:
+            return None
+        return f"{date}|{session}|{style}"
+
+    def record_closed_trade(
+        self,
+        *,
+        london_date: str | None,
+        session_label: str | None,
+        trade_style: str | None,
+        pnl: float,
+        closed_at_utc: datetime,
+        threshold_usd: float,
+    ) -> tuple[str | None, float, bool]:
+        key = self.make_key(london_date, session_label, trade_style)
+        if key is None:
+            return None, 0.0, False
+        previous = float(self.closed_pnl_by_key.get(key, 0.0))
+        updated = previous + float(pnl)
+        self.closed_pnl_by_key[key] = updated
+        peak = max(float(self.peak_pnl_by_key.get(key, 0.0)), updated)
+        self.peak_pnl_by_key[key] = peak
+        drawdown = max(0.0, peak - updated)
+        activated = False
+        if drawdown >= float(threshold_usd) and key not in self.triggered_at_by_key:
+            self.triggered_at_by_key[key] = closed_at_utc
+            activated = True
+        return key, updated, activated
+
+    def details(
+        self,
+        *,
+        london_date: str | None,
+        session_label: str | None,
+        session_name: str | None,
+        trade_style: str | None,
+        threshold_usd: float,
+    ) -> dict[str, Any]:
+        key = self.make_key(london_date, session_label, trade_style)
+        pnl = float(self.closed_pnl_by_key.get(key, 0.0)) if key is not None else 0.0
+        peak = float(self.peak_pnl_by_key.get(key, 0.0)) if key is not None else 0.0
+        drawdown = max(0.0, peak - pnl)
+        return {
+            "key": key or "",
+            "london_date": str(london_date or ""),
+            "session_label": str(session_label or ""),
+            "session_name": str(session_name or session_label or ""),
+            "trade_style": str(trade_style or ""),
+            "closed_pnl": pnl,
+            "peak_pnl": peak,
+            "drawdown_usd": drawdown,
+            "threshold_usd": float(threshold_usd),
+            "active": bool(key is not None and drawdown >= float(threshold_usd)),
+            "triggered_at_utc": self.triggered_at_by_key.get(key) if key is not None else None,
+        }
+
+    def entry_blocker(
+        self,
+        *,
+        london_date: str | None,
+        session_label: str | None,
+        session_name: str | None,
+        trade_style: str | None,
+        threshold_usd: float,
+    ) -> tuple[str, ...]:
+        detail = self.details(
+            london_date=london_date,
+            session_label=session_label,
+            session_name=session_name,
+            trade_style=trade_style,
+            threshold_usd=threshold_usd,
+        )
+        if detail["active"]:
+            return ("SESSION_STYLE_DRAWDOWN",)
         return ()
 
 
