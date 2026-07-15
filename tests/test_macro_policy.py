@@ -71,7 +71,7 @@ def test_entry_profiles_match_fixed_clean_ffm_oos_spec() -> None:
             continuation = policy.entry_parameters(day_type, session, "continuation")
             mean_reversion = policy.entry_parameters(day_type, session, "mean_reversion")
             assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.04, 60, 239)
-            assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.06, 60, 255)
+            assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.04, 60, 255)
 
 
 def test_continuation_tte_blocks_only_outside_fixed_profile() -> None:
@@ -147,7 +147,7 @@ def test_policy_match_fields_are_populated_when_edge_fails() -> None:
     assert decision.selected_side == "UP"
     assert decision.selected_trade_value is not None
     assert decision.selected_policy_edge is not None
-    assert decision.entry_edge_threshold == 0.06
+    assert decision.entry_edge_threshold == 0.04
     assert snapshot["policy_support"] > 0
     assert snapshot["policy_level"] == "final"
     assert snapshot["selected_move_z_bucket"] == "z_00"

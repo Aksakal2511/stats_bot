@@ -2,9 +2,9 @@
   "schema_version": 1,
   "timezone": "Europe/London",
   "source": "policy_cube_z6_fixed_specs_oos_pm_clean_ffm_4week",
-  "selected_spec": "CONSENSUS_C04_M06_CT60_239_MT60_255",
+  "selected_spec": "CONSENSUS_C04_M04_CT60_239_MT60_255",
   "default": {
-    "edge": 0.06,
+    "edge": 0.04,
     "min_tte": 60,
     "max_tte": 255
   },
@@ -14,40 +14,80 @@
       "min_tte": 60,
       "max_tte": 239
     },
+    "weekday|h00_06|mean_reversion": {
+      "edge": 0.04,
+      "min_tte": 60,
+      "max_tte": 255
+    },
     "weekday|h06_12|continuation": {
       "edge": 0.04,
       "min_tte": 60,
       "max_tte": 239
+    },
+    "weekday|h06_12|mean_reversion": {
+      "edge": 0.04,
+      "min_tte": 60,
+      "max_tte": 255
     },
     "weekday|h12_18|continuation": {
       "edge": 0.04,
       "min_tte": 60,
       "max_tte": 239
     },
+    "weekday|h12_18|mean_reversion": {
+      "edge": 0.04,
+      "min_tte": 60,
+      "max_tte": 255
+    },
     "weekday|h18_24|continuation": {
       "edge": 0.04,
       "min_tte": 60,
       "max_tte": 239
+    },
+    "weekday|h18_24|mean_reversion": {
+      "edge": 0.04,
+      "min_tte": 60,
+      "max_tte": 255
     },
     "weekend|h00_06|continuation": {
       "edge": 0.04,
       "min_tte": 60,
       "max_tte": 239
     },
+    "weekend|h00_06|mean_reversion": {
+      "edge": 0.04,
+      "min_tte": 60,
+      "max_tte": 255
+    },
     "weekend|h06_12|continuation": {
       "edge": 0.04,
       "min_tte": 60,
       "max_tte": 239
+    },
+    "weekend|h06_12|mean_reversion": {
+      "edge": 0.04,
+      "min_tte": 60,
+      "max_tte": 255
     },
     "weekend|h12_18|continuation": {
       "edge": 0.04,
       "min_tte": 60,
       "max_tte": 239
     },
+    "weekend|h12_18|mean_reversion": {
+      "edge": 0.04,
+      "min_tte": 60,
+      "max_tte": 255
+    },
     "weekend|h18_24|continuation": {
       "edge": 0.04,
       "min_tte": 60,
       "max_tte": 239
+    },
+    "weekend|h18_24|mean_reversion": {
+      "edge": 0.04,
+      "min_tte": 60,
+      "max_tte": 255
     }
   }
 }

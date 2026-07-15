@@ -675,13 +675,13 @@ def test_fast_presigned_quote_widens_limit_by_execution_health_without_breaking_
     poor = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
     assert poor is not None
     assert poor.execution_health_status == "Poor"
-    assert poor.tolerance_ticks == 3
-    assert poor.price == 0.45
+    assert poor.tolerance_ticks == 2
+    assert poor.price == 0.44
     assert round(poor.edge_at_ask, 6) == 0.08
-    assert round(poor.edge_at_limit, 6) == 0.05
+    assert round(poor.edge_at_limit, 6) == 0.06
     assert round(poor.required_edge, 6) == 0.02
 
-    weak = EntryDecision(**{**decision.__dict__, "selected_trade_value": 0.465, "selected_policy_edge": 0.045})
+    weak = EntryDecision(**{**decision.__dict__, "selected_trade_value": 0.455, "selected_policy_edge": 0.035})
     assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, weak) is None
 
 
@@ -1991,6 +1991,115 @@ def test_live_wallet_drop_reconciles_cancelled_attempt_before_retry() -> None:
     assert bot.active_position.avg_entry_price == 0.26
     assert attempt.wallet_reconciled is True
     assert any(event[0] == "maker_entry_wallet_reconciled" for event in bot.recent_events)
+
+
+def test_pending_fast_limit_stays_live_when_resting_price_still_has_edge() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "paper_trading": True,
+            "paper_fill_model": "fast_limit",
+            "stake_mode": "min_order_size",
+            "entry_quote_max_age_seconds": 999.0,
+        },
+    )()
+    bot.pending_entry = PendingEntryOrder(
+        order_id="0xresting",
+        token_id="down",
+        side="BUY",
+        price=0.56,
+        target_shares=5.0,
+        created_at_utc=datetime(2026, 7, 15, 16, 11, 4, tzinfo=timezone.utc),
+        market_slug="btc-updown-5m-test",
+        policy_key_text="weekday|h12_18|210-239|z_06|p55_to_p65|DOWN",
+        policy_side="DOWN",
+        snapshot={"entry_execution_mode": "presigned_fast_limit"},
+        target_notional=2.8,
+    )
+    bot._fast_entry_quote = lambda *_args: None
+    bot._cancel_pending_entry = lambda reason: (_ for _ in ()).throw(AssertionError(f"unexpected cancel: {reason}"))
+    bot._log_latency = lambda *args, **kwargs: None
+
+    decision = EntryDecision(
+        viable=False,
+        blockers=("POLICY_NO_SIDE_EDGE",),
+        policy_key=("weekday", "h12_18", "210-239", "z_06", "p55_to_p65", "DOWN"),
+        policy_record=None,
+        selected_side="DOWN",
+        selected_bid=0.55,
+        selected_ask=0.56,
+        selected_mid=0.555,
+        selected_spread=0.01,
+        selected_trade_value=0.605676,
+        selected_policy_edge=0.045676,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+
+    bot._manage_pending_entry(datetime(2026, 7, 15, 16, 11, 5, tzinfo=timezone.utc), {}, decision)
+
+    assert bot.pending_entry is not None
+    assert bot.pending_entry.order_id == "0xresting"
+
+
+def test_pending_fast_limit_cancels_when_policy_side_flips() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "paper_trading": True,
+            "paper_fill_model": "fast_limit",
+            "stake_mode": "min_order_size",
+            "entry_quote_max_age_seconds": 999.0,
+        },
+    )()
+    bot.pending_entry = PendingEntryOrder(
+        order_id="0xstale",
+        token_id="up",
+        side="BUY",
+        price=0.41,
+        target_shares=5.0,
+        created_at_utc=datetime(2026, 7, 15, 16, 11, 21, tzinfo=timezone.utc),
+        market_slug="btc-updown-5m-test",
+        policy_key_text="weekday|h12_18|210-239|z_06|p40_to_p50|UP",
+        policy_side="UP",
+        snapshot={"entry_execution_mode": "presigned_fast_limit"},
+        target_notional=2.05,
+    )
+    cancelled: list[str] = []
+
+    def cancel(reason: str) -> None:
+        cancelled.append(reason)
+        bot.pending_entry = None
+
+    bot._cancel_pending_entry = cancel
+    decision = EntryDecision(
+        viable=False,
+        blockers=("POLICY_NO_SIDE_EDGE",),
+        policy_key=("weekday", "h12_18", "210-239", "z_06", "p45_to_p55", "DOWN"),
+        policy_record=None,
+        selected_side="DOWN",
+        selected_bid=0.46,
+        selected_ask=0.47,
+        selected_mid=0.465,
+        selected_spread=0.01,
+        selected_trade_value=0.480784,
+        selected_policy_edge=0.010784,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+
+    bot._manage_pending_entry(datetime(2026, 7, 15, 16, 11, 22, tzinfo=timezone.utc), {}, decision)
+
+    assert cancelled == ["POLICY_NO_LONGER_VIABLE"]
+    assert bot.pending_entry is None
 
 
 def test_snapshot_continues_inside_last_60_seconds_even_when_policy_mutes() -> None:

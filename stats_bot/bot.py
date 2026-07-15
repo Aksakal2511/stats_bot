@@ -86,7 +86,7 @@ SIDE_MOMENTUM_GUARD_WINDOW_SECONDS = 20
 SIDE_MOMENTUM_GUARD_THRESHOLD_BPS = 2.5
 PRESIGN_ENTRY_TOLERANCE_TICKS = 1
 DEGRADED_ENTRY_TOLERANCE_TICKS = 2
-POOR_ENTRY_TOLERANCE_TICKS = 3
+POOR_ENTRY_TOLERANCE_TICKS = 2
 DEGRADED_ENTRY_MIN_RESIDUAL_EDGE = 0.03
 POOR_ENTRY_MIN_RESIDUAL_EDGE = 0.02
 EXECUTION_LATE_WARNING_SECONDS = 1.0
@@ -1367,6 +1367,25 @@ class StatsBot:
             return None
         return threshold
 
+    def _pending_entry_still_has_edge(
+        self,
+        pending: PendingEntryOrder,
+        decision: EntryDecision | None,
+    ) -> tuple[bool, float | None, float | None]:
+        if decision is None:
+            return False, None, None
+        if decision.selected_side != pending.policy_side or decision.policy_key_text != pending.policy_key_text:
+            return False, None, None
+        blockers = set(decision.blockers or ())
+        if blockers - {"POLICY_NO_SIDE_EDGE"}:
+            return False, None, None
+        trade_value = finite_float(decision.selected_trade_value)
+        required_edge = finite_float(decision.entry_edge_threshold)
+        if trade_value is None or required_edge is None:
+            return False, trade_value, required_edge
+        edge_at_pending_price = trade_value - float(pending.price)
+        return edge_at_pending_price + 1e-12 >= required_edge, edge_at_pending_price, required_edge
+
     def _fast_entry_quote(
         self,
         now_utc: datetime,
@@ -2616,7 +2635,8 @@ class StatsBot:
                 return
 
         age = (now_utc - pending.created_at_utc).total_seconds()
-        if snapshot is None or decision is None or not decision.viable:
+        pending_edge_ok, pending_edge, pending_required_edge = self._pending_entry_still_has_edge(pending, decision)
+        if snapshot is None or decision is None or (not decision.viable and not pending_edge_ok):
             self._cancel_pending_entry("POLICY_NO_LONGER_VIABLE")
             return
         if decision.selected_side != pending.policy_side or decision.policy_key_text != pending.policy_key_text:
@@ -2632,15 +2652,31 @@ class StatsBot:
         execution_mode = str(pending.snapshot.get("entry_execution_mode") or "maker_post_only")
         if execution_mode.startswith("presigned_fast_limit"):
             fast_quote = self._fast_entry_quote(now_utc, snapshot, decision)
-            if fast_quote is None:
+            if fast_quote is None and pending_edge_ok:
+                spread_ticks = None
+            elif fast_quote is None:
                 self._cancel_pending_entry("FAST_LIMIT_NO_LONGER_VALID")
                 return
-            desired_price = fast_quote.price
-            spread_ticks = fast_quote.spread_ticks
-            if not math.isclose(desired_price, pending.price, abs_tol=1e-9):
-                self._cancel_pending_entry("FAST_LIMIT_CHANGED")
-                self._request_entry(now_utc, snapshot, decision)
-                return
+            else:
+                desired_price = fast_quote.price
+                spread_ticks = fast_quote.spread_ticks
+                if not math.isclose(desired_price, pending.price, abs_tol=1e-9) and not pending_edge_ok:
+                    self._cancel_pending_entry("FAST_LIMIT_CHANGED")
+                    self._request_entry(now_utc, snapshot, decision)
+                    return
+            if fast_quote is not None and not math.isclose(fast_quote.price, pending.price, abs_tol=1e-9) and pending_edge_ok:
+                self._log_latency(
+                    "pending_entry_kept",
+                    market_slug=pending.market_slug,
+                    source="entry_manager",
+                    order_id=pending.order_id,
+                    side=pending.policy_side,
+                    limit_price=pending.price,
+                    detail=(
+                        f"resting_edge={pending_edge:.6f};required={pending_required_edge:.6f};"
+                        f"fresh_price={fast_quote.price:.6f}"
+                    ),
+                )
         else:
             desired_price, spread_ticks, _ = self._maker_quote(pending.policy_side)
             if desired_price is None:
@@ -2654,7 +2690,14 @@ class StatsBot:
             self._log_event(
                 "maker_entry_revalidated",
                 "quote still valid",
-                {"order_id": pending.order_id, "age": round(age, 3), "price": pending.price, "spread_ticks": spread_ticks},
+                {
+                    "order_id": pending.order_id,
+                    "age": round(age, 3),
+                    "price": pending.price,
+                    "spread_ticks": spread_ticks,
+                    "edge_at_pending_price": pending_edge,
+                    "required_edge": pending_required_edge,
+                },
             )
 
     def _apply_exit_fill(self, shares_filled: float, price: float, now_utc: datetime, reason: str) -> None:
@@ -3696,7 +3739,7 @@ class StatsBot:
             f"{self.macro_policy.training_start}..{self.macro_policy.training_end}"
         )
         log.info(f"  policy      : {self.config.macro_policy_bundle} ({len(self.macro_policy):,} hierarchical rows)")
-        log.info("  entry edges : continuation=0.05 mean_reversion=0.05")
+        log.info("  entry edges : continuation=0.04 mean_reversion=0.04 (z6 clean/FFM-omitted profile)")
         log.info(f"  exit mode   : {self.config.exit_policy_mode}")
         session_names = "/".join(dict.fromkeys(self.macro_policy.session_display_names.values()))
         log.info(f"  signal      : causal 1h Coinbase local RV; {session_names} London segments")
