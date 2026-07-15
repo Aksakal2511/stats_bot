@@ -925,7 +925,11 @@ class StatsBot:
             return
         if not self.config.pressure_defence_enabled:
             return
-        if position.hedge_leg is not None or position.pressure_defence_status in {"submitted", "filled"}:
+        if (
+            position.hedge_leg is not None
+            or position.pressure_defence_status in {"submitted", "pending", "filled", "failed"}
+            or bool(position.extra.get("pressure_defence_attempted"))
+        ):
             return
         if self._position_trade_style(position) != "continuation":
             return
@@ -981,6 +985,12 @@ class StatsBot:
         hedge_token = self._selected_token_id(hedge_side)
         limit_price = round_price(self.config.pressure_hedge_limit_price, market.tick_size)
         position.pressure_defence_status = "submitted"
+        position.pressure_defence_reason = ""
+        position.extra["pressure_defence_attempted"] = True
+        position.extra["pressure_defence_attempted_at_utc"] = now_utc.isoformat()
+        position.extra["pressure_defence_hedge_side"] = hedge_side
+        position.extra["pressure_defence_target_shares"] = hedge_shares
+        position.extra["pressure_defence_limit_price"] = limit_price
         self.pressure_hedges_submitted += 1
         if self.config.paper_trading:
             matched = hedge_shares
@@ -1004,6 +1014,9 @@ class StatsBot:
             order_id = result.order_id
             status = result.status
             ok = result.ok
+        position.extra["pressure_defence_order_id"] = order_id
+        position.extra["pressure_defence_order_status"] = status
+        position.extra["pressure_defence_matched_shares_seen"] = matched
         self._log_event(
             "pressure_hedge_submitted",
             status,
@@ -1021,9 +1034,27 @@ class StatsBot:
             },
         )
         if matched <= self.config.dust_share_threshold:
-            position.pressure_defence_status = "failed"
-            position.pressure_defence_reason = f"NO_MATCH:{status}"
-            self.last_pressure_defence = {"status": "failed", "reason": position.pressure_defence_reason, **pressure}
+            if ok and order_id:
+                position.pressure_defence_status = "submitted"
+                position.pressure_defence_reason = f"AWAITING_MATCH:{status}"
+                last_status = "submitted"
+            else:
+                position.pressure_defence_status = "failed"
+                position.pressure_defence_reason = f"SUBMIT_FAILED:{status}"
+                last_status = "failed"
+            self.last_pressure_defence = {
+                "status": last_status,
+                "reason": position.pressure_defence_reason,
+                "held_mid": held_mid,
+                "hedge_side": hedge_side,
+                "hedge_ask": hedge_ask,
+                "limit_price": limit_price,
+                "target_shares": hedge_shares,
+                "matched_shares": matched,
+                "order_id": order_id,
+                "tte": tte,
+                **pressure,
+            }
             return
         fee = self._polymarket_taker_fee(matched, fill_price)
         cost = matched * fill_price

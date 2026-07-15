@@ -20,7 +20,7 @@ from stats_bot.bot import (
 )
 from stats_bot.features import compute_live_snapshot
 from stats_bot.models import OpenPosition, PendingEntryOrder
-from stats_bot.polymarket import BookSnapshot, MarketInfo, MarketResolution, SignedBuyOrder
+from stats_bot.polymarket import BookSnapshot, MarketInfo, MarketResolution, OrderResult, SignedBuyOrder
 from stats_bot.strategy import (
     EntryDecision,
     EntryEdgeThreshold,
@@ -701,6 +701,129 @@ def test_fast_presigned_quote_widens_limit_by_execution_health_without_breaking_
 
     weak = EntryDecision(**{**decision.__dict__, "selected_trade_value": 0.455, "selected_policy_edge": 0.035})
     assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, weak) is None
+
+
+def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False):
+    bot = object.__new__(StatsBot)
+    market_start = datetime(2026, 7, 15, 18, 5, tzinfo=timezone.utc)
+    bot.config = SimpleNamespace(
+        pressure_defence_enabled=True,
+        pressure_max_tte_seconds=60,
+        pressure_min_held_mid=0.70,
+        pressure_max_held_mid=0.90,
+        pressure_z_threshold=2.0,
+        pressure_max_hedge_ask=0.35,
+        pressure_hedge_fraction=1.0,
+        pressure_hedge_limit_price=0.99,
+        dust_share_threshold=0.01,
+        paper_trading=paper_trading,
+    )
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=market_start,
+        market_end_utc=market_start + timedelta(seconds=300),
+        tick_size=0.01,
+        min_order_size=5.0,
+    )
+    bot.active_position = OpenPosition(
+        token_id="up",
+        market_slug=bot.current_market.slug,
+        market_id=bot.current_market.market_id,
+        market_question=bot.current_market.question,
+        market_end_utc=bot.current_market.market_end_utc,
+        held_side="UP",
+        shares=5.0,
+        avg_entry_price=0.76,
+        entry_cost=3.80,
+        entry_time_utc=market_start + timedelta(seconds=180),
+        entry_bps=4.0,
+        entry_day_type="weekday",
+        entry_session_bucket="US_OPEN_LATE",
+        entry_edge_threshold=0.04,
+        entry_bps_threshold=2.0,
+        entry_policy_key_text="policy",
+        entry_snapshot={"entry_trade_style": "continuation"},
+    )
+    bot.balance = 100.0
+    bot.wallet_balance_live = 100.0
+    bot.pressure_hedges_submitted = 0
+    bot.pressure_hedges_filled = 0
+    bot.pressure_hedges_blocked = 0
+    bot.last_pressure_defence = None
+    bot._provider_pressure = lambda held_side: {
+        "pressure_source": "binance_spot",
+        "pressure_z": 2.1,
+        "binance_spot_adverse_z": 2.1,
+    }
+    bot._side_book = lambda side: BookSnapshot(
+        bid=0.29,
+        ask=0.30,
+        mid=0.295,
+        spread=0.01,
+        bid_depth_total=10.0,
+        ask_depth_total=10.0,
+        best_bid_depth=5.0,
+        best_ask_depth=5.0,
+        captured_at_utc=market_start,
+    )
+    bot._selected_token_id = lambda side: "down" if side == "DOWN" else "up"
+    bot.recent_events = []
+    bot._log_event = lambda event_type, message, fields: bot.recent_events.append((event_type, message, fields))
+
+    class FakePolymarket:
+        def __init__(self) -> None:
+            self.post_count = 0
+
+        def create_signed_buy_order(self, token_id, price, shares, market):
+            return SignedBuyOrder(token_id=token_id, price=price, shares=shares, order=object())
+
+        def post_signed_buy_order(self, signed_order):
+            self.post_count += 1
+            return result
+
+    bot.pm = FakePolymarket()
+    snapshot = {"up_mid": 0.80, "canonical_tte_seconds": 45}
+    return bot, market_start, snapshot
+
+
+def test_pressure_defence_live_accepted_without_match_is_one_shot() -> None:
+    result = OrderResult(True, "hedge-1", "LIVE", matched_shares=0.0, price=0.30)
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+
+    bot._maybe_execute_pressure_defence(now, snapshot)
+    bot._maybe_execute_pressure_defence(now + timedelta(seconds=1), snapshot)
+
+    assert bot.pm.post_count == 1
+    assert bot.pressure_hedges_submitted == 1
+    assert bot.pressure_hedges_filled == 0
+    assert bot.active_position is not None
+    assert bot.active_position.hedge_leg is None
+    assert bot.active_position.pressure_defence_status == "submitted"
+    assert bot.active_position.pressure_defence_reason == "AWAITING_MATCH:LIVE"
+    assert bot.active_position.extra["pressure_defence_attempted"] is True
+    assert bot.last_pressure_defence["status"] == "submitted"
+
+
+def test_pressure_defence_live_immediate_fill_does_not_repeat() -> None:
+    result = OrderResult(True, "hedge-1", "MATCHED", matched_shares=5.0, price=0.30)
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+
+    bot._maybe_execute_pressure_defence(now, snapshot)
+    bot._maybe_execute_pressure_defence(now + timedelta(seconds=1), snapshot)
+
+    assert bot.pm.post_count == 1
+    assert bot.pressure_hedges_submitted == 1
+    assert bot.pressure_hedges_filled == 1
+    assert bot.active_position is not None
+    assert bot.active_position.hedge_leg is not None
+    assert bot.active_position.hedge_leg.side == "DOWN"
+    assert bot.active_position.hedge_leg.shares == 5.0
+    assert bot.active_position.pressure_defence_status == "filled"
 
 
 def test_paper_fast_limit_entry_fills_current_ask_after_limit_edge_check() -> None:
