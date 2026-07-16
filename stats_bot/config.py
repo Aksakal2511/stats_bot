@@ -23,7 +23,7 @@ DEFAULT_VOLATILITY_EDGES_FILE = (
     REPO_ROOT / "strategy" / "bucket_config" / "volatility_bucket_edges_offset250_12bucket_2h_cb_sources.json"
 )
 DEFAULT_LOG_DIR = REPO_ROOT / "logs"
-DEFAULT_MACRO_POLICY_BUNDLE = REPO_ROOT / "strategy" / "z6_recency45_weekday_v1" / "policy_bundle.json"
+DEFAULT_MACRO_POLICY_BUNDLE = REPO_ROOT / "strategy" / "z6_recency120_weekday_v1" / "policy_bundle.json"
 
 
 def load_env_file(path: Path) -> None:
@@ -298,7 +298,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         exit_retry_cadence_seconds=max(0.1, _float_env("STATS_EXIT_RETRY_CADENCE_SECONDS", 1.0)),
         dust_share_threshold=max(0.0, _float_env("STATS_DUST_SHARE_THRESHOLD", 0.01)),
         observe_first_window=observe_first_window,
-        pressure_defence_enabled=_bool_env("STATS_PRESSURE_DEFENCE_ENABLED", True),
+        pressure_defence_enabled=_bool_env("STATS_PRESSURE_DEFENCE_ENABLED", False),
         pressure_min_held_mid=max(0.0, _float_env("STATS_PRESSURE_MIN_HELD_MID", 0.70)),
         pressure_max_held_mid=min(1.0, _float_env("STATS_PRESSURE_MAX_HELD_MID", 0.90)),
         pressure_max_tte_seconds=max(0, _int_env("STATS_PRESSURE_MAX_TTE_SECONDS", 60)),

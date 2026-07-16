@@ -79,6 +79,10 @@ class SessionStyleDrawdownGuard:
     """Block only the same London date + 6h session + trade style after peak drawdown."""
 
     drawdown_per_share_usd: float = 3.0
+    degraded_fraction: float = 0.5
+    poor_fraction: float = 5.0 / 6.0
+    degraded_edge_penalty: float = 0.01
+    poor_edge_penalty: float = 0.02
     closed_pnl_by_key: dict[str, float] = field(default_factory=dict)
     peak_pnl_by_key: dict[str, float] = field(default_factory=dict)
     triggered_at_by_key: dict[str, datetime] = field(default_factory=dict)
@@ -117,6 +121,17 @@ class SessionStyleDrawdownGuard:
             activated = True
         return key, updated, activated
 
+    def ladder_for_drawdown(self, drawdown: float, threshold_usd: float) -> tuple[str, float, float]:
+        threshold = max(0.0, float(threshold_usd))
+        ratio = float(drawdown) / threshold if threshold > 0.0 else 0.0
+        if threshold > 0.0 and drawdown >= threshold:
+            return "killed", float(self.poor_edge_penalty), ratio
+        if ratio >= float(self.poor_fraction):
+            return "poor", float(self.poor_edge_penalty), ratio
+        if ratio >= float(self.degraded_fraction):
+            return "degraded", float(self.degraded_edge_penalty), ratio
+        return "normal", 0.0, ratio
+
     def details(
         self,
         *,
@@ -130,6 +145,7 @@ class SessionStyleDrawdownGuard:
         pnl = float(self.closed_pnl_by_key.get(key, 0.0)) if key is not None else 0.0
         peak = float(self.peak_pnl_by_key.get(key, 0.0)) if key is not None else 0.0
         drawdown = max(0.0, peak - pnl)
+        ladder_level, edge_penalty, drawdown_ratio = self.ladder_for_drawdown(drawdown, threshold_usd)
         return {
             "key": key or "",
             "london_date": str(london_date or ""),
@@ -140,6 +156,9 @@ class SessionStyleDrawdownGuard:
             "peak_pnl": peak,
             "drawdown_usd": drawdown,
             "threshold_usd": float(threshold_usd),
+            "drawdown_ratio": drawdown_ratio,
+            "ladder_level": ladder_level,
+            "edge_penalty": edge_penalty,
             "active": bool(key is not None and drawdown >= float(threshold_usd)),
             "triggered_at_utc": self.triggered_at_by_key.get(key) if key is not None else None,
         }

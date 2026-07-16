@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "timezone": "Europe/London",
+  "source": "statsbot_cube_robustness_oos_core_HL120",
+  "selected_spec": "HL120_C05_M05_CT60_255_MT60_255",
+  "default": {
+    "edge": 0.05,
+    "min_tte": 60,
+    "max_tte": 255
+  },
+  "overrides": {
+    "weekday|h00_06|continuation": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekday|h00_06|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekday|h06_12|continuation": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekday|h06_12|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekday|h12_18|continuation": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekday|h12_18|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekday|h18_24|continuation": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekday|h18_24|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekend|h00_06|continuation": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekend|h00_06|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekend|h06_12|continuation": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekend|h06_12|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekend|h12_18|continuation": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekend|h12_18|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekend|h18_24|continuation": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    },
+    "weekend|h18_24|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 60,
+      "max_tte": 255
+    }
+  }
+}

@@ -177,7 +177,7 @@ The whole game is calibration plus execution.
 ## Current Production Setup
 
 ```text
-Strategy ID       : z6_recency45_weekday_v1
+Strategy ID       : z6_recency120_weekday_v1
 Training window   : 2026-02-14 through 2026-07-13
 Signal source     : Coinbase BTC-USD
 Settlement labels : resolved Polymarket/Gamma outcomes
@@ -187,15 +187,15 @@ Start gate        : elapsed >= 45 seconds
 Stake             : flat market-minimum shares, 5-share fallback
 Exit              : hold to resolution
 Execution         : event_driven_ws by default
-Fast limit        : ask + 1/2/2 ticks by execution health, residual-edge guarded
+Fast limit        : ask + 1/2/3 ticks by execution health, residual-edge guarded
 Position limit    : one filled trade per five-minute market
 ```
 
 The source of truth for the active model is:
 
 ```text
-strategy/z6_recency45_weekday_v1/policy_bundle.json
-strategy/z6_recency45_weekday_v1/entry_profiles.json
+strategy/z6_recency120_weekday_v1/policy_bundle.json
+strategy/z6_recency120_weekday_v1/entry_profiles.json
 ```
 
 The runtime refuses to start if key entry-shape settings differ from the frozen
@@ -280,20 +280,20 @@ support, not always literal historical trade count.
 The default profile is:
 
 ```text
-continuation    : 4c edge, 60-239s TTE
-mean reversion  : 4c edge, 60-255s TTE
+continuation    : 5c edge, 60-255s TTE
+mean reversion  : 5c edge, 60-255s TTE
 ```
 
 Current day/session/style overrides are stored in
-`strategy/z6_recency45_weekday_v1/entry_profiles.json` and documented in
-`strategy/z6_recency45_weekday_v1/README.md`.
+`strategy/z6_recency120_weekday_v1/entry_profiles.json` and documented in
+`strategy/z6_recency120_weekday_v1/README.md`.
 
 As of this README, the active shipped profile is:
 
 | Day | Session | Style | Edge | TTE |
 |---|---|---|---:|---:|
-| All | All | Continuation | 0.04 | 60-239 |
-| All | All | Mean reversion | 0.04 | 60-255 |
+| All | All | Continuation | 0.05 | 60-255 |
+| All | All | Mean reversion | 0.05 | 60-255 |
 
 ## Active Entry Rules
 
@@ -329,7 +329,7 @@ If both UP and DOWN qualify, the bot chooses:
 ## Removed From Active Entry Logic
 
 These mechanisms/files may still exist for research history or legacy support,
-but they are not part of the active `z6_recency45_weekday_v1` entry path:
+but they are not part of the active `z6_recency120_weekday_v1` entry path:
 
 - twelve two-hour policy session buckets
 - raw signed-BPS policy buckets
@@ -418,7 +418,7 @@ stats_bot/
   strategy.py            legacy policy helpers and shared utilities
 
 strategy/
-  z6_recency45_weekday_v1/
+  z6_recency120_weekday_v1/
     policy_bundle.json   active production policy bundle
     entry_profiles.json  active edge/TTE overrides
     README.md            strategy artifact notes

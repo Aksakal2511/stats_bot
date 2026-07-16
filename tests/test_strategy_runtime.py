@@ -693,10 +693,10 @@ def test_fast_presigned_quote_widens_limit_by_execution_health_without_breaking_
     poor = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
     assert poor is not None
     assert poor.execution_health_status == "Poor"
-    assert poor.tolerance_ticks == 2
-    assert poor.price == 0.44
+    assert poor.tolerance_ticks == 3
+    assert poor.price == 0.45
     assert round(poor.edge_at_ask, 6) == 0.08
-    assert round(poor.edge_at_limit, 6) == 0.06
+    assert round(poor.edge_at_limit, 6) == 0.05
     assert round(poor.required_edge, 6) == 0.02
 
     weak = EntryDecision(**{**decision.__dict__, "selected_trade_value": 0.455, "selected_policy_edge": 0.035})
@@ -1450,6 +1450,15 @@ def test_session_style_drawdown_guard_blocks_only_matching_slice() -> None:
         trade_style="mean_reversion",
         threshold_usd=15.0,
     ) == ()
+    detail = guard.details(
+        london_date="2026-07-13",
+        session_label="h06_12",
+        session_name="EUROPE",
+        trade_style="mean_reversion",
+        threshold_usd=15.0,
+    )
+    assert detail["ladder_level"] == "normal"
+    assert detail["edge_penalty"] == 0.0
 
     _, pnl, activated = guard.record_closed_trade(
         london_date="2026-07-13",
@@ -1468,6 +1477,14 @@ def test_session_style_drawdown_guard_blocks_only_matching_slice() -> None:
         trade_style="mean_reversion",
         threshold_usd=15.0,
     ) == ("SESSION_STYLE_DRAWDOWN",)
+    detail = guard.details(
+        london_date="2026-07-13",
+        session_label="h06_12",
+        session_name="EUROPE",
+        trade_style="mean_reversion",
+        threshold_usd=15.0,
+    )
+    assert detail["ladder_level"] == "killed"
 
     assert guard.entry_blocker(
         london_date="2026-07-13",
@@ -1490,6 +1507,111 @@ def test_session_style_drawdown_guard_blocks_only_matching_slice() -> None:
         trade_style="mean_reversion",
         threshold_usd=15.0,
     ) == ()
+
+
+def test_session_style_drawdown_guard_reports_edge_ladder() -> None:
+    guard = SessionStyleDrawdownGuard(drawdown_per_share_usd=3.0)
+    closed_at = datetime(2026, 7, 13, 8, 0, tzinfo=timezone.utc)
+
+    guard.record_closed_trade(
+        london_date="2026-07-13",
+        session_label="h12_18",
+        trade_style="continuation",
+        pnl=10.0,
+        closed_at_utc=closed_at,
+        threshold_usd=15.0,
+    )
+    guard.record_closed_trade(
+        london_date="2026-07-13",
+        session_label="h12_18",
+        trade_style="continuation",
+        pnl=-8.0,
+        closed_at_utc=closed_at,
+        threshold_usd=15.0,
+    )
+    degraded = guard.details(
+        london_date="2026-07-13",
+        session_label="h12_18",
+        session_name="US_OPEN",
+        trade_style="continuation",
+        threshold_usd=15.0,
+    )
+    assert degraded["active"] is False
+    assert degraded["ladder_level"] == "degraded"
+    assert degraded["edge_penalty"] == 0.01
+
+    guard.record_closed_trade(
+        london_date="2026-07-13",
+        session_label="h12_18",
+        trade_style="continuation",
+        pnl=-5.0,
+        closed_at_utc=closed_at,
+        threshold_usd=15.0,
+    )
+    poor = guard.details(
+        london_date="2026-07-13",
+        session_label="h12_18",
+        session_name="US_OPEN",
+        trade_style="continuation",
+        threshold_usd=15.0,
+    )
+    assert poor["active"] is False
+    assert poor["ladder_level"] == "poor"
+    assert poor["edge_penalty"] == 0.02
+
+
+def test_session_style_drawdown_ladder_raises_bot_entry_edge() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type("Config", (), {"min_order_size_fallback": 5.0})()
+    bot.current_market = None
+    bot.last_session_style_guard_detail = None
+    bot.session_style_drawdown_guard = SessionStyleDrawdownGuard(drawdown_per_share_usd=3.0)
+    closed_at = datetime(2026, 7, 13, 13, 0, tzinfo=timezone.utc)
+    bot.session_style_drawdown_guard.record_closed_trade(
+        london_date="2026-07-13",
+        session_label="h12_18",
+        trade_style="continuation",
+        pnl=10.0,
+        closed_at_utc=closed_at,
+        threshold_usd=15.0,
+    )
+    bot.session_style_drawdown_guard.record_closed_trade(
+        london_date="2026-07-13",
+        session_label="h12_18",
+        trade_style="continuation",
+        pnl=-8.0,
+        closed_at_utc=closed_at,
+        threshold_usd=15.0,
+    )
+    snapshot = {"timestamp_london": datetime(2026, 7, 13, 13, 0, tzinfo=ZoneInfo("Europe/London"))}
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("weekday", "h12_18", "180-209", "z_04", "p40_to_p50", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.43,
+        selected_ask=0.44,
+        selected_mid=0.435,
+        selected_spread=0.01,
+        selected_trade_value=0.50,
+        selected_policy_edge=0.055,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.05,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+
+    blockers, effective_edge = bot._session_style_entry_blockers(closed_at, snapshot, decision)
+    assert blockers == ("SESSION_STYLE_DRAWDOWN_EDGE_LADDER",)
+    assert round(effective_edge, 6) == 0.06
+    assert snapshot["session_style_guard_ladder_level"] == "degraded"
+    assert snapshot["session_style_guard_edge_penalty"] == 0.01
+
+    stronger = EntryDecision(**{**decision.__dict__, "selected_policy_edge": 0.065})
+    blockers, effective_edge = bot._session_style_entry_blockers(closed_at, snapshot, stronger)
+    assert blockers == ()
+    assert round(effective_edge, 6) == 0.06
 
 
 def test_live_cancel_reconciles_fill_before_clearing_pending_order() -> None:

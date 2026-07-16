@@ -10,7 +10,7 @@ import threading
 import time
 import traceback
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -86,7 +86,7 @@ SIDE_MOMENTUM_GUARD_WINDOW_SECONDS = 20
 SIDE_MOMENTUM_GUARD_THRESHOLD_BPS = 2.5
 PRESIGN_ENTRY_TOLERANCE_TICKS = 1
 DEGRADED_ENTRY_TOLERANCE_TICKS = 2
-POOR_ENTRY_TOLERANCE_TICKS = 2
+POOR_ENTRY_TOLERANCE_TICKS = 3
 DEGRADED_ENTRY_MIN_RESIDUAL_EDGE = 0.03
 POOR_ENTRY_MIN_RESIDUAL_EDGE = 0.02
 EXECUTION_LATE_WARNING_SECONDS = 1.0
@@ -3089,6 +3089,15 @@ class StatsBot:
             threshold_bps=decision.threshold_bps,
         )
 
+    def _entry_decision_with_entry_threshold(
+        self,
+        decision: EntryDecision,
+        entry_edge_threshold: float | None,
+    ) -> EntryDecision:
+        if entry_edge_threshold is None or decision.entry_edge_threshold == entry_edge_threshold:
+            return decision
+        return replace(decision, entry_edge_threshold=entry_edge_threshold)
+
     def _open_positions_for_drawdown_guard(self) -> list[OpenPosition]:
         positions: list[OpenPosition] = []
         if self.active_position is not None:
@@ -3159,6 +3168,10 @@ class StatsBot:
         snapshot["session_style_guard_peak_pnl"] = detail.get("peak_pnl")
         snapshot["session_style_guard_drawdown"] = detail.get("drawdown_usd")
         snapshot["session_style_guard_threshold"] = detail.get("threshold_usd")
+        snapshot["session_style_guard_drawdown_ratio"] = detail.get("drawdown_ratio")
+        snapshot["session_style_guard_ladder_level"] = detail.get("ladder_level", "")
+        snapshot["session_style_guard_edge_penalty"] = detail.get("edge_penalty")
+        snapshot["session_style_guard_effective_edge"] = detail.get("effective_entry_edge_threshold")
         snapshot["session_style_guard_active"] = bool(detail.get("active", False))
         snapshot["session_style_guard_session"] = detail.get("session_name", "")
         snapshot["session_style_guard_style"] = detail.get("trade_style", "")
@@ -3183,14 +3196,14 @@ class StatsBot:
         now_utc: datetime,
         snapshot: dict[str, Any] | None,
         decision: EntryDecision | None,
-    ) -> tuple[str, ...]:
+    ) -> tuple[tuple[str, ...], float | None]:
         if snapshot is None or decision is None:
             self._store_session_style_guard_detail(snapshot, None)
-            return ()
+            return (), None
         trade_style = str(decision.selected_trade_style or "").strip().lower()
         if trade_style not in {"continuation", "mean_reversion"}:
             self._store_session_style_guard_detail(snapshot, None)
-            return ()
+            return (), None
         if not hasattr(self, "session_style_drawdown_guard"):
             self.session_style_drawdown_guard = SessionStyleDrawdownGuard(
                 drawdown_per_share_usd=SESSION_STYLE_DRAWDOWN_PER_SHARE_USD
@@ -3198,10 +3211,22 @@ class StatsBot:
         context = self._session_style_guard_context_from_snapshot(now_utc, snapshot, trade_style)
         threshold_usd = self._session_style_guard_threshold_usd(decision)
         detail = self.session_style_drawdown_guard.details(**context, threshold_usd=threshold_usd)
-        self._store_session_style_guard_detail(snapshot, detail)
         if detail["active"]:
-            return ("SESSION_STYLE_DRAWDOWN",)
-        return ()
+            self._store_session_style_guard_detail(snapshot, detail)
+            return ("SESSION_STYLE_DRAWDOWN",), None
+        base_edge = finite_float(decision.entry_edge_threshold)
+        penalty = finite_float(detail.get("edge_penalty"))
+        effective_edge = None
+        if base_edge is not None:
+            effective_edge = base_edge + max(0.0, penalty or 0.0)
+            detail["effective_entry_edge_threshold"] = effective_edge
+        self._store_session_style_guard_detail(snapshot, detail)
+        if effective_edge is None or effective_edge <= base_edge + 1e-12:
+            return (), effective_edge
+        selected_edge = finite_float(decision.selected_policy_edge)
+        if selected_edge is None or selected_edge + 1e-12 < effective_edge:
+            return ("SESSION_STYLE_DRAWDOWN_EDGE_LADDER",), effective_edge
+        return (), effective_edge
 
     def _record_session_style_guard_closed_trade(
         self,
@@ -3257,7 +3282,9 @@ class StatsBot:
         if active and reason:
             self.last_guard_blocker = reason
             decision = self._entry_decision_with_blockers(decision, (reason,))
-        session_style_blockers = self._session_style_entry_blockers(now_utc, snapshot, decision)
+        session_style_blockers, effective_entry_edge = self._session_style_entry_blockers(now_utc, snapshot, decision)
+        if decision is not None and effective_entry_edge is not None:
+            decision = self._entry_decision_with_entry_threshold(decision, effective_entry_edge)
         if session_style_blockers:
             self.last_guard_blocker = session_style_blockers[0]
             decision = self._entry_decision_with_blockers(decision, session_style_blockers)
@@ -3329,6 +3356,16 @@ class StatsBot:
             if drawdown is not None and threshold is not None:
                 return f"SESSION_STYLE_DRAWDOWN ({session} {style} DD ${drawdown:.2f} >= ${threshold:.2f})"
             return f"SESSION_STYLE_DRAWDOWN ({session} {style})"
+        if blocker == "SESSION_STYLE_DRAWDOWN_EDGE_LADDER":
+            if snapshot is None:
+                return "SESSION_STYLE_DRAWDOWN_EDGE_LADDER"
+            session = str(snapshot.get("session_style_guard_session") or "session")
+            style = str(snapshot.get("session_style_guard_style") or "style")
+            level = str(snapshot.get("session_style_guard_ladder_level") or "ladder")
+            penalty = finite_float(snapshot.get("session_style_guard_edge_penalty"))
+            if penalty is not None:
+                return f"SESSION_STYLE_EDGE_LADDER ({session} {style} {level} +{penalty * 100:.0f}c)"
+            return f"SESSION_STYLE_EDGE_LADDER ({session} {style})"
         return blocker
 
     def _format_entry_blockers(
@@ -3404,6 +3441,10 @@ class StatsBot:
                         "session_style_guard_peak_pnl",
                         "session_style_guard_drawdown",
                         "session_style_guard_threshold",
+                        "session_style_guard_drawdown_ratio",
+                        "session_style_guard_ladder_level",
+                        "session_style_guard_edge_penalty",
+                        "session_style_guard_effective_edge",
                         "session_style_guard_active",
                         "execution_mode",
                         "execution_state",
@@ -3483,6 +3524,10 @@ class StatsBot:
                     _fmt(snapshot.get("session_style_guard_peak_pnl"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("session_style_guard_drawdown"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("session_style_guard_threshold"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("session_style_guard_drawdown_ratio"), 6, "") if snapshot else "",
+                    snapshot.get("session_style_guard_ladder_level", "") if snapshot else "",
+                    _fmt(snapshot.get("session_style_guard_edge_penalty"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("session_style_guard_effective_edge"), 6, "") if snapshot else "",
                     int(bool(snapshot.get("session_style_guard_active"))) if snapshot else "",
                     self.config.execution_mode,
                     self._entry_submission_state,
@@ -3622,6 +3667,19 @@ class StatsBot:
                 threshold = finite_float(snapshot.get("session_style_guard_threshold"))
                 if drawdown is not None and threshold is not None:
                     lines.append(f"    style_kill        : active ({session} {style} DD ${drawdown:.2f} >= ${threshold:.2f})")
+            else:
+                penalty = finite_float(snapshot.get("session_style_guard_edge_penalty"))
+                if penalty is not None and penalty > 0.0:
+                    session = str(snapshot.get("session_style_guard_session") or "session")
+                    style = str(snapshot.get("session_style_guard_style") or "style")
+                    level = str(snapshot.get("session_style_guard_ladder_level") or "ladder")
+                    effective = finite_float(snapshot.get("session_style_guard_effective_edge"))
+                    if effective is not None:
+                        lines.append(
+                            f"    style_ladder      : {level} ({session} {style} +{penalty * 100:.0f}c, need {effective * 100:.0f}c)"
+                        )
+                    else:
+                        lines.append(f"    style_ladder      : {level} ({session} {style} +{penalty * 100:.0f}c)")
             lines.append(f"    elapsed_seconds   : {_fmt(snapshot.get('elapsed_seconds_since_market_start'), 1)}")
             lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
             lines.append(f"    signed_bps        : {_fmt(snapshot.get('cb_signed_bps_raw'), 2)}")
@@ -3770,7 +3828,7 @@ class StatsBot:
             f"{self.macro_policy.training_start}..{self.macro_policy.training_end}"
         )
         log.info(f"  policy      : {self.config.macro_policy_bundle} ({len(self.macro_policy):,} hierarchical rows)")
-        log.info("  entry edges : continuation=0.04 mean_reversion=0.04 (z6 clean/FFM-omitted profile)")
+        log.info("  entry edges : continuation=0.05 mean_reversion=0.05 (z6 HL120 clean/FFM-omitted profile)")
         log.info(f"  exit mode   : {self.config.exit_policy_mode}")
         session_names = "/".join(dict.fromkeys(self.macro_policy.session_display_names.values()))
         log.info(f"  signal      : causal 1h Coinbase local RV; {session_names} London segments")

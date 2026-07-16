@@ -10,13 +10,13 @@ from stats_bot.macro_policy import MacroLocalPolicy
 
 
 ROOT = Path(__file__).resolve().parents[1]
-POLICY = ROOT / "strategy" / "z6_recency45_weekday_v1" / "policy_bundle.json"
+POLICY = ROOT / "strategy" / "z6_recency120_weekday_v1" / "policy_bundle.json"
 LONDON = ZoneInfo("Europe/London")
 
 
 def test_production_policy_uses_polymarket_settlement_labels() -> None:
     policy = MacroLocalPolicy(POLICY)
-    assert policy.strategy_id == "z6_recency45_weekday_v1"
+    assert policy.strategy_id == "z6_recency120_weekday_v1"
     assert policy.signal_source == "coinbase_btc_usd"
     assert policy.settlement_label == "polymarket_gamma_resolved_outcome"
 
@@ -25,7 +25,7 @@ def test_policy_selects_recency_for_weekdays_and_lifetime_for_weekends() -> None
     policy = MacroLocalPolicy(POLICY)
     weekday = {"day_type": "weekday"}
     weekend = {"day_type": "weekend"}
-    assert policy._branch(weekday)["name"] == "weekday_recency45_s10"
+    assert policy._branch(weekday)["name"] == "weekday_recency120_s10"
     assert policy._branch(weekend)["name"] == "weekend_lifetime"
 
 
@@ -96,15 +96,15 @@ def test_entry_profiles_match_fixed_clean_ffm_oos_spec() -> None:
         for session in ("h00_06", "h06_12", "h12_18", "h18_24"):
             continuation = policy.entry_parameters(day_type, session, "continuation")
             mean_reversion = policy.entry_parameters(day_type, session, "mean_reversion")
-            assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.04, 60, 239)
-            assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.04, 60, 255)
+            assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.05, 60, 255)
+            assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.05, 60, 255)
 
 
 def test_continuation_tte_blocks_only_outside_fixed_profile() -> None:
     policy = MacroLocalPolicy(POLICY)
     profile = policy.entry_parameters("weekday", "h06_12", "continuation")
     assert profile.min_tte == 60
-    assert profile.max_tte == 239
+    assert profile.max_tte == 255
 
 
 def test_move_z_buckets_are_right_closed_like_research() -> None:
@@ -173,7 +173,7 @@ def test_policy_match_fields_are_populated_when_edge_fails() -> None:
     assert decision.selected_side == "UP"
     assert decision.selected_trade_value is not None
     assert decision.selected_policy_edge is not None
-    assert decision.entry_edge_threshold == 0.04
+    assert decision.entry_edge_threshold == 0.05
     assert snapshot["policy_support"] > 0
     assert snapshot["policy_level"] == "final"
     assert snapshot["selected_move_z_bucket"] == "z_00"
