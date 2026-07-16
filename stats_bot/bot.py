@@ -93,7 +93,7 @@ EXECUTION_LATE_WARNING_SECONDS = 1.0
 EXECUTION_HEALTH_MIN_SAMPLES = 5
 EXECUTION_HEALTH_WINDOW = 10
 ENTRY_LIFECYCLE_BLOCKING_STATES = {"SUBMITTING", "UNKNOWN", "RESTING", "FILLED"}
-SESSION_STYLE_DRAWDOWN_PER_SHARE_USD = 3.0
+SESSION_STYLE_DRAWDOWN_PER_SHARE_USD = 1.5
 
 
 class _LondonFormatter(logging.Formatter):
@@ -3160,17 +3160,10 @@ class StatsBot:
                 "session_label": "",
                 "trade_style": str(trade_style or ""),
             }
-        if hasattr(self, "macro_policy"):
-            session_name, session_label = self.macro_policy.macro_session(london_dt)
-        else:
-            start = int(london_dt.hour) // 6 * 6
-            session_label = f"h{start:02d}_{min(start + 6, 24):02d}"
-            session_name = {
-                "h00_06": "ASIA",
-                "h06_12": "EUROPE",
-                "h12_18": "US_OPEN",
-                "h18_24": "US_LATE",
-            }.get(session_label, session_label)
+        start = int(london_dt.hour) // 2 * 2
+        end = start + 2
+        session_label = f"h{start:02d}_{end:02d}" if end < 24 else f"h{start:02d}_24"
+        session_name = session_label
         return {
             "london_date": london_dt.date().isoformat(),
             "session_name": str(session_name or session_label or ""),

@@ -187,7 +187,7 @@ Start gate        : elapsed >= 45 seconds
 Stake             : flat market-minimum shares, 5-share fallback
 Exit              : hold to resolution
 Execution         : event_driven_ws by default
-Fast limit        : ask + 1/2/3 ticks by execution health, residual-edge guarded
+Fast limit        : ask + 1/2/2 ticks for HEALTHY/DEGRADED/POOR, residual-edge guarded
 Position limit    : one filled trade per five-minute market
 ```
 
@@ -268,9 +268,9 @@ The active session display names are four fixed six-hour London segments:
 
 The active bundle combines two policy shapes:
 
-- **Weekdays:** recursively weighted hierarchy with a 45-day half-life and
+- **Weekdays:** recursively weighted hierarchy with a 120-day half-life and
   parent strength 10 at base, day, TTE and final levels.
-- **Weekends:** lifetime hierarchy copied from `z6_local_v1`.
+- **Weekends:** clean/FFM-omitted lifetime hierarchy.
 
 This is why support values shown in the dashboard should be read as effective
 support, not always literal historical trade count.
@@ -310,7 +310,8 @@ policy value exists
 policy value - ask >= required edge
 policy value - min(ask + 0.01, 0.80) >= required edge
 BPS_YES_GUARD is inactive
-peak-realised drawdown kill is inactive
+session/style 2h drawdown kill is inactive
+peak-realised run drawdown kill is inactive
 no active position
 no pending entry
 no in-flight entry submission
@@ -343,9 +344,11 @@ but they are not part of the active `z6_recency120_weekday_v1` entry path:
 - dynamic staking
 - anti-martingale staking bonus
 
-The runtime-only peak-realised drawdown kill switch remains active as an
-overnight capital stop. It blocks new entries after a configured realised-PnL
-drawdown from the session high; it does not force-sell open positions.
+Runtime-only drawdown stops remain active as capital guards. The session/style
+guard blocks only the affected trade style for the current fixed two-hour
+London bucket after a realised-PnL drawdown of `1.5 * shares` from that bucket's
+high-water mark. The run-level peak-realised drawdown kill remains an overnight
+capital stop. Neither guard force-sells open positions.
 
 ## Execution Model
 

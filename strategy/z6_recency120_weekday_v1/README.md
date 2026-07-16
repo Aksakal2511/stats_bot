@@ -16,3 +16,8 @@ Source artifact:
 ```text
 /Volumes/Kate_DATA/policy_finder/data/artifacts/stats_bot_z6_hl120_weekday_v1_clean_ffm_to_20260713
 ```
+
+Runtime drawdown protection is deliberately outside the policy artifact. The
+current bot blocks the affected style for the current fixed two-hour London
+bucket after a realised-PnL drawdown of `1.5 * shares`; it does not change the
+policy values or force exits.

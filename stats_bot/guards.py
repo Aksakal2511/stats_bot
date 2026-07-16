@@ -76,13 +76,13 @@ class DrawdownGuard:
 
 @dataclass
 class SessionStyleDrawdownGuard:
-    """Block only the same London date + 6h session + trade style after peak drawdown."""
+    """Block only the same London date + fixed time bucket + trade style after peak drawdown."""
 
-    drawdown_per_share_usd: float = 3.0
+    drawdown_per_share_usd: float = 1.5
     degraded_fraction: float = 0.5
     poor_fraction: float = 5.0 / 6.0
-    degraded_edge_penalty: float = 0.01
-    poor_edge_penalty: float = 0.02
+    degraded_edge_penalty: float = 0.0
+    poor_edge_penalty: float = 0.0
     closed_pnl_by_key: dict[str, float] = field(default_factory=dict)
     peak_pnl_by_key: dict[str, float] = field(default_factory=dict)
     triggered_at_by_key: dict[str, datetime] = field(default_factory=dict)

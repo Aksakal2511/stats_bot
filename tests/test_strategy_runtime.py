@@ -1510,7 +1510,11 @@ def test_session_style_drawdown_guard_blocks_only_matching_slice() -> None:
 
 
 def test_session_style_drawdown_guard_reports_edge_ladder() -> None:
-    guard = SessionStyleDrawdownGuard(drawdown_per_share_usd=3.0)
+    guard = SessionStyleDrawdownGuard(
+        drawdown_per_share_usd=3.0,
+        degraded_edge_penalty=0.01,
+        poor_edge_penalty=0.02,
+    )
     closed_at = datetime(2026, 7, 13, 8, 0, tzinfo=timezone.utc)
 
     guard.record_closed_trade(
@@ -1560,30 +1564,30 @@ def test_session_style_drawdown_guard_reports_edge_ladder() -> None:
     assert poor["edge_penalty"] == 0.02
 
 
-def test_session_style_drawdown_ladder_raises_bot_entry_edge() -> None:
+def test_session_style_drawdown_guard_uses_fixed_two_hour_kill_only_bucket() -> None:
     bot = object.__new__(StatsBot)
     bot.config = type("Config", (), {"min_order_size_fallback": 5.0})()
     bot.current_market = None
     bot.last_session_style_guard_detail = None
-    bot.session_style_drawdown_guard = SessionStyleDrawdownGuard(drawdown_per_share_usd=3.0)
+    bot.session_style_drawdown_guard = SessionStyleDrawdownGuard(drawdown_per_share_usd=1.5)
     closed_at = datetime(2026, 7, 13, 13, 0, tzinfo=timezone.utc)
     bot.session_style_drawdown_guard.record_closed_trade(
         london_date="2026-07-13",
-        session_label="h12_18",
+        session_label="h14_16",
         trade_style="continuation",
         pnl=10.0,
         closed_at_utc=closed_at,
-        threshold_usd=15.0,
+        threshold_usd=7.5,
     )
     bot.session_style_drawdown_guard.record_closed_trade(
         london_date="2026-07-13",
-        session_label="h12_18",
+        session_label="h14_16",
         trade_style="continuation",
-        pnl=-8.0,
+        pnl=-17.5,
         closed_at_utc=closed_at,
-        threshold_usd=15.0,
+        threshold_usd=7.5,
     )
-    snapshot = {"timestamp_london": datetime(2026, 7, 13, 13, 0, tzinfo=ZoneInfo("Europe/London"))}
+    snapshot = {"timestamp_london": datetime(2026, 7, 13, 14, 30, tzinfo=ZoneInfo("Europe/London"))}
     decision = EntryDecision(
         viable=True,
         blockers=(),
@@ -1603,15 +1607,18 @@ def test_session_style_drawdown_ladder_raises_bot_entry_edge() -> None:
     )
 
     blockers, effective_edge = bot._session_style_entry_blockers(closed_at, snapshot, decision)
-    assert blockers == ("SESSION_STYLE_DRAWDOWN_EDGE_LADDER",)
-    assert round(effective_edge, 6) == 0.06
-    assert snapshot["session_style_guard_ladder_level"] == "degraded"
-    assert snapshot["session_style_guard_edge_penalty"] == 0.01
+    assert blockers == ("SESSION_STYLE_DRAWDOWN",)
+    assert effective_edge is None
+    assert snapshot["session_style_guard_key"] == "2026-07-13|h14_16|continuation"
+    assert snapshot["session_style_guard_threshold"] == 7.5
+    assert snapshot["session_style_guard_ladder_level"] == "killed"
+    assert snapshot["session_style_guard_edge_penalty"] == 0.0
 
-    stronger = EntryDecision(**{**decision.__dict__, "selected_policy_edge": 0.065})
-    blockers, effective_edge = bot._session_style_entry_blockers(closed_at, snapshot, stronger)
+    next_bucket_snapshot = {"timestamp_london": datetime(2026, 7, 13, 16, 0, tzinfo=ZoneInfo("Europe/London"))}
+    blockers, effective_edge = bot._session_style_entry_blockers(closed_at, next_bucket_snapshot, decision)
     assert blockers == ()
-    assert round(effective_edge, 6) == 0.06
+    assert round(effective_edge, 6) == 0.05
+    assert next_bucket_snapshot["session_style_guard_key"] == "2026-07-13|h16_18|continuation"
 
 
 def test_live_cancel_reconciles_fill_before_clearing_pending_order() -> None:

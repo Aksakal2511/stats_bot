@@ -1,14 +1,14 @@
 # Execution Plan
 
-The strategic layer is `z6_recency45_weekday_v1`. Execution can run as `event_driven_ws` (default) or `legacy_polling` (rollback).
+The strategic layer is `z6_recency120_weekday_v1`. Execution can run as `event_driven_ws` (default) or `legacy_polling` (rollback).
 
 ## Entry Path
 
 1. Maintain in-memory UP and DOWN books from the public Polymarket market WebSocket.
 2. Re-evaluate UP and DOWN when either the BTC signal or Polymarket book changes.
-3. Require edge of at least the active style profile, currently `0.04`, at the displayed ask and at `ask + 0.01`.
+3. Require edge of at least the active style profile, currently `0.05`, at the displayed ask and at the execution-health-adjusted fast limit.
 4. Atomically reserve the market entry before handing the pre-signed order to the submission worker.
-5. Submit through the persistent entry-only worker and isolated keepalive HTTP connection at no more than `ask + 1 tick` when edge remains valid.
+5. Submit through the persistent entry-only worker and isolated keepalive HTTP connection at no more than the execution-health fast limit when edge remains valid.
 6. Use the authenticated user WebSocket to trigger prompt fill reconciliation.
 7. If the fast path is unavailable, use the existing post-only maker quote at `best_ask - 1 tick`.
 8. Cancel pending entry immediately when side, policy key, price range or edge is no longer valid.
@@ -17,7 +17,7 @@ Paper `fast_limit` uses the same side, limit and edge-preservation checks as liv
 
 An unresolved submission is labelled late after one second, but it is never retried until its state is known. This prevents a delayed GTC and a fallback order from both filling. Private wallet reads are deferred during the POST; public feeds and dashboard rendering continue.
 
-The peak-drawdown kill switch latches after a `$15` decline from peak realised session PnL, cancels pending entries and blocks new entries while allowing an existing position to settle normally.
+The session/style drawdown guard blocks only the affected style for the current fixed two-hour London bucket after a realised-PnL drawdown of `1.5 * shares`. The run-level peak-drawdown kill switch latches after a `$15` decline from peak realised PnL, cancels pending entries and blocks new entries while allowing an existing position to settle normally.
 
 ## Position And Exit
 
