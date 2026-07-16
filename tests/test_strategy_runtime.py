@@ -693,10 +693,10 @@ def test_fast_presigned_quote_widens_limit_by_execution_health_without_breaking_
     poor = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
     assert poor is not None
     assert poor.execution_health_status == "Poor"
-    assert poor.tolerance_ticks == 3
-    assert poor.price == 0.45
+    assert poor.tolerance_ticks == 2
+    assert poor.price == 0.44
     assert round(poor.edge_at_ask, 6) == 0.08
-    assert round(poor.edge_at_limit, 6) == 0.05
+    assert round(poor.edge_at_limit, 6) == 0.06
     assert round(poor.required_edge, 6) == 0.02
 
     weak = EntryDecision(**{**decision.__dict__, "selected_trade_value": 0.455, "selected_policy_edge": 0.035})
@@ -1970,7 +1970,7 @@ def test_hold_to_resolution_waits_when_polymarket_outcome_unresolved(tmp_path) -
     assert any(event[0] == "settlement_pending" and event[1] == "POLYMARKET_OUTCOME_NOT_RESOLVED" for event in bot.recent_events)
 
 
-def test_live_blocks_retry_until_cooldown_then_allows_second_attempt() -> None:
+def test_live_blocks_retry_while_window_lifecycle_is_resting() -> None:
     class FakePolymarket:
         def __init__(self) -> None:
             self.buy_calls = 0
@@ -2005,6 +2005,7 @@ def test_live_blocks_retry_until_cooldown_then_allows_second_attempt() -> None:
     bot.active_position = None
     bot.entry_fills_by_window = {}
     bot.entry_attempts_by_window = {}
+    bot.entry_lifecycle_by_window = {}
     bot.entry_attempt_orders_by_window = {}
     bot.last_entry_attempt_time_by_window = {}
     bot.last_exit_time_by_window = {}
@@ -2065,9 +2066,10 @@ def test_live_blocks_retry_until_cooldown_then_allows_second_attempt() -> None:
     bot._place_entry(market_start + timedelta(seconds=55), snapshot, decision)
     bot._place_entry(market_start + timedelta(seconds=59), snapshot, decision)
 
-    assert bot.pm.buy_calls == 2
-    assert bot.entry_attempts_by_window[bot.current_market.slug] == 2
-    assert any(event[1] == "SKIPPED_LIVE_ENTRY_RETRY_COOLDOWN" for event in bot.recent_events)
+    assert bot.pm.buy_calls == 1
+    assert bot.entry_attempts_by_window[bot.current_market.slug] == 1
+    assert bot.entry_lifecycle_by_window[bot.current_market.slug] == "RESTING"
+    assert any(event[1] == "SKIPPED_ENTRY_LIFECYCLE_ACTIVE" for event in bot.recent_events)
 
 
 def test_live_failed_maker_submit_consumes_retry_cooldown() -> None:
@@ -2114,6 +2116,7 @@ def test_live_failed_maker_submit_consumes_retry_cooldown() -> None:
     bot.active_position = None
     bot.entry_fills_by_window = {}
     bot.entry_attempts_by_window = {}
+    bot.entry_lifecycle_by_window = {}
     bot.entry_attempt_orders_by_window = {}
     bot.last_entry_attempt_time_by_window = {}
     bot.last_exit_time_by_window = {}
@@ -2176,6 +2179,7 @@ def test_live_failed_maker_submit_consumes_retry_cooldown() -> None:
 
     assert bot.pm.buy_calls == 1
     assert bot.entry_attempts_by_window[bot.current_market.slug] == 1
+    assert bot.entry_lifecycle_by_window[bot.current_market.slug] == "FAILED"
     assert bot.pending_entry is None
     assert any(event[0] == "maker_entry_failed" for event in bot.recent_events)
     assert any(event[1] == "SKIPPED_LIVE_ENTRY_RETRY_COOLDOWN" for event in bot.recent_events)

@@ -86,12 +86,13 @@ SIDE_MOMENTUM_GUARD_WINDOW_SECONDS = 20
 SIDE_MOMENTUM_GUARD_THRESHOLD_BPS = 2.5
 PRESIGN_ENTRY_TOLERANCE_TICKS = 1
 DEGRADED_ENTRY_TOLERANCE_TICKS = 2
-POOR_ENTRY_TOLERANCE_TICKS = 3
+POOR_ENTRY_TOLERANCE_TICKS = 2
 DEGRADED_ENTRY_MIN_RESIDUAL_EDGE = 0.03
 POOR_ENTRY_MIN_RESIDUAL_EDGE = 0.02
 EXECUTION_LATE_WARNING_SECONDS = 1.0
 EXECUTION_HEALTH_MIN_SAMPLES = 5
 EXECUTION_HEALTH_WINDOW = 10
+ENTRY_LIFECYCLE_BLOCKING_STATES = {"SUBMITTING", "UNKNOWN", "RESTING", "FILLED"}
 SESSION_STYLE_DRAWDOWN_PER_SHARE_USD = 3.0
 
 
@@ -416,6 +417,7 @@ class StatsBot:
         self.last_exit_time_by_window: dict[str, datetime] = {}
         self.entry_fills_by_window: dict[str, int] = {}
         self.entry_attempts_by_window: dict[str, int] = {}
+        self.entry_lifecycle_by_window: dict[str, str] = {}
         self.entry_attempt_orders_by_window: dict[str, list[PendingEntryOrder]] = {}
         self.recent_client_pipeline_ms: collections.deque[float] = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
         self.recent_clob_ack_ms: collections.deque[float] = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
@@ -786,6 +788,7 @@ class StatsBot:
                 self._log_latency("stream_subscribe", market_slug=self.current_market.slug, source="polymarket_ws")
             self.entry_fills_by_window.setdefault(self.current_market.slug, 0)
             self.entry_attempts_by_window.setdefault(self.current_market.slug, 0)
+            self.entry_lifecycle_by_window.setdefault(self.current_market.slug, "NONE")
             self.entry_attempt_orders_by_window.setdefault(self.current_market.slug, [])
             self._log_event(
                 "new_window",
@@ -1480,6 +1483,17 @@ class StatsBot:
         elapsed = (now_utc - last_attempt).total_seconds()
         return max(0.0, self.config.live_entry_retry_cooldown_seconds - elapsed)
 
+    def _entry_lifecycle_state(self, market_slug: str) -> str:
+        return str(getattr(self, "entry_lifecycle_by_window", {}).get(market_slug) or "NONE")
+
+    def _set_entry_lifecycle_state(self, market_slug: str, state: str) -> None:
+        if not hasattr(self, "entry_lifecycle_by_window"):
+            self.entry_lifecycle_by_window = {}
+        self.entry_lifecycle_by_window[market_slug] = state
+
+    def _entry_lifecycle_blocks_entry(self, market_slug: str) -> bool:
+        return self._entry_lifecycle_state(market_slug) in ENTRY_LIFECYCLE_BLOCKING_STATES
+
     def _entry_snapshot_with_meta(
         self,
         now_utc: datetime,
@@ -1612,6 +1626,7 @@ class StatsBot:
                 return
             self._entry_submission_state = "LATE"
             self._entry_submission_late_logged = True
+            self._set_entry_lifecycle_state(submission.market_slug, "UNKNOWN")
         self._log_latency(
             "submission_late",
             market_slug=submission.market_slug,
@@ -1645,14 +1660,14 @@ class StatsBot:
             return
         if self.pending_entry is not None or self.active_position is not None or self._entry_submission_inflight():
             return
+        if self._entry_lifecycle_blocks_entry(market.slug):
+            return
         if self.entry_fills_by_window.get(market.slug, 0) > 0:
             return
         if not self.config.paper_trading:
             if self._reconcile_live_wallet_fills_for_window(now_utc, market.slug):
                 return
         attempts = self.entry_attempts_by_window.get(market.slug, 0)
-        if not self.config.paper_trading and attempts >= self.config.live_max_entry_attempts_per_window:
-            return
         if not self.config.paper_trading and self._live_retry_cooldown_remaining(market.slug, now_utc) > 0:
             return
         quote = self._fast_entry_quote(now_utc, snapshot, decision) if self.config.paper_trading or self._presigned_entries_available() else None
@@ -1726,9 +1741,12 @@ class StatsBot:
         with self._entry_submission_lock:
             if self._entry_submission is not None or self.pending_entry is not None or self.active_position is not None:
                 return
+            if self._entry_lifecycle_blocks_entry(market.slug):
+                return
             self._entry_submission = submission
             self._entry_submission_state = "QUEUED"
             self._entry_submission_late_logged = False
+            self._set_entry_lifecycle_state(market.slug, "SUBMITTING")
             self.entry_attempts_by_window[market.slug] = attempt_count
             self.last_entry_attempt_time_by_window[market.slug] = submitted_at
 
@@ -1759,6 +1777,7 @@ class StatsBot:
                 if self._entry_submission is submission:
                     self._entry_submission = None
                     self._entry_submission_state = "IDLE"
+                    self._set_entry_lifecycle_state(market.slug, "FAILED")
             self._remember_error("Execution queue unexpectedly full")
 
     def _drain_entry_submission_results(self, now_utc: datetime) -> None:
@@ -1850,6 +1869,7 @@ class StatsBot:
                     if self._entry_submission is current:
                         self._entry_submission = None
                         self._entry_submission_state = "IDLE"
+                        self._set_entry_lifecycle_state(submission.market_slug, "FAILED")
                 continue
 
             pending = PendingEntryOrder(
@@ -1891,10 +1911,15 @@ class StatsBot:
                     if self._entry_submission is current:
                         self._entry_submission = None
                         self._entry_submission_state = "IDLE"
+                        if already_filled:
+                            self._set_entry_lifecycle_state(submission.market_slug, "FILLED")
+                        else:
+                            self._set_entry_lifecycle_state(submission.market_slug, "CANCELLED")
                 continue
 
             self.pending_entry = pending
             self.entry_attempt_orders_by_window.setdefault(submission.market_slug, []).append(pending)
+            self._set_entry_lifecycle_state(submission.market_slug, "RESTING")
             self._log_event(
                 "fast_entry_placed" if submission.signed_order is not None or self.config.paper_trading else "maker_entry_placed",
                 (
@@ -2068,6 +2093,13 @@ class StatsBot:
             return
         if self.pending_entry is not None or self.active_position is not None:
             return
+        if self._entry_lifecycle_blocks_entry(market.slug):
+            self._log_event(
+                "entry_skipped",
+                "SKIPPED_ENTRY_LIFECYCLE_ACTIVE",
+                {"market_slug": market.slug, "entry_lifecycle": self._entry_lifecycle_state(market.slug)},
+            )
+            return
         if self.entry_fills_by_window.get(market.slug, 0) > 0:
             self._log_event("entry_skipped", "SKIPPED_WINDOW_ALREADY_FILLED", {"market_slug": market.slug})
             return
@@ -2076,13 +2108,6 @@ class StatsBot:
             if self._reconcile_live_wallet_fills_for_window(now_utc, market.slug):
                 return
             attempts = self.entry_attempts_by_window.get(market.slug, 0)
-            if attempts >= self.config.live_max_entry_attempts_per_window:
-                self._log_event(
-                    "entry_skipped",
-                    "SKIPPED_LIVE_WINDOW_MAX_ATTEMPTS",
-                    {"market_slug": market.slug, "attempts": attempts, "max_attempts": self.config.live_max_entry_attempts_per_window},
-                )
-                return
             remaining = self._live_retry_cooldown_remaining(market.slug, now_utc)
             if remaining > 0:
                 self._log_event(
@@ -2118,6 +2143,7 @@ class StatsBot:
                     self.entry_attempts_by_window[market.slug] = attempt_count
                     submitted_at_utc = datetime.now(tz=timezone.utc)
                     self.last_entry_attempt_time_by_window[market.slug] = submitted_at_utc
+                    self._set_entry_lifecycle_state(market.slug, "SUBMITTING")
                     submit_started = time.perf_counter()
                     result = self.pm.post_signed_buy_order(signed_order)
                     submit_elapsed_ms = (time.perf_counter() - submit_started) * 1000.0
@@ -2145,6 +2171,7 @@ class StatsBot:
                                 "message": result.message[:500],
                             },
                         )
+                        self._set_entry_lifecycle_state(market.slug, "FAILED")
                         return
                     self.pending_entry = PendingEntryOrder(
                         order_id=result.order_id,
@@ -2161,6 +2188,7 @@ class StatsBot:
                         wallet_balance_before=wallet_balance_before,
                     )
                     self.entry_attempt_orders_by_window.setdefault(market.slug, []).append(self.pending_entry)
+                    self._set_entry_lifecycle_state(market.slug, "RESTING")
                     self._log_event(
                         "fast_entry_placed",
                         "pre-signed GTC BUY submitted",
@@ -2349,6 +2377,7 @@ class StatsBot:
         attempt_count = int(self.entry_attempts_by_window.get(market.slug, 0)) + 1
         self.entry_attempts_by_window[market.slug] = attempt_count
         self.last_entry_attempt_time_by_window[market.slug] = now_utc
+        self._set_entry_lifecycle_state(market.slug, "SUBMITTING")
         result = self.pm.place_maker_buy(token_id=self._selected_token_id(decision.selected_side), price=price, shares=shares, market=market)
         if not result.ok or not result.order_id:
             self._remember_error(f"Maker entry failed: {result.status} {result.message[:160]}")
@@ -2366,6 +2395,7 @@ class StatsBot:
                     "message": result.message[:500],
                 },
             )
+            self._set_entry_lifecycle_state(market.slug, "FAILED")
             return
         self.pending_entry = PendingEntryOrder(
             order_id=result.order_id,
@@ -2382,6 +2412,7 @@ class StatsBot:
             wallet_balance_before=wallet_balance_before,
         )
         self.entry_attempt_orders_by_window.setdefault(market.slug, []).append(self.pending_entry)
+        self._set_entry_lifecycle_state(market.slug, "RESTING")
         self._log_event(
             "maker_entry_placed",
             "post-only GTC BUY placed",
@@ -2540,6 +2571,7 @@ class StatsBot:
         self.balance -= cost
         self._sync_live_wallet_after_known_entry_fill(pending, filled_shares=filled_shares, fill_price=fill_price)
         self.entry_fills_by_window[market.slug] = int(self.entry_fills_by_window.get(market.slug, 0)) + 1
+        self._set_entry_lifecycle_state(market.slug, "FILLED")
         if (
             self.active_position is not None
             and self.active_position.market_slug == market.slug
@@ -2642,6 +2674,7 @@ class StatsBot:
             detail=reason,
         )
         self.pending_entry = None
+        self._set_entry_lifecycle_state(pending.market_slug, "CANCELLED")
 
     def _manage_pending_entry(self, now_utc: datetime, snapshot: dict[str, Any] | None, decision: EntryDecision | None) -> None:
         pending = self.pending_entry
@@ -2659,10 +2692,12 @@ class StatsBot:
                 return
             if status in {"filled"}:
                 self.pending_entry = None
+                self._set_entry_lifecycle_state(pending.market_slug, "FILLED")
                 return
             if status in {"cancelled", "canceled"}:
                 self._log_event("maker_entry_cancelled", "exchange_cancelled", {"order_id": pending.order_id})
                 self.pending_entry = None
+                self._set_entry_lifecycle_state(pending.market_slug, "CANCELLED")
                 return
 
         age = (now_utc - pending.created_at_utc).total_seconds()
@@ -3614,6 +3649,8 @@ class StatsBot:
                 getattr(self, "recent_decision_to_response_ms", collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)),
             )
         )
+        submission_state = self._entry_lifecycle_state(self.current_market.slug) if self.current_market else "NONE"
+        lines.append(f"    Submission state  : {submission_state}")
         if self.config.pressure_defence_enabled:
             lines.append(
                 f"    pressure_hedges   : {self.pressure_hedges_filled}/"
@@ -3841,7 +3878,7 @@ class StatsBot:
         if not self.config.paper_trading:
             log.info(
                 f"  live retry  : cooldown={self.config.live_entry_retry_cooldown_seconds:g}s "
-                f"max_attempts/window={self.config.live_max_entry_attempts_per_window} "
+                "entry_lifecycle=single unresolved/live/filled entry per window "
                 f"wallet_tolerance=${self.config.live_wallet_reconcile_tolerance_usd:g}"
             )
         log.info(
