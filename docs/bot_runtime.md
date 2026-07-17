@@ -6,7 +6,7 @@ Paper and live call the same `MacroLocalPolicy.evaluate` function. Only order su
 
 At startup the bot:
 
-1. Loads `strategy/z6_recency120_weekday_v1/policy_bundle.json` and `entry_profiles.json`.
+1. Loads `strategy/z6_fullraw_hl90_weekday_v1/policy_bundle.json` and `entry_profiles.json`.
 2. Verifies runtime price, global TTE, start gate and stake settings match the frozen model.
 3. Starts the Coinbase websocket.
 4. Backfills approximately 100 completed Coinbase one-minute candles.
@@ -28,13 +28,13 @@ Both require `STATS_STAKE_MODE=min_order_size` with `STATS_MIN_ORDER_SIZE_FALLBA
 The compact strategy fields are:
 
 ```text
-strategy          : z6_recency120_weekday_v1 (frozen 2026-07-13)
+strategy          : z6_fullraw_hl90_weekday_v1 (frozen 2026-07-13)
 day/session       : weekday/US_OPEN
-entry_profile     : weekday/US_OPEN | C=5c@60-255s | MR=5c@60-255s
+entry_profile     : weekday/US_OPEN | C=6c@60-255s | MR=10c@60-255s
 local_vol_1h      : 34.812 bps (ready)
 selected_move_z   : -0.731
 move_z_bucket     : z_01
-value / edge      : 0.612 / 0.072 (need 0.050)
+value / edge      : 0.612 / 0.112 (need 0.100)
 trade_style       : mean_reversion
 support / level   : 184 / final
 execution health  : HEALTHY
@@ -57,7 +57,7 @@ Every run writes under `logs/<session>_<paper|live>/`:
 
 In event-driven mode, a persistent worker owns an entry-only HTTP/2 connection. Wallet refreshes are briefly deferred while an entry POST is unresolved, while market data, signals, positions and the dashboard continue updating. Responses over one second are labelled `LATE`; duplicate protection remains active and the bot does not retry blindly.
 
-The session/style drawdown guard blocks only the affected style in the current fixed two-hour London bucket once drawdown from that bucket's realised-PnL high-water mark reaches `1.5 * shares`; it resets at the next two-hour bucket. `STATS_PEAK_DRAWDOWN_KILL_USD=15` separately blocks new entries for the rest of the run once `peak_realized_pnl - realized_pnl` reaches `$15`. Cadence and latency logs include the peak, drawdown and latched state for live/paper comparison.
+The session/style drawdown guard is disabled by default for this profile. `STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED=1` restores the fixed two-hour London bucket guard. `STATS_PEAK_DRAWDOWN_KILL_USD=15` separately blocks new entries for the rest of the run once `peak_realized_pnl - realized_pnl` reaches `$15`. Cadence and latency logs include the peak, drawdown and latched state for live/paper comparison.
 
 ## Validation
 

@@ -23,7 +23,7 @@ DEFAULT_VOLATILITY_EDGES_FILE = (
     REPO_ROOT / "strategy" / "bucket_config" / "volatility_bucket_edges_offset250_12bucket_2h_cb_sources.json"
 )
 DEFAULT_LOG_DIR = REPO_ROOT / "logs"
-DEFAULT_MACRO_POLICY_BUNDLE = REPO_ROOT / "strategy" / "z6_recency120_weekday_v1" / "policy_bundle.json"
+DEFAULT_MACRO_POLICY_BUNDLE = REPO_ROOT / "strategy" / "z6_fullraw_hl90_weekday_v1" / "policy_bundle.json"
 
 
 def load_env_file(path: Path) -> None:
@@ -110,6 +110,7 @@ class BotConfig:
     pressure_hedge_fraction: float
     pressure_max_hedge_ask: float
     pressure_hedge_limit_price: float
+    session_style_drawdown_guard_enabled: bool
     max_loop_seconds: float | None
     once: bool
 
@@ -307,6 +308,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         pressure_hedge_fraction=max(0.0, min(1.0, _float_env("STATS_PRESSURE_HEDGE_FRACTION", 1.0))),
         pressure_max_hedge_ask=max(0.0, min(1.0, _float_env("STATS_PRESSURE_MAX_HEDGE_ASK", 0.46))),
         pressure_hedge_limit_price=max(0.01, min(0.99, _float_env("STATS_PRESSURE_HEDGE_LIMIT_PRICE", 0.99))),
+        session_style_drawdown_guard_enabled=_bool_env("STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED", False),
         max_loop_seconds=max_loop_seconds,
         once=bool(args.once),
     )

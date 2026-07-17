@@ -177,7 +177,7 @@ The whole game is calibration plus execution.
 ## Current Production Setup
 
 ```text
-Strategy ID       : z6_recency120_weekday_v1
+Strategy ID       : z6_fullraw_hl90_weekday_v1
 Training window   : 2026-02-14 through 2026-07-13
 Signal source     : Coinbase BTC-USD
 Settlement labels : resolved Polymarket/Gamma outcomes
@@ -194,8 +194,8 @@ Position limit    : one filled trade per five-minute market
 The source of truth for the active model is:
 
 ```text
-strategy/z6_recency120_weekday_v1/policy_bundle.json
-strategy/z6_recency120_weekday_v1/entry_profiles.json
+strategy/z6_fullraw_hl90_weekday_v1/policy_bundle.json
+strategy/z6_fullraw_hl90_weekday_v1/entry_profiles.json
 ```
 
 The runtime refuses to start if key entry-shape settings differ from the frozen
@@ -268,9 +268,9 @@ The active session display names are four fixed six-hour London segments:
 
 The active bundle combines two policy shapes:
 
-- **Weekdays:** recursively weighted hierarchy with a 120-day half-life and
+- **Weekdays:** recursively weighted hierarchy with a 90-day half-life and
   parent strength 10 at base, day, TTE and final levels.
-- **Weekends:** clean/FFM-omitted lifetime hierarchy.
+- **Weekends:** full/raw lifetime hierarchy.
 
 This is why support values shown in the dashboard should be read as effective
 support, not always literal historical trade count.
@@ -280,20 +280,20 @@ support, not always literal historical trade count.
 The default profile is:
 
 ```text
-continuation    : 5c edge, 60-255s TTE
-mean reversion  : 5c edge, 60-255s TTE
+continuation    : 6c edge, 60-255s TTE
+mean reversion  : 10c edge, 60-255s TTE
 ```
 
 Current day/session/style overrides are stored in
-`strategy/z6_recency120_weekday_v1/entry_profiles.json` and documented in
-`strategy/z6_recency120_weekday_v1/README.md`.
+`strategy/z6_fullraw_hl90_weekday_v1/entry_profiles.json` and documented in
+`strategy/z6_fullraw_hl90_weekday_v1/README.md`.
 
 As of this README, the active shipped profile is:
 
 | Day | Session | Style | Edge | TTE |
 |---|---|---|---:|---:|
-| All | All | Continuation | 0.05 | 60-255 |
-| All | All | Mean reversion | 0.05 | 60-255 |
+| All | All | Continuation | 0.06 | 60-255 |
+| All | All | Mean reversion | 0.10 | 60-255 |
 
 ## Active Entry Rules
 
@@ -310,7 +310,7 @@ policy value exists
 policy value - ask >= required edge
 policy value - min(ask + 0.01, 0.80) >= required edge
 BPS_YES_GUARD is inactive
-session/style 2h drawdown kill is inactive
+session/style 2h drawdown kill is inactive by default
 peak-realised run drawdown kill is inactive
 no active position
 no pending entry
@@ -330,7 +330,7 @@ If both UP and DOWN qualify, the bot chooses:
 ## Removed From Active Entry Logic
 
 These mechanisms/files may still exist for research history or legacy support,
-but they are not part of the active `z6_recency120_weekday_v1` entry path:
+but they are not part of the active `z6_fullraw_hl90_weekday_v1` entry path:
 
 - twelve two-hour policy session buckets
 - raw signed-BPS policy buckets
@@ -344,11 +344,11 @@ but they are not part of the active `z6_recency120_weekday_v1` entry path:
 - dynamic staking
 - anti-martingale staking bonus
 
-Runtime-only drawdown stops remain active as capital guards. The session/style
-guard blocks only the affected trade style for the current fixed two-hour
-London bucket after a realised-PnL drawdown of `1.5 * shares` from that bucket's
-high-water mark. The run-level peak-realised drawdown kill remains an overnight
-capital stop. Neither guard force-sells open positions.
+The session/style drawdown guard is disabled by default for this profile. It can
+be re-enabled with `STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED=1`, but the final
+OOS selection left it off because it reduced the selected edge profile. The
+run-level peak-realised drawdown kill remains an overnight capital stop when
+configured. Neither guard force-sells open positions.
 
 ## Execution Model
 
@@ -421,7 +421,7 @@ stats_bot/
   strategy.py            legacy policy helpers and shared utilities
 
 strategy/
-  z6_recency120_weekday_v1/
+  z6_fullraw_hl90_weekday_v1/
     policy_bundle.json   active production policy bundle
     entry_profiles.json  active edge/TTE overrides
     README.md            strategy artifact notes

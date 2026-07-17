@@ -2,11 +2,11 @@
 
 ## Production Model
 
-The active model is `z6_recency120_weekday_v1`, trained on clean/FFM-omitted offset250 observations from `2026-02-14` through `2026-07-13`. Its source of truth is:
+The active model is `z6_fullraw_hl90_weekday_v1`, trained on full/raw offset250 Coinbase observations from `2026-02-14` through `2026-07-13`. Its source of truth is:
 
 ```text
-strategy/z6_recency120_weekday_v1/policy_bundle.json
-strategy/z6_recency120_weekday_v1/entry_profiles.json
+strategy/z6_fullraw_hl90_weekday_v1/policy_bundle.json
+strategy/z6_fullraw_hl90_weekday_v1/entry_profiles.json
 ```
 
 Coinbase BTC-USD supplies the signal features. Policy settlement values are fitted against resolved Polymarket/Gamma outcomes, not Coinbase-derived outcomes.
@@ -20,7 +20,7 @@ It contains the fitted move-z boundaries and four regularised lookup levels:
 
 Lookup falls back to the deepest available parent. Values are settlement probabilities regularised toward their parent estimates. UP and DOWN share evidence through side alignment.
 
-Weekday observations receive weights of `0.5 ** (age_days / 120)`. The recursively weighted base, day, TTE and final levels each use parent strength `10`. Weekend lookups use the clean/FFM-omitted lifetime hierarchy. The bundle stores both complete feature configurations because their trained move-z boundaries differ.
+Weekday observations receive weights of `0.5 ** (age_days / 90)`. The recursively weighted base, day, TTE and final levels each use parent strength `10`. Weekend lookups use the full/raw lifetime hierarchy. The bundle stores both complete feature configurations because their trained move-z boundaries differ.
 
 ## Causal Signal
 
@@ -59,7 +59,7 @@ TTE and selected-side price buckets exactly match those stored in the bundle.
 
 ## Entry Decision
 
-Both UP and DOWN are evaluated independently. The shipped profile is continuation `0.05 / 60-255` and mean reversion `0.05 / 60-255`, loaded from `entry_profiles.json`. A side is eligible when:
+Both UP and DOWN are evaluated independently. The shipped profile is continuation `0.06 / 60-255` and mean reversion `0.10 / 60-255`, loaded from `entry_profiles.json`. A side is eligible when:
 
 ```text
 elapsed >= 45 seconds
@@ -69,7 +69,7 @@ bid and ask are valid and ask > bid
 policy value - current ask >= style profile edge
 policy value - min(current ask + 0.01, 0.80) >= style profile edge
 BPS_YES_GUARD is inactive
-session/style two-hour drawdown kill is inactive
+session/style two-hour drawdown kill is inactive by default
 run peak-realised drawdown kill is inactive
 ```
 
@@ -88,6 +88,6 @@ If both sides qualify, choose larger edge, then larger value, then UP as a deter
 - Raw BTC-momentum blocker
 - Dynamic staking and anti-martingale bonus
 
-The old files remain for research history or optional `bps_loss_only` exit experiments, but they are not required by the shipped `hold_to_resolution` default and cannot influence `z6_recency120_weekday_v1` entries.
+The old files remain for research history or optional `bps_loss_only` exit experiments, but they are not required by the shipped `hold_to_resolution` default and cannot influence `z6_fullraw_hl90_weekday_v1` entries.
 
-Runtime-only drawdown stops remain active as capital guards. The session/style guard blocks the affected style for the current fixed two-hour London bucket after a drawdown of `1.5 * shares` from that bucket's realised-PnL high-water mark. The `$15` peak-realised drawdown kill switch remains active as an overnight run-level capital stop. These are not policy features and do not select trades.
+The session/style drawdown guard is disabled by default for this profile. It can be re-enabled with `STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED=1`, but the selected OOS profile leaves it off. The `$15` peak-realised drawdown kill switch remains available as an overnight run-level capital stop. These are not policy features and do not select trades.

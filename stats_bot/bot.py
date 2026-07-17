@@ -3225,6 +3225,9 @@ class StatsBot:
         snapshot: dict[str, Any] | None,
         decision: EntryDecision | None,
     ) -> tuple[tuple[str, ...], float | None]:
+        if not bool(getattr(self.config, "session_style_drawdown_guard_enabled", False)):
+            self._store_session_style_guard_detail(snapshot, None)
+            return (), None
         if snapshot is None or decision is None:
             self._store_session_style_guard_detail(snapshot, None)
             return (), None
@@ -3263,6 +3266,8 @@ class StatsBot:
         pnl: float,
         exit_time: datetime,
     ) -> None:
+        if not bool(getattr(self.config, "session_style_drawdown_guard_enabled", False)):
+            return
         if not hasattr(self, "session_style_drawdown_guard"):
             self.session_style_drawdown_guard = SessionStyleDrawdownGuard(
                 drawdown_per_share_usd=SESSION_STYLE_DRAWDOWN_PER_SHARE_USD
@@ -3858,7 +3863,14 @@ class StatsBot:
             f"{self.macro_policy.training_start}..{self.macro_policy.training_end}"
         )
         log.info(f"  policy      : {self.config.macro_policy_bundle} ({len(self.macro_policy):,} hierarchical rows)")
-        log.info("  entry edges : continuation=0.05 mean_reversion=0.05 (z6 HL120 clean/FFM-omitted profile)")
+        continuation = self.macro_policy.entry_parameters("weekday", "h00_06", "continuation")
+        mean_reversion = self.macro_policy.entry_parameters("weekday", "h00_06", "mean_reversion")
+        log.info(
+            "  entry edges : continuation=%.02f mean_reversion=%.02f (%s profile)",
+            continuation.edge,
+            mean_reversion.edge,
+            self.macro_policy.strategy_id,
+        )
         log.info(f"  exit mode   : {self.config.exit_policy_mode}")
         session_names = "/".join(dict.fromkeys(self.macro_policy.session_display_names.values()))
         log.info(f"  signal      : causal 1h Coinbase local RV; {session_names} London segments")
