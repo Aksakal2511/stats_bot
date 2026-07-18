@@ -911,6 +911,39 @@ def test_pressure_defence_requires_signed_volume_threshold() -> None:
     assert bot.active_position.pressure_defence_status == "armed"
 
 
+def test_pressure_defence_waiting_tte_refreshes_detail() -> None:
+    result = OrderResult(True, "hedge-1", "MATCHED", matched_shares=5.0, price=0.30)
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+    snapshot = {**snapshot, "canonical_tte_seconds": 50}
+
+    bot._maybe_execute_pressure_defence(now, snapshot)
+
+    assert bot.pm.post_count == 0
+    assert bot.active_position is not None
+    assert bot.active_position.pressure_defence_status == "armed"
+    assert bot.active_position.pressure_defence_reason == "WAITING_FOR_TRIGGER_TTE"
+    assert bot.last_pressure_defence is not None
+    assert bot.last_pressure_defence["status"] == "armed"
+    assert bot.last_pressure_defence["held_mid"] == 0.80
+    assert bot.last_pressure_defence["pressure_adverse_volume_btc"] == 8.5
+
+
+def test_pressure_defence_outside_held_band_records_signed_flow_detail() -> None:
+    result = OrderResult(True, "hedge-1", "MATCHED", matched_shares=5.0, price=0.30)
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+    snapshot = {**snapshot, "up_mid": 0.30, "canonical_tte_seconds": 10}
+
+    bot._maybe_execute_pressure_defence(now, snapshot)
+
+    assert bot.pm.post_count == 0
+    assert bot.active_position is not None
+    assert bot.active_position.pressure_defence_status == "blocked"
+    assert bot.active_position.pressure_defence_reason == "HELD_MID_OUTSIDE_PRESSURE_BAND"
+    assert bot.last_pressure_defence is not None
+    assert bot.last_pressure_defence["status"] == "blocked"
+    assert bot.last_pressure_defence["pressure_signed_volume_btc"] == -8.5
+
+
 def test_paper_fast_limit_entry_fills_current_ask_after_limit_edge_check() -> None:
     bot = object.__new__(StatsBot)
     bot.config = type(

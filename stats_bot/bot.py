@@ -985,6 +985,28 @@ class StatsBot:
             "pressure_volume_threshold_btc": self.config.pressure_adverse_volume_btc,
         }
 
+    def _remember_pressure_defence(
+        self,
+        status: str,
+        reason: str,
+        *,
+        held_mid: float | None,
+        tte: float | None,
+        pressure: dict[str, Any] | None = None,
+        **extra: Any,
+    ) -> None:
+        detail: dict[str, Any] = {
+            "status": status,
+            "reason": reason,
+            "held_mid": held_mid,
+            "tte": tte,
+            "pressure_volume_threshold_btc": self.config.pressure_adverse_volume_btc,
+        }
+        if pressure:
+            detail.update(pressure)
+        detail.update(extra)
+        self.last_pressure_defence = detail
+
     def _polymarket_taker_fee(self, shares: float, price: float) -> float:
         market = self.current_market
         fee_rate = (
@@ -1024,26 +1046,43 @@ class StatsBot:
             return
         if tte > self.config.pressure_arm_tte_seconds:
             position.pressure_defence_status = "idle"
+            position.pressure_defence_reason = ""
+            self.last_pressure_defence = None
             return
+        pressure = self._ffm_signed_volume_pressure(position.held_side)
         if not (self.config.pressure_min_held_mid <= held_mid <= self.config.pressure_max_held_mid):
             position.pressure_defence_status = "blocked"
             position.pressure_defence_reason = "HELD_MID_OUTSIDE_PRESSURE_BAND"
-            self.last_pressure_defence = {
-                "status": "blocked",
-                "reason": position.pressure_defence_reason,
-                "held_mid": held_mid,
-                "tte": tte,
-            }
+            self._remember_pressure_defence(
+                "blocked",
+                position.pressure_defence_reason,
+                held_mid=held_mid,
+                tte=tte,
+                pressure=pressure,
+            )
             return
         if tte > self.config.pressure_trigger_tte_seconds:
             position.pressure_defence_status = "armed"
             position.pressure_defence_reason = "WAITING_FOR_TRIGGER_TTE"
+            self._remember_pressure_defence(
+                "armed",
+                position.pressure_defence_reason,
+                held_mid=held_mid,
+                tte=tte,
+                pressure=pressure,
+            )
             return
-        pressure = self._ffm_signed_volume_pressure(position.held_side)
         adverse_volume = finite_float(pressure.get("pressure_adverse_volume_btc"))
         if adverse_volume is None or adverse_volume < self.config.pressure_adverse_volume_btc:
             position.pressure_defence_status = "armed"
             position.pressure_defence_reason = "ADVERSE_VOLUME_BELOW_THRESHOLD"
+            self._remember_pressure_defence(
+                "armed",
+                position.pressure_defence_reason,
+                held_mid=held_mid,
+                tte=tte,
+                pressure=pressure,
+            )
             return
         hedge_side = "DOWN" if position.held_side == "UP" else "UP"
         hedge_book = self._side_book(hedge_side)
@@ -3690,6 +3729,7 @@ class StatsBot:
         if self.last_cadence_second_written == second:
             return
         self.last_cadence_second_written = second
+        pressure_detail = self.last_pressure_defence if self.active_position is not None else {}
         write_header = not self.cadence_log_path.exists() or self.cadence_log_path.stat().st_size == 0
         with self.cadence_log_path.open("a", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
@@ -3767,6 +3807,13 @@ class StatsBot:
                         "position_side",
                         "position_shares",
                         "position_entry_price",
+                        "pressure_defence_status",
+                        "pressure_defence_reason",
+                        "pressure_held_mid",
+                        "pressure_tte_seconds",
+                        "pressure_adverse_btc",
+                        "pressure_signed_btc",
+                        "pressure_threshold_btc",
                         "exit_should_exit",
                         "exit_reason",
                         "policy_no_longer_supportive",
@@ -3854,6 +3901,13 @@ class StatsBot:
                     self.active_position.held_side if self.active_position else "",
                     _fmt(self.active_position.shares, 6, "") if self.active_position else "",
                     _fmt(self.active_position.avg_entry_price, 6, "") if self.active_position else "",
+                    self.active_position.pressure_defence_status if self.active_position else "",
+                    self.active_position.pressure_defence_reason if self.active_position else "",
+                    _fmt(pressure_detail.get("held_mid"), 6, "") if pressure_detail else "",
+                    _fmt(pressure_detail.get("tte"), 3, "") if pressure_detail else "",
+                    _fmt(pressure_detail.get("pressure_adverse_volume_btc"), 6, "") if pressure_detail else "",
+                    _fmt(pressure_detail.get("pressure_signed_volume_btc"), 6, "") if pressure_detail else "",
+                    _fmt(pressure_detail.get("pressure_volume_threshold_btc"), 6, "") if pressure_detail else "",
                     int(bool(exit_decision and exit_decision.should_exit)),
                     exit_decision.reason if exit_decision else "",
                     int(bool(exit_decision and exit_decision.policy_no_longer_supportive)),
