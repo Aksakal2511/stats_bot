@@ -294,7 +294,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         maker_min_spread_ticks=max(1, _int_env("STATS_MAKER_MIN_SPREAD_TICKS", 1)),
         entry_quote_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_QUOTE_MAX_AGE_SECONDS", 1.5)),
         live_entry_retry_cooldown_seconds=max(0.0, _float_env("STATS_LIVE_ENTRY_RETRY_COOLDOWN_SECONDS", 8.0)),
-        live_max_entry_attempts_per_window=max(1, _int_env("STATS_LIVE_MAX_ENTRY_ATTEMPTS_PER_WINDOW", 2)),
+        live_max_entry_attempts_per_window=max(1, _int_env("STATS_LIVE_MAX_ENTRY_ATTEMPTS_PER_WINDOW", 1)),
         live_wallet_reconcile_tolerance_usd=max(0.0, _float_env("STATS_LIVE_WALLET_RECONCILE_TOLERANCE_USD", 0.02)),
         exit_retry_cadence_seconds=max(0.1, _float_env("STATS_EXIT_RETRY_CADENCE_SECONDS", 1.0)),
         dust_share_threshold=max(0.0, _float_env("STATS_DUST_SHARE_THRESHOLD", 0.01)),

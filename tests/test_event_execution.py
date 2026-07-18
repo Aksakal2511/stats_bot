@@ -6,7 +6,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from stats_bot.bot import EntrySubmission, FastEntryQuote, StatsBot
+from stats_bot.bot import EntrySubmission, EntrySubmissionResult, FastEntryQuote, StatsBot
 from stats_bot.polymarket import BookSnapshot, MarketInfo, OrderResult, PolymarketClient, SignedBuyOrder
 
 
@@ -214,7 +214,7 @@ def test_event_submission_blocks_when_window_lifecycle_is_resting() -> None:
     assert bot._entry_submission is None
 
 
-def test_event_submission_allows_retry_after_window_lifecycle_failed() -> None:
+def test_event_submission_blocks_after_live_attempt_limit() -> None:
     bot = object.__new__(StatsBot)
     market = _market()
     bot.config = SimpleNamespace(
@@ -244,30 +244,105 @@ def test_event_submission_allows_retry_after_window_lifecycle_failed() -> None:
     bot._reconcile_live_wallet_fills_for_window = lambda *_args: False
     bot._live_retry_cooldown_remaining = lambda *_args: 0.0
     bot._presigned_entries_available = lambda: True
-    book = BookSnapshot(0.40, 0.41, 0.405, 0.01, None, None, None, None, datetime.now(tz=timezone.utc))
-    bot._fast_entry_quote = lambda *_args: FastEntryQuote(
-        price=0.42,
-        shares=5.0,
-        target_notional=2.1,
-        min_order_size=5.0,
-        spread_ticks=1,
-        book=book,
-        edge_at_ask=0.13,
-        edge_at_limit=0.12,
-        required_edge=0.05,
-    )
+    bot._fast_entry_quote = lambda *_args: (_ for _ in ()).throw(AssertionError("quote should not be requested"))
     bot._presign_pop = lambda *_args: SignedBuyOrder("up", 0.42, 5.0, object())
     bot._selected_token_id = lambda _side: "up"
     bot._entry_snapshot_with_meta = lambda *_args, **_kwargs: {}
     bot._log_latency = lambda *_args, **_kwargs: None
+    events: list[tuple[str, str, dict]] = []
+    bot._log_event = lambda event_type, message, fields: events.append((event_type, message, fields))
 
     decision = SimpleNamespace(viable=True, selected_side="UP", policy_key_text="policy", selected_trade_value=0.54)
 
     bot._place_entry_event_driven(datetime.now(tz=timezone.utc), {}, decision)
 
-    assert bot.entry_attempts_by_window[market.slug] == 3
-    assert bot.entry_lifecycle_by_window[market.slug] == "SUBMITTING"
-    assert bot._entry_submission is not None
+    assert bot.entry_attempts_by_window[market.slug] == 2
+    assert bot.entry_lifecycle_by_window[market.slug] == "UNKNOWN"
+    assert bot._entry_submission is None
+    assert any(event[1] == "SKIPPED_LIVE_ENTRY_ATTEMPT_LIMIT" for event in events)
+
+
+def test_event_submission_matched_without_size_opens_fill_and_blocks_retry() -> None:
+    bot = object.__new__(StatsBot)
+    market = _market()
+    bot.config = SimpleNamespace(paper_trading=False, dust_share_threshold=0.01)
+    bot.current_market = market
+    bot.pending_entry = None
+    bot.active_position = None
+    bot.balance = 100.0
+    bot.wallet_balance_live = 100.0
+    bot.entry_fills_by_window = {market.slug: 0}
+    bot.entry_attempts_by_window = {market.slug: 1}
+    bot.entry_lifecycle_by_window = {market.slug: "SUBMITTING"}
+    bot.entry_attempt_orders_by_window = {market.slug: []}
+    bot._entry_submission_lock = threading.Lock()
+    bot._entry_submission_results = queue.SimpleQueue()
+    bot._entry_submission_state = "SUBMITTING"
+    bot.recent_client_pipeline_ms = None
+    bot.recent_clob_ack_ms = None
+    bot.recent_decision_to_response_ms = None
+    bot._log_latency = lambda *_args, **_kwargs: None
+    events: list[tuple[str, str, dict]] = []
+    bot._log_event = lambda event_type, message, fields: events.append((event_type, message, fields))
+    bot._remember_error = lambda _message: None
+    cancel_calls: list[str] = []
+    bot.pm = SimpleNamespace(cancel_order=lambda order_id: cancel_calls.append(order_id))
+    book = BookSnapshot(0.40, 0.41, 0.405, 0.01, None, None, None, None, datetime.now(tz=timezone.utc))
+    quote = FastEntryQuote(
+        price=0.44,
+        shares=5.0,
+        target_notional=2.2,
+        min_order_size=5.0,
+        spread_ticks=1,
+        book=book,
+        edge_at_ask=0.10,
+        edge_at_limit=0.09,
+        required_edge=0.06,
+    )
+    now = datetime.now(tz=timezone.utc)
+    submission = EntrySubmission(
+        submission_id="matched-zero",
+        market_slug=market.slug,
+        token_id="up",
+        policy_side="UP",
+        market=market,
+        signed_order=SignedBuyOrder("up", 0.44, 5.0, object()),
+        execution_mode="presigned_fast_limit_async",
+        quote=quote,
+        snapshot={
+            "day_type": "weekday",
+            "session_bucket": "US",
+            "cb_signed_bps_raw": 1.0,
+            "entry_edge_threshold": 0.06,
+            "entry_bps_threshold": 2.0,
+        },
+        policy_key_text="policy",
+        wallet_balance_before=100.0,
+        attempt_count=1,
+        decision_at_utc=now,
+        submitted_at_utc=now,
+    )
+    bot._entry_submission = submission
+    bot._entry_submission_results.put(
+        EntrySubmissionResult(
+            submission=submission,
+            result=OrderResult(True, "order-1", "MATCHED", matched_shares=0.0, price=0.437),
+            worker_started_at_utc=now,
+            completed_at_utc=now + timedelta(milliseconds=200),
+            queue_delay_ms=0.0,
+            submit_elapsed_ms=200.0,
+        )
+    )
+
+    bot._drain_entry_submission_results(now)
+
+    assert bot.active_position is not None
+    assert bot.active_position.shares == 5.0
+    assert bot.active_position.avg_entry_price == 0.437
+    assert bot.pending_entry is None
+    assert bot.entry_lifecycle_by_window[market.slug] == "FILLED"
+    assert bot.entry_fills_by_window[market.slug] == 1
+    assert any(event[0] == "maker_entry_fill_inferred" for event in events)
 
 
 def test_wallet_refresh_is_deferred_while_entry_submission_is_inflight() -> None:

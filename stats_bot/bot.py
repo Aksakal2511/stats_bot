@@ -96,6 +96,10 @@ ENTRY_LIFECYCLE_BLOCKING_STATES = {"SUBMITTING", "UNKNOWN", "RESTING", "FILLED"}
 SESSION_STYLE_DRAWDOWN_PER_SHARE_USD = 1.5
 
 
+def _order_status_is_fill_like(status: object | None) -> bool:
+    return str(status or "").strip().lower() in {"filled", "matched"}
+
+
 class _LondonFormatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
         ts = datetime.fromtimestamp(record.created, tz=timezone.utc)
@@ -1668,6 +1672,15 @@ class StatsBot:
             if self._reconcile_live_wallet_fills_for_window(now_utc, market.slug):
                 return
         attempts = self.entry_attempts_by_window.get(market.slug, 0)
+        attempt_limit = max(1, int(getattr(self.config, "live_max_entry_attempts_per_window", 1) or 1))
+        if not self.config.paper_trading and attempts >= attempt_limit:
+            self._set_entry_lifecycle_state(market.slug, "UNKNOWN")
+            self._log_event(
+                "entry_skipped",
+                "SKIPPED_LIVE_ENTRY_ATTEMPT_LIMIT",
+                {"market_slug": market.slug, "attempts": attempts, "attempt_limit": attempt_limit},
+            )
+            return
         if not self.config.paper_trading and self._live_retry_cooldown_remaining(market.slug, now_utc) > 0:
             return
         quote = self._fast_entry_quote(now_utc, snapshot, decision) if self.config.paper_trading or self._presigned_entries_available() else None
@@ -1951,8 +1964,12 @@ class StatsBot:
                 if self._entry_submission is current:
                     self._entry_submission = None
                     self._entry_submission_state = "IDLE"
-            if result.matched_shares > 0:
-                if not self.config.paper_trading and result.matched_shares + 1e-9 < submission.quote.shares:
+            if result.matched_shares > 0 or _order_status_is_fill_like(result.status):
+                if (
+                    not self.config.paper_trading
+                    and result.matched_shares > 0
+                    and result.matched_shares + 1e-9 < submission.quote.shares
+                ):
                     try:
                         self.pm.cancel_order(result.order_id)
                     except Exception:
@@ -2108,6 +2125,15 @@ class StatsBot:
             if self._reconcile_live_wallet_fills_for_window(now_utc, market.slug):
                 return
             attempts = self.entry_attempts_by_window.get(market.slug, 0)
+            attempt_limit = max(1, int(getattr(self.config, "live_max_entry_attempts_per_window", 1) or 1))
+            if attempts >= attempt_limit:
+                self._set_entry_lifecycle_state(market.slug, "UNKNOWN")
+                self._log_event(
+                    "entry_skipped",
+                    "SKIPPED_LIVE_ENTRY_ATTEMPT_LIMIT",
+                    {"market_slug": market.slug, "attempts": attempts, "attempt_limit": attempt_limit},
+                )
+                return
             remaining = self._live_retry_cooldown_remaining(market.slug, now_utc)
             if remaining > 0:
                 self._log_event(
@@ -2214,8 +2240,8 @@ class StatsBot:
                             "wallet_balance_source": "cached",
                         },
                     )
-                    if result.matched_shares > 0:
-                        if result.matched_shares + 1e-9 < fast_quote.shares:
+                    if result.matched_shares > 0 or _order_status_is_fill_like(result.status):
+                        if result.matched_shares > 0 and result.matched_shares + 1e-9 < fast_quote.shares:
                             try:
                                 self.pm.cancel_order(result.order_id)
                                 self._log_event(
@@ -2474,6 +2500,13 @@ class StatsBot:
         matched: float,
         price: float,
     ) -> bool:
+        if _order_status_is_fill_like(status) and matched <= pending.matched_shares_seen + 1e-9:
+            matched = max(float(pending.target_shares or 0.0), float(matched or 0.0))
+            self._log_event(
+                "maker_entry_fill_inferred",
+                "ORDER_STATUS_MATCHED_WITHOUT_MATCHED_SHARES",
+                {"order_id": pending.order_id, "status": status, "inferred_matched": matched, "price": price},
+            )
         if matched <= pending.matched_shares_seen + 1e-9:
             return False
         delta = matched - pending.matched_shares_seen
