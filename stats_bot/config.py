@@ -104,9 +104,13 @@ class BotConfig:
     pressure_defence_enabled: bool
     pressure_min_held_mid: float
     pressure_max_held_mid: float
+    pressure_arm_tte_seconds: int
+    pressure_trigger_tte_seconds: int
     pressure_max_tte_seconds: int
     pressure_z_threshold: float
     pressure_lookback_seconds: int
+    pressure_signed_volume_lookback_seconds: int
+    pressure_adverse_volume_btc: float
     pressure_hedge_fraction: float
     pressure_max_hedge_ask: float
     pressure_hedge_limit_price: float
@@ -299,14 +303,33 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         exit_retry_cadence_seconds=max(0.1, _float_env("STATS_EXIT_RETRY_CADENCE_SECONDS", 1.0)),
         dust_share_threshold=max(0.0, _float_env("STATS_DUST_SHARE_THRESHOLD", 0.01)),
         observe_first_window=observe_first_window,
-        pressure_defence_enabled=_bool_env("STATS_PRESSURE_DEFENCE_ENABLED", False),
-        pressure_min_held_mid=max(0.0, _float_env("STATS_PRESSURE_MIN_HELD_MID", 0.70)),
-        pressure_max_held_mid=min(1.0, _float_env("STATS_PRESSURE_MAX_HELD_MID", 0.90)),
-        pressure_max_tte_seconds=max(0, _int_env("STATS_PRESSURE_MAX_TTE_SECONDS", 60)),
+        pressure_defence_enabled=_bool_env(
+            "STATS_PRESSURE_DEFENCE_ENABLED",
+            _bool_env("STATS_FFM_DEFENCE_ENABLED", False),
+        ),
+        pressure_min_held_mid=max(0.0, _float_env("STATS_PRESSURE_MIN_HELD_MID", _float_env("STATS_FFM_MIN_HELD_MID", 0.75))),
+        pressure_max_held_mid=min(1.0, _float_env("STATS_PRESSURE_MAX_HELD_MID", _float_env("STATS_FFM_MAX_HELD_MID", 1.0))),
+        pressure_arm_tte_seconds=max(0, _int_env("STATS_PRESSURE_ARM_TTE_SECONDS", _int_env("STATS_FFM_ARM_TTE_SECONDS", 60))),
+        pressure_trigger_tte_seconds=max(
+            0,
+            _int_env("STATS_PRESSURE_TRIGGER_TTE_SECONDS", _int_env("STATS_FFM_TRIGGER_TTE_SECONDS", 40)),
+        ),
+        pressure_max_tte_seconds=max(0, _int_env("STATS_PRESSURE_MAX_TTE_SECONDS", _int_env("STATS_FFM_ARM_TTE_SECONDS", 60))),
         pressure_z_threshold=max(0.0, _float_env("STATS_PRESSURE_Z_THRESHOLD", 2.0)),
         pressure_lookback_seconds=max(1, _int_env("STATS_PRESSURE_LOOKBACK_SECONDS", 10)),
+        pressure_signed_volume_lookback_seconds=max(
+            1,
+            _int_env(
+                "STATS_PRESSURE_SIGNED_VOLUME_LOOKBACK_SECONDS",
+                _int_env("STATS_FFM_SIGNED_VOLUME_LOOKBACK_SECONDS", 30),
+            ),
+        ),
+        pressure_adverse_volume_btc=max(
+            0.0,
+            _float_env("STATS_PRESSURE_ADVERSE_VOLUME_BTC", _float_env("STATS_FFM_ADVERSE_VOLUME_BTC", 8.0)),
+        ),
         pressure_hedge_fraction=max(0.0, min(1.0, _float_env("STATS_PRESSURE_HEDGE_FRACTION", 1.0))),
-        pressure_max_hedge_ask=max(0.0, min(1.0, _float_env("STATS_PRESSURE_MAX_HEDGE_ASK", 0.46))),
+        pressure_max_hedge_ask=max(0.0, min(1.0, _float_env("STATS_PRESSURE_MAX_HEDGE_ASK", 0.99))),
         pressure_hedge_limit_price=max(0.01, min(0.99, _float_env("STATS_PRESSURE_HEDGE_LIMIT_PRICE", 0.99))),
         session_style_drawdown_guard_enabled=_bool_env("STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED", False),
         max_loop_seconds=max_loop_seconds,

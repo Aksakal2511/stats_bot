@@ -703,16 +703,20 @@ def test_fast_presigned_quote_widens_limit_by_execution_health_without_breaking_
     assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, weak) is None
 
 
-def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False):
+def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False, order_progress: list[object | None] | None = None):
     bot = object.__new__(StatsBot)
     market_start = datetime(2026, 7, 15, 18, 5, tzinfo=timezone.utc)
     bot.config = SimpleNamespace(
         pressure_defence_enabled=True,
+        pressure_arm_tte_seconds=60,
+        pressure_trigger_tte_seconds=40,
         pressure_max_tte_seconds=60,
-        pressure_min_held_mid=0.70,
-        pressure_max_held_mid=0.90,
+        pressure_min_held_mid=0.75,
+        pressure_max_held_mid=1.00,
         pressure_z_threshold=2.0,
-        pressure_max_hedge_ask=0.35,
+        pressure_signed_volume_lookback_seconds=30,
+        pressure_adverse_volume_btc=8.0,
+        pressure_max_hedge_ask=0.99,
         pressure_hedge_fraction=1.0,
         pressure_hedge_limit_price=0.99,
         dust_share_threshold=0.01,
@@ -755,10 +759,11 @@ def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False):
     bot.pressure_hedges_filled = 0
     bot.pressure_hedges_blocked = 0
     bot.last_pressure_defence = None
-    bot._provider_pressure = lambda held_side: {
-        "pressure_source": "binance_spot",
-        "pressure_z": 2.1,
-        "binance_spot_adverse_z": 2.1,
+    bot._ffm_signed_volume_pressure = lambda held_side: {
+        "pressure_source": "binance_spot_signed_volume",
+        "pressure_adverse_volume_btc": 8.5,
+        "pressure_signed_volume_btc": -8.5,
+        "pressure_volume_threshold_btc": 8.0,
     }
     bot._side_book = lambda side: BookSnapshot(
         bid=0.29,
@@ -778,6 +783,7 @@ def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False):
     class FakePolymarket:
         def __init__(self) -> None:
             self.post_count = 0
+            self.order_progress = list(order_progress or [])
 
         def create_signed_buy_order(self, token_id, price, shares, market):
             return SignedBuyOrder(token_id=token_id, price=price, shares=shares, order=object())
@@ -786,17 +792,43 @@ def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False):
             self.post_count += 1
             return result
 
+        def get_order(self, order_id):
+            if not self.order_progress:
+                return None
+            return self.order_progress.pop(0)
+
     bot.pm = FakePolymarket()
-    snapshot = {"up_mid": 0.80, "canonical_tte_seconds": 45}
+    snapshot = {"up_mid": 0.80, "canonical_tte_seconds": 40}
     return bot, market_start, snapshot
 
 
-def test_pressure_defence_live_accepted_without_match_is_one_shot() -> None:
+def test_pressure_defence_live_accepted_without_match_reconciles_later_fill() -> None:
     result = OrderResult(True, "hedge-1", "LIVE", matched_shares=0.0, price=0.30)
-    bot, now, snapshot = _pressure_defence_bot(result=result)
+    bot, now, snapshot = _pressure_defence_bot(
+        result=result,
+        order_progress=[{"status": "filled", "size_matched": 5.0, "price": 0.41}],
+    )
 
     bot._maybe_execute_pressure_defence(now, snapshot)
     bot._maybe_execute_pressure_defence(now + timedelta(seconds=1), snapshot)
+
+    assert bot.pm.post_count == 1
+    assert bot.pressure_hedges_submitted == 1
+    assert bot.pressure_hedges_filled == 1
+    assert bot.active_position is not None
+    assert bot.active_position.hedge_leg is not None
+    assert bot.active_position.hedge_leg.avg_price == 0.41
+    assert bot.active_position.pressure_defence_status == "filled"
+    assert bot.active_position.extra["pressure_defence_attempted"] is True
+    assert bot.last_pressure_defence["status"] == "filled"
+
+
+def test_pressure_defence_live_accepted_without_match_never_submits_second_order() -> None:
+    result = OrderResult(True, "hedge-1", "LIVE", matched_shares=0.0, price=0.30)
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+
+    for offset in range(5):
+        bot._maybe_execute_pressure_defence(now + timedelta(seconds=offset), snapshot)
 
     assert bot.pm.post_count == 1
     assert bot.pressure_hedges_submitted == 1
@@ -804,9 +836,7 @@ def test_pressure_defence_live_accepted_without_match_is_one_shot() -> None:
     assert bot.active_position is not None
     assert bot.active_position.hedge_leg is None
     assert bot.active_position.pressure_defence_status == "submitted"
-    assert bot.active_position.pressure_defence_reason == "AWAITING_MATCH:LIVE"
     assert bot.active_position.extra["pressure_defence_attempted"] is True
-    assert bot.last_pressure_defence["status"] == "submitted"
 
 
 def test_pressure_defence_live_immediate_fill_does_not_repeat() -> None:
@@ -824,6 +854,61 @@ def test_pressure_defence_live_immediate_fill_does_not_repeat() -> None:
     assert bot.active_position.hedge_leg.side == "DOWN"
     assert bot.active_position.hedge_leg.shares == 5.0
     assert bot.active_position.pressure_defence_status == "filled"
+
+
+def test_pressure_defence_partial_fill_keeps_reconciling_without_second_order() -> None:
+    result = OrderResult(True, "hedge-1", "LIVE", matched_shares=0.0, price=0.30)
+    bot, now, snapshot = _pressure_defence_bot(
+        result=result,
+        order_progress=[
+            {"status": "live", "size_matched": 2.0, "price": 0.35},
+            {"status": "filled", "size_matched": 5.0, "price": 0.40},
+        ],
+    )
+
+    bot._maybe_execute_pressure_defence(now, snapshot)
+    bot._maybe_execute_pressure_defence(now + timedelta(seconds=1), snapshot)
+    bot._maybe_execute_pressure_defence(now + timedelta(seconds=2), snapshot)
+
+    assert bot.pm.post_count == 1
+    assert bot.pressure_hedges_submitted == 1
+    assert bot.pressure_hedges_filled == 1
+    assert bot.active_position is not None
+    assert bot.active_position.hedge_leg is not None
+    assert bot.active_position.hedge_leg.shares == 5.0
+    assert round(bot.active_position.hedge_leg.avg_price, 6) == 0.38
+    assert bot.active_position.pressure_defence_status == "filled"
+
+
+def test_pressure_defence_mean_reversion_position_can_trigger() -> None:
+    result = OrderResult(True, "hedge-1", "MATCHED", matched_shares=5.0, price=0.30)
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+    assert bot.active_position is not None
+    bot.active_position.entry_snapshot["entry_trade_style"] = "mean_reversion"
+
+    bot._maybe_execute_pressure_defence(now, snapshot)
+
+    assert bot.pm.post_count == 1
+    assert bot.active_position.hedge_leg is not None
+    assert bot.active_position.pressure_defence_status == "filled"
+
+
+def test_pressure_defence_requires_signed_volume_threshold() -> None:
+    result = OrderResult(True, "hedge-1", "MATCHED", matched_shares=5.0, price=0.30)
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+    bot._ffm_signed_volume_pressure = lambda held_side: {
+        "pressure_source": "binance_spot_signed_volume",
+        "pressure_adverse_volume_btc": 7.99,
+        "pressure_signed_volume_btc": -7.99,
+        "pressure_volume_threshold_btc": 8.0,
+    }
+
+    bot._maybe_execute_pressure_defence(now, snapshot)
+
+    assert bot.pm.post_count == 0
+    assert bot.active_position is not None
+    assert bot.active_position.hedge_leg is None
+    assert bot.active_position.pressure_defence_status == "armed"
 
 
 def test_paper_fast_limit_entry_fills_current_ask_after_limit_edge_check() -> None:
@@ -1566,7 +1651,7 @@ def test_session_style_drawdown_guard_reports_edge_ladder() -> None:
 
 def test_session_style_drawdown_guard_uses_fixed_two_hour_kill_only_bucket() -> None:
     bot = object.__new__(StatsBot)
-    bot.config = type("Config", (), {"min_order_size_fallback": 5.0})()
+    bot.config = type("Config", (), {"min_order_size_fallback": 5.0, "session_style_drawdown_guard_enabled": True})()
     bot.current_market = None
     bot.last_session_style_guard_detail = None
     bot.session_style_drawdown_guard = SessionStyleDrawdownGuard(drawdown_per_share_usd=1.5)
@@ -1873,6 +1958,11 @@ def test_hold_to_resolution_uses_polymarket_settlement_outcome(tmp_path) -> None
             raise AssertionError("settlement must use Polymarket/Gamma outcome, not Coinbase")
 
     bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        session_style_drawdown_guard_enabled=False,
+        paper_trading=True,
+        stake_mode="min_order_size",
+    )
     bot.pm = FakePolymarket()
     bot.coinbase = CoinbaseShouldNotResolve()
     bot.active_position = None

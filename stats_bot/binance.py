@@ -50,13 +50,19 @@ class BinanceTickerFeed:
                     return
                 price = float(raw_price)
                 qty = float(data.get("q") or data.get("Q") or 0.0)
+                buyer_is_maker = data.get("m")
+                if isinstance(buyer_is_maker, str):
+                    buyer_is_maker = buyer_is_maker.strip().lower() == "true"
+                signed_qty = None
+                if isinstance(buyer_is_maker, bool):
+                    signed_qty = -qty if buyer_is_maker else qty
                 event_ms = data.get("E") or data.get("T")
                 ts = (
                     datetime.fromtimestamp(float(event_ms) / 1000.0, tz=timezone.utc)
                     if event_ms is not None
                     else datetime.now(tz=timezone.utc)
                 )
-                self.upsert_second_bar(int(ts.timestamp()), price, qty, source_timestamp=ts)
+                self.upsert_second_bar(int(ts.timestamp()), price, qty, signed_size=signed_qty, source_timestamp=ts)
             except Exception:
                 return
 
@@ -78,8 +84,18 @@ class BinanceTickerFeed:
         price: float,
         size: float,
         *,
+        signed_size: float | None = None,
         source_timestamp: datetime | None = None,
     ) -> None:
+        signed = 0.0
+        buy_size = 0.0
+        sell_size = 0.0
+        if signed_size is not None and math.isfinite(float(signed_size)):
+            signed = float(signed_size)
+            if signed > 0:
+                buy_size = signed
+            elif signed < 0:
+                sell_size = -signed
         with self._lock:
             self.price = price
             bar = self._bars.get(second)
@@ -91,6 +107,9 @@ class BinanceTickerFeed:
                     "low_1s": price,
                     "close_1s": price,
                     "volume_1s": max(0.0, size),
+                    "buy_volume_1s": buy_size,
+                    "sell_volume_1s": sell_size,
+                    "signed_volume_1s": signed,
                     "trade_count_1s": 1.0,
                 }
             else:
@@ -98,6 +117,9 @@ class BinanceTickerFeed:
                 bar["low_1s"] = min(float(bar["low_1s"]), price)
                 bar["close_1s"] = price
                 bar["volume_1s"] = float(bar["volume_1s"]) + max(0.0, size)
+                bar["buy_volume_1s"] = float(bar.get("buy_volume_1s") or 0.0) + buy_size
+                bar["sell_volume_1s"] = float(bar.get("sell_volume_1s") or 0.0) + sell_size
+                bar["signed_volume_1s"] = float(bar.get("signed_volume_1s") or 0.0) + signed
                 bar["trade_count_1s"] = float(bar["trade_count_1s"]) + 1.0
             while len(self._bars) > self.max_seconds:
                 self._bars.popitem(last=False)
@@ -170,3 +192,40 @@ def adverse_z(
     expected = max(0.05, rv_bps * math.sqrt(max(1, lookback_seconds) / float(rv_seconds)))
     direction = -1.0 if held_side.upper() == "UP" else 1.0
     return ret_bps, direction * ret_bps / expected, rv_bps
+
+
+def adverse_signed_volume(
+    rows: list[dict[str, float | datetime]],
+    *,
+    held_side: str,
+    lookback_seconds: int,
+) -> tuple[float | None, float | None, float | None, float | None, int]:
+    clean: list[tuple[int, float, float, float]] = []
+    for row in rows:
+        ts = row.get("timestamp_utc")
+        if not isinstance(ts, datetime):
+            continue
+        signed = row.get("signed_volume_1s")
+        buy = row.get("buy_volume_1s")
+        sell = row.get("sell_volume_1s")
+        try:
+            signed_f = float(signed)
+            buy_f = float(buy or 0.0)
+            sell_f = float(sell or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(signed_f):
+            clean.append((int(ts.timestamp()), signed_f, buy_f, sell_f))
+    if not clean:
+        return None, None, None, None, 0
+    clean.sort(key=lambda item: item[0])
+    latest_ts = clean[-1][0]
+    start_ts = latest_ts - max(1, int(lookback_seconds)) + 1
+    window = [item for item in clean if item[0] >= start_ts]
+    if not window:
+        return None, None, None, None, 0
+    signed_total = sum(item[1] for item in window)
+    buy_total = sum(item[2] for item in window)
+    sell_total = sum(item[3] for item in window)
+    adverse = -signed_total if held_side.upper() == "UP" else signed_total
+    return max(0.0, adverse), signed_total, buy_total, sell_total, len(window)

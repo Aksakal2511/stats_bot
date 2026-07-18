@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .binance import BinanceTickerFeed, adverse_z
+from .binance import BinanceTickerFeed, adverse_signed_volume, adverse_z
 from .coinbase import CoinbaseFeed
 from .config import REPO_ROOT, BotConfig, build_config, parse_args
 from .features import compute_live_snapshot
@@ -472,7 +472,10 @@ class StatsBot:
                 "enabled": config.pressure_defence_enabled,
                 "min_held_mid": config.pressure_min_held_mid,
                 "max_held_mid": config.pressure_max_held_mid,
-                "z_threshold": config.pressure_z_threshold,
+                "arm_tte_seconds": config.pressure_arm_tte_seconds,
+                "trigger_tte_seconds": config.pressure_trigger_tte_seconds,
+                "signed_volume_lookback_seconds": config.pressure_signed_volume_lookback_seconds,
+                "adverse_volume_btc": config.pressure_adverse_volume_btc,
             },
         )
 
@@ -908,6 +911,23 @@ class StatsBot:
         detail["pressure_z"] = best_z
         return detail
 
+    def _ffm_signed_volume_pressure(self, held_side: str) -> dict[str, Any]:
+        adverse, signed_total, buy_total, sell_total, seconds = adverse_signed_volume(
+            self.binance_spot.history_rows(),
+            held_side=held_side,
+            lookback_seconds=self.config.pressure_signed_volume_lookback_seconds,
+        )
+        return {
+            "pressure_source": "binance_spot_signed_volume",
+            "pressure_adverse_volume_btc": adverse,
+            "pressure_signed_volume_btc": signed_total,
+            "pressure_buy_volume_btc": buy_total,
+            "pressure_sell_volume_btc": sell_total,
+            "pressure_volume_seconds": seconds,
+            "pressure_volume_lookback_seconds": self.config.pressure_signed_volume_lookback_seconds,
+            "pressure_volume_threshold_btc": self.config.pressure_adverse_volume_btc,
+        }
+
     def _polymarket_taker_fee(self, shares: float, price: float) -> float:
         market = self.current_market
         fee_rate = (
@@ -932,20 +952,20 @@ class StatsBot:
             return
         if not self.config.pressure_defence_enabled:
             return
+        if position.pressure_defence_status == "submitted":
+            self._reconcile_pressure_defence(now_utc)
         if (
             position.hedge_leg is not None
             or position.pressure_defence_status in {"submitted", "pending", "filled", "failed"}
             or bool(position.extra.get("pressure_defence_attempted"))
         ):
             return
-        if self._position_trade_style(position) != "continuation":
-            return
         held_prefix = position.held_side.lower()
         held_mid = finite_float(snapshot.get(f"{held_prefix}_mid"))
         tte = finite_float(snapshot.get("canonical_tte_seconds"))
         if held_mid is None or tte is None:
             return
-        if tte > self.config.pressure_max_tte_seconds:
+        if tte > self.config.pressure_arm_tte_seconds:
             position.pressure_defence_status = "idle"
             return
         if not (self.config.pressure_min_held_mid <= held_mid <= self.config.pressure_max_held_mid):
@@ -958,10 +978,15 @@ class StatsBot:
                 "tte": tte,
             }
             return
-        pressure = self._provider_pressure(position.held_side)
-        pressure_z = finite_float(pressure.get("pressure_z"))
-        if pressure_z is None or pressure_z < self.config.pressure_z_threshold:
+        if tte > self.config.pressure_trigger_tte_seconds:
             position.pressure_defence_status = "armed"
+            position.pressure_defence_reason = "WAITING_FOR_TRIGGER_TTE"
+            return
+        pressure = self._ffm_signed_volume_pressure(position.held_side)
+        adverse_volume = finite_float(pressure.get("pressure_adverse_volume_btc"))
+        if adverse_volume is None or adverse_volume < self.config.pressure_adverse_volume_btc:
+            position.pressure_defence_status = "armed"
+            position.pressure_defence_reason = "ADVERSE_VOLUME_BELOW_THRESHOLD"
             return
         hedge_side = "DOWN" if position.held_side == "UP" else "UP"
         hedge_book = self._side_book(hedge_side)
@@ -998,6 +1023,10 @@ class StatsBot:
         position.extra["pressure_defence_hedge_side"] = hedge_side
         position.extra["pressure_defence_target_shares"] = hedge_shares
         position.extra["pressure_defence_limit_price"] = limit_price
+        position.extra["pressure_defence_hedge_ask"] = hedge_ask
+        position.extra["pressure_defence_trigger_source"] = pressure.get("pressure_source")
+        position.extra["pressure_defence_trigger_adverse_volume_btc"] = pressure.get("pressure_adverse_volume_btc")
+        position.extra["pressure_defence_trigger_signed_volume_btc"] = pressure.get("pressure_signed_volume_btc")
         self.pressure_hedges_submitted += 1
         if self.config.paper_trading:
             matched = hedge_shares
@@ -1023,7 +1052,7 @@ class StatsBot:
             ok = result.ok
         position.extra["pressure_defence_order_id"] = order_id
         position.extra["pressure_defence_order_status"] = status
-        position.extra["pressure_defence_matched_shares_seen"] = matched
+        position.extra["pressure_defence_matched_shares_seen"] = 0.0
         self._log_event(
             "pressure_hedge_submitted",
             status,
@@ -1037,6 +1066,7 @@ class StatsBot:
                 "shares": hedge_shares,
                 "matched_shares": matched,
                 "fill_price": fill_price,
+                "trigger_tte": tte,
                 **pressure,
             },
         )
@@ -1063,40 +1093,195 @@ class StatsBot:
                 **pressure,
             }
             return
-        fee = self._polymarket_taker_fee(matched, fill_price)
-        cost = matched * fill_price
+        self._record_pressure_hedge_fill(
+            position=position,
+            hedge_token=hedge_token,
+            hedge_side=hedge_side,
+            matched_total=matched,
+            fill_price=fill_price,
+            now_utc=now_utc,
+            order_id=order_id,
+            limit_price=limit_price,
+            hedge_ask=hedge_ask,
+            held_mid=held_mid,
+            tte=tte,
+            pressure=pressure,
+        )
+
+    def _record_pressure_hedge_fill(
+        self,
+        *,
+        position: OpenPosition,
+        hedge_token: str,
+        hedge_side: str,
+        matched_total: float,
+        fill_price: float,
+        now_utc: datetime,
+        order_id: str | None,
+        limit_price: float,
+        hedge_ask: float,
+        held_mid: float | None,
+        tte: float | None,
+        pressure: dict[str, Any],
+    ) -> bool:
+        target_shares = finite_float(position.extra.get("pressure_defence_target_shares")) or position.shares
+        seen = finite_float(position.extra.get("pressure_defence_matched_shares_seen")) or 0.0
+        if matched_total <= seen + 1e-9:
+            return False
+        delta = matched_total - seen
+        fee = self._polymarket_taker_fee(delta, fill_price)
+        cost = delta * fill_price
         self.balance -= cost + fee
         if not self.config.paper_trading and self.wallet_balance_live is not None:
             self.wallet_balance_live = max(0.0, self.wallet_balance_live - cost - fee)
-        position.hedge_leg = HedgeLeg(
-            token_id=hedge_token,
-            side=hedge_side,
-            shares=matched,
-            avg_price=fill_price,
-            cost=cost,
-            fee=fee,
-            order_id=order_id,
-            trigger_source=str(pressure.get("pressure_source") or ""),
-            trigger_z=float(pressure_z),
-            trigger_time_utc=now_utc,
-            fill_time_utc=datetime.now(tz=timezone.utc),
-            limit_price=limit_price,
-            ask_at_trigger=hedge_ask,
+        adverse_volume = finite_float(pressure.get("pressure_adverse_volume_btc")) or 0.0
+        if position.hedge_leg is None:
+            position.hedge_leg = HedgeLeg(
+                token_id=hedge_token,
+                side=hedge_side,
+                shares=delta,
+                avg_price=fill_price,
+                cost=cost,
+                fee=fee,
+                order_id=order_id,
+                trigger_source=str(pressure.get("pressure_source") or ""),
+                trigger_z=float(adverse_volume),
+                trigger_time_utc=now_utc,
+                fill_time_utc=datetime.now(tz=timezone.utc),
+                limit_price=limit_price,
+                ask_at_trigger=hedge_ask,
+                status="partial",
+            )
+        else:
+            leg = position.hedge_leg
+            total_shares = leg.shares + delta
+            leg.cost += cost
+            leg.fee += fee
+            leg.shares = total_shares
+            leg.avg_price = leg.cost / total_shares if total_shares > 0 else fill_price
+            leg.fill_time_utc = datetime.now(tz=timezone.utc)
+            leg.status = "partial"
+        position.extra["pressure_defence_matched_shares_seen"] = matched_total
+        filled = matched_total >= target_shares - self.config.dust_share_threshold
+        position.pressure_defence_status = "filled" if filled else "submitted"
+        position.pressure_defence_reason = "" if filled else "PARTIAL_FILL_AWAITING_MATCH"
+        if position.hedge_leg is not None:
+            position.hedge_leg.status = "filled" if filled else "partial"
+        if not bool(position.extra.get("pressure_defence_counted_fill")):
+            self.pressure_hedges_filled += 1
+            position.extra["pressure_defence_counted_fill"] = True
+        self._log_event(
+            "pressure_hedge_fill_reconciled",
+            "FILLED" if filled else "PARTIAL",
+            {
+                "order_id": order_id,
+                "held_side": position.held_side,
+                "hedge_side": hedge_side,
+                "matched_total": matched_total,
+                "delta": delta,
+                "fill_price": fill_price,
+                "hedge_cost_delta": cost,
+                "hedge_fee_delta": fee,
+                **pressure,
+            },
         )
-        position.pressure_defence_status = "filled"
-        position.pressure_defence_reason = ""
-        self.pressure_hedges_filled += 1
         self.last_pressure_defence = {
-            "status": "filled",
+            "status": "filled" if filled else "partial",
             "held_mid": held_mid,
             "hedge_side": hedge_side,
             "hedge_ask": hedge_ask,
             "hedge_price": fill_price,
-            "hedge_shares": matched,
-            "hedge_fee": fee,
+            "hedge_shares": matched_total,
+            "hedge_fee": (position.hedge_leg.fee if position.hedge_leg is not None else fee),
             "tte": tte,
             **pressure,
         }
+        return True
+
+    def _reconcile_pressure_defence(self, now_utc: datetime) -> bool:
+        position = self.active_position
+        if position is None or self.config.paper_trading:
+            return False
+        order_id = str(position.extra.get("pressure_defence_order_id") or "")
+        if not order_id:
+            return False
+        raw = self.pm.get_order(order_id)
+        if raw is None:
+            return False
+        if isinstance(raw, dict):
+            status = str(raw.get("status", "")).lower()
+            matched = float(
+                raw.get("size_matched")
+                or raw.get("sizeMatched")
+                or raw.get("matched_size")
+                or raw.get("matchedSize")
+                or raw.get("filled_size")
+                or raw.get("filledSize")
+                or raw.get("matched")
+                or 0.0
+            )
+            price = float(
+                raw.get("price")
+                or raw.get("avg_price")
+                or raw.get("avgPrice")
+                or position.extra.get("pressure_defence_limit_price")
+                or 0.0
+            )
+        else:
+            status = str(getattr(raw, "status", "")).lower()
+            matched = float(
+                getattr(raw, "size_matched", None)
+                or getattr(raw, "sizeMatched", None)
+                or getattr(raw, "matched_size", None)
+                or getattr(raw, "matchedSize", None)
+                or getattr(raw, "filled_size", None)
+                or getattr(raw, "filledSize", None)
+                or getattr(raw, "matched", None)
+                or 0.0
+            )
+            price = float(
+                getattr(raw, "price", None)
+                or getattr(raw, "avg_price", None)
+                or getattr(raw, "avgPrice", None)
+                or position.extra.get("pressure_defence_limit_price")
+                or 0.0
+            )
+        target_shares = finite_float(position.extra.get("pressure_defence_target_shares")) or position.shares
+        seen = finite_float(position.extra.get("pressure_defence_matched_shares_seen")) or 0.0
+        if _order_status_is_fill_like(status) and matched <= seen + 1e-9:
+            matched = max(target_shares, matched)
+        position.extra["pressure_defence_order_status"] = status
+        hedge_side = str(position.extra.get("pressure_defence_hedge_side") or ("DOWN" if position.held_side == "UP" else "UP"))
+        limit_price = finite_float(position.extra.get("pressure_defence_limit_price")) or price
+        hedge_ask = finite_float(position.extra.get("pressure_defence_hedge_ask")) or limit_price
+        pressure = {
+            "pressure_source": str(position.extra.get("pressure_defence_trigger_source") or "binance_spot_signed_volume"),
+            "pressure_adverse_volume_btc": finite_float(position.extra.get("pressure_defence_trigger_adverse_volume_btc")),
+            "pressure_signed_volume_btc": finite_float(position.extra.get("pressure_defence_trigger_signed_volume_btc")),
+            "pressure_volume_threshold_btc": self.config.pressure_adverse_volume_btc,
+        }
+        changed = False
+        if matched > seen + 1e-9:
+            changed = self._record_pressure_hedge_fill(
+                position=position,
+                hedge_token=self._selected_token_id(hedge_side),
+                hedge_side=hedge_side,
+                matched_total=matched,
+                fill_price=price or limit_price,
+                now_utc=now_utc,
+                order_id=order_id,
+                limit_price=limit_price,
+                hedge_ask=hedge_ask,
+                held_mid=None,
+                tte=None,
+                pressure=pressure,
+            )
+        elif status in {"cancelled", "canceled", "rejected", "expired"}:
+            position.pressure_defence_status = "failed"
+            position.pressure_defence_reason = f"HEDGE_ORDER_{status.upper()}"
+            self.last_pressure_defence = {"status": "failed", "reason": position.pressure_defence_reason, "order_id": order_id}
+            changed = True
+        return changed
 
     def _selected_token_id(self, side: str) -> str:
         assert self.current_market is not None
@@ -3829,7 +4014,7 @@ class StatsBot:
                 hedge = self.active_position.hedge_leg
                 lines.append(f"    hedge             : {hedge.side} {hedge.shares:.4f} @ {hedge.avg_price:.4f}")
                 lines.append(f"    hedge_fee         : {hedge.fee:.4f}")
-                lines.append(f"    hedge_trigger     : {hedge.trigger_source} z={hedge.trigger_z:.3f}")
+                lines.append(f"    hedge_trigger     : {hedge.trigger_source} adverse_btc={hedge.trigger_z:.3f}")
             elif self.config.pressure_defence_enabled:
                 lines.append(f"    pressure_defence  : {self.active_position.pressure_defence_status}")
                 if self.active_position.pressure_defence_reason:
@@ -3847,7 +4032,9 @@ class StatsBot:
             lines.append(f"    held_band         : {self.config.pressure_min_held_mid:.2f}-{self.config.pressure_max_held_mid:.2f}")
             lines.append(f"    held_mid          : {_fmt(detail.get('held_mid'))}")
             lines.append(f"    tte               : {_fmt(detail.get('tte'), 1)}")
-            lines.append(f"    pressure_z        : {_fmt(detail.get('pressure_z'), 3)}")
+            lines.append(f"    adverse_btc       : {_fmt(detail.get('pressure_adverse_volume_btc'), 3)}")
+            lines.append(f"    signed_btc        : {_fmt(detail.get('pressure_signed_volume_btc'), 3)}")
+            lines.append(f"    threshold_btc     : {_fmt(detail.get('pressure_volume_threshold_btc'), 3)}")
             lines.append(f"    source            : {detail.get('pressure_source') or 'NA'}")
             if detail.get("hedge_side"):
                 lines.append(f"    hedge_side        : {detail.get('hedge_side')}")
