@@ -959,14 +959,22 @@ class StatsBot:
 
     def _dashboard_net_signed_flow_text(self) -> str:
         lookback_seconds = getattr(self.config, "pressure_signed_volume_lookback_seconds", 30)
-        _, signed_total, _, _, _ = adverse_signed_volume(
-            self.binance_spot.history_rows(),
-            held_side="DOWN",
-            lookback_seconds=lookback_seconds,
-        )
-        if signed_total is None or not math.isfinite(signed_total):
-            return f"NA ({lookback_seconds}s)"
-        return f"{signed_total:+.2f} BTC ({lookback_seconds}s)"
+        rows = self.binance_spot.history_rows()
+
+        def _signed_flow_part(seconds: int) -> str:
+            _, signed_total, _, _, _ = adverse_signed_volume(
+                rows,
+                held_side="DOWN",
+                lookback_seconds=seconds,
+            )
+            if signed_total is None or not math.isfinite(signed_total):
+                return f"NA ({seconds}s)"
+            return f"{signed_total:+.2f} BTC ({seconds}s)"
+
+        parts = [_signed_flow_part(lookback_seconds)]
+        if lookback_seconds != 1:
+            parts.append(_signed_flow_part(1))
+        return " | ".join(parts)
 
     def _ffm_signed_volume_pressure(self, held_side: str) -> dict[str, Any]:
         adverse, signed_total, buy_total, sell_total, seconds = adverse_signed_volume(

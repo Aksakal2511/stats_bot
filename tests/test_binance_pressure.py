@@ -56,7 +56,7 @@ def test_dashboard_signed_bps_and_net_flow_diagnostics() -> None:
     text = bot._dashboard_signed_bps_text({"cb_signed_bps_raw": 1.03})
 
     assert text == "coinbase 1.03 | binance spot 1.02 | binance perp 1.35 | avg 1.13"
-    assert bot._dashboard_net_signed_flow_text() == "+6.00 BTC (30s)"
+    assert bot._dashboard_net_signed_flow_text() == "+6.00 BTC (30s) | -3.00 BTC (1s)"
 
 
 def test_dashboard_signed_bps_avg_ignores_display_zero_sources() -> None:
