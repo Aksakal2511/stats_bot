@@ -262,6 +262,62 @@ def test_event_submission_blocks_after_live_attempt_limit() -> None:
     assert any(event[1] == "SKIPPED_LIVE_ENTRY_ATTEMPT_LIMIT" for event in events)
 
 
+def test_event_submission_allows_retry_after_failed_lifecycle_under_attempt_limit() -> None:
+    bot = object.__new__(StatsBot)
+    market = _market()
+    bot.config = SimpleNamespace(
+        paper_trading=False,
+        paper_fill_model="fast_limit",
+        execution_mode="event_driven_ws",
+        observe_first_window=False,
+        live_max_entry_attempts_per_window=3,
+    )
+    bot.current_market = market
+    bot.current_window_ts = int(market.market_start_utc.timestamp())
+    bot.startup_window_ts = None
+    bot.pending_entry = None
+    bot.active_position = None
+    bot.entry_fills_by_window = {market.slug: 0}
+    bot.entry_attempts_by_window = {market.slug: 1}
+    bot.entry_lifecycle_by_window = {market.slug: "FAILED"}
+    bot.entry_attempt_orders_by_window = {market.slug: []}
+    bot.last_entry_attempt_time_by_window = {}
+    bot.wallet_balance_live = 50.0
+    bot._entry_submission_lock = threading.Lock()
+    bot._entry_submission = None
+    bot._entry_submission_state = "IDLE"
+    bot._entry_submission_late_logged = False
+    bot._entry_submission_queue = queue.Queue(maxsize=1)
+    bot._can_enter_after_cooldown = lambda *_args: True
+    bot._reconcile_live_wallet_fills_for_window = lambda *_args: False
+    bot._live_retry_cooldown_remaining = lambda *_args: 0.0
+    bot._presigned_entries_available = lambda: True
+    book = BookSnapshot(0.40, 0.41, 0.405, 0.01, None, None, None, None, datetime.now(tz=timezone.utc))
+    bot._fast_entry_quote = lambda *_args: FastEntryQuote(
+        price=0.42,
+        shares=5.0,
+        target_notional=2.1,
+        min_order_size=5.0,
+        spread_ticks=1,
+        book=book,
+        edge_at_ask=0.13,
+        edge_at_limit=0.12,
+        required_edge=0.05,
+    )
+    bot._presign_pop = lambda *_args: SignedBuyOrder("up", 0.42, 5.0, object())
+    bot._selected_token_id = lambda _side: "up"
+    bot._entry_snapshot_with_meta = lambda *_args, **_kwargs: {}
+    bot._log_latency = lambda *_args, **_kwargs: None
+
+    decision = SimpleNamespace(viable=True, selected_side="UP", policy_key_text="policy", selected_trade_value=0.54)
+
+    bot._place_entry_event_driven(datetime.now(tz=timezone.utc), {}, decision)
+
+    assert bot.entry_attempts_by_window[market.slug] == 2
+    assert bot.entry_lifecycle_by_window[market.slug] == "SUBMITTING"
+    assert bot._entry_submission is not None
+
+
 def test_event_submission_matched_without_size_opens_fill_and_blocks_retry() -> None:
     bot = object.__new__(StatsBot)
     market = _market()
