@@ -24,6 +24,7 @@ from .guards import DrawdownGuard, BpsYesGuard, SessionStyleDrawdownGuard
 from .macro_policy import MacroLocalPolicy
 from .models import HedgeLeg, OpenPosition, PendingEntryOrder, RuntimeEvent
 from .polymarket import BookSnapshot, MarketInfo, OrderResult, PolymarketClient, SignedBuyOrder, WINDOW_SECONDS, round_price
+from .polymarket_ref import PolymarketReferenceFeed
 from .strategy import (
     EntryDecision,
     ExitDecision,
@@ -402,6 +403,7 @@ class StatsBot:
             url="wss://fstream.binance.com/ws/btcusdt@trade",
             on_update=self._on_execution_event,
         )
+        self.pm_chainlink = PolymarketReferenceFeed(on_update=self._on_execution_event)
         self.guard = BpsYesGuard()
         self.drawdown_guard = DrawdownGuard()
         self.session_style_drawdown_guard = SessionStyleDrawdownGuard(
@@ -453,9 +455,10 @@ class StatsBot:
         t0 = time.time()
         binance_spot_started = self.binance_spot.start()
         binance_perp_started = self.binance_perp.start()
+        pm_chainlink_started = self.pm_chainlink.start()
         log.info(
-            "  init: Binance pressure feeds %s in %.2fs",
-            "started" if binance_spot_started or binance_perp_started else "unavailable",
+            "  init: Binance/PM reference feeds %s in %.2fs",
+            "started" if binance_spot_started or binance_perp_started or pm_chainlink_started else "unavailable",
             time.time() - t0,
         )
         t0 = time.time()
@@ -465,6 +468,11 @@ class StatsBot:
             f"in {time.time() - t0:.2f}s"
         )
         self._log_event("startup", "Coinbase WebSocket started" if ws_started else "Coinbase REST fallback active", {})
+        self._log_event(
+            "startup",
+            "Polymarket Chainlink reference started" if pm_chainlink_started else "Polymarket Chainlink reference unavailable",
+            {"started": pm_chainlink_started, "topic": "crypto_prices_chainlink"},
+        )
         self._log_event(
             "startup",
             "Pressure defence enabled" if config.pressure_defence_enabled else "Pressure defence disabled",
@@ -911,7 +919,7 @@ class StatsBot:
         detail["pressure_z"] = best_z
         return detail
 
-    def _binance_window_signed_bps(self, feed: BinanceTickerFeed) -> float | None:
+    def _feed_window_signed_bps(self, feed: Any) -> float | None:
         market = self.current_market
         if market is None:
             return None
@@ -942,9 +950,9 @@ class StatsBot:
 
     def _dashboard_signed_bps_text(self, snapshot: dict[str, Any]) -> str:
         coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
-        chainlink_bps = finite_float(snapshot.get("chainlink_signed_bps_raw"))
-        spot_bps = self._binance_window_signed_bps(self.binance_spot)
-        perp_bps = self._binance_window_signed_bps(self.binance_perp)
+        chainlink_bps = self._feed_window_signed_bps(self.pm_chainlink)
+        spot_bps = self._feed_window_signed_bps(self.binance_spot)
+        perp_bps = self._feed_window_signed_bps(self.binance_perp)
         values = [
             value
             for value in (coinbase_bps, chainlink_bps, spot_bps, perp_bps)
@@ -2299,10 +2307,16 @@ class StatsBot:
             if isinstance(exchange_at, datetime):
                 age_ms = max(0.0, (received_at - exchange_at).total_seconds() * 1000.0)
             book = self.pm.stream_book_snapshot(token_id, max_age_seconds=10.0) if token_id else None
+            source_label = {
+                "coinbase": "coinbase_ws",
+                "binance_spot": "binance_spot_ws",
+                "binance_perp": "binance_perp_ws",
+                "pm_chainlink": "polymarket_chainlink_ws",
+            }.get(event_type, "polymarket_ws")
             self._log_latency(
                 event_type,
                 market_slug=fields.get("market_slug"),
-                source="polymarket_ws" if event_type != "coinbase" else "coinbase_ws",
+                source=source_label,
                 source_event_ts_utc=exchange_at.isoformat() if isinstance(exchange_at, datetime) else received_at.isoformat(),
                 source_received_ts_utc=received_at.isoformat(),
                 source_age_ms=round(age_ms, 3) if age_ms is not None else "",
