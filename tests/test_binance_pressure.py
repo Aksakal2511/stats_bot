@@ -57,3 +57,29 @@ def test_dashboard_signed_bps_and_net_flow_diagnostics() -> None:
 
     assert text == "coinbase 1.03 | binance spot 1.02 | binance perp 1.35 | avg 1.13"
     assert bot._dashboard_net_signed_flow_text() == "+6.00 BTC (30s)"
+
+
+def test_dashboard_signed_bps_avg_ignores_display_zero_sources() -> None:
+    bot = object.__new__(StatsBot)
+    start = datetime(2026, 7, 15, 18, 5, tzinfo=timezone.utc)
+    base = int(start.timestamp())
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=start,
+        market_end_utc=start,
+    )
+    bot.binance_spot = BinanceTickerFeed(name="binance_spot", url="wss://example.invalid")
+    bot.binance_perp = BinanceTickerFeed(name="binance_perp", url="wss://example.invalid")
+    bot.binance_spot.upsert_second_bar(base, 100.0, 0.0, signed_size=0.0)
+    bot.binance_spot.upsert_second_bar(base + 1, 99.99999, 0.0, signed_size=0.0)
+    bot.binance_perp.upsert_second_bar(base, 100.0, 0.0, signed_size=0.0)
+    bot.binance_perp.upsert_second_bar(base + 1, 100.02, 0.0, signed_size=0.0)
+
+    text = bot._dashboard_signed_bps_text({"cb_signed_bps_raw": 2.0})
+
+    assert text == "coinbase 2.00 | binance spot -0.00 | binance perp 2.00 | avg 2.00"

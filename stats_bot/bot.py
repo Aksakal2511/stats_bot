@@ -944,7 +944,11 @@ class StatsBot:
         coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
         spot_bps = self._binance_window_signed_bps(self.binance_spot)
         perp_bps = self._binance_window_signed_bps(self.binance_perp)
-        values = [value for value in (coinbase_bps, spot_bps, perp_bps) if value is not None and math.isfinite(value)]
+        values = [
+            value
+            for value in (coinbase_bps, spot_bps, perp_bps)
+            if value is not None and math.isfinite(value) and abs(round(value, 2)) > 0.0
+        ]
         avg_bps = sum(values) / len(values) if values else None
         return (
             f"coinbase {_fmt(coinbase_bps, 2)} | "
