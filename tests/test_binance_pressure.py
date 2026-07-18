@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
+from stats_bot.bot import StatsBot
 from stats_bot.binance import BinanceTickerFeed, adverse_signed_volume
+from stats_bot.polymarket import MarketInfo
 
 
 def test_adverse_signed_volume_uses_binance_taker_side() -> None:
@@ -25,3 +28,32 @@ def test_adverse_signed_volume_uses_binance_taker_side() -> None:
     assert seconds == 3
     assert up_adverse == 4.0
     assert down_adverse == 0.0
+
+
+def test_dashboard_signed_bps_and_net_flow_diagnostics() -> None:
+    bot = object.__new__(StatsBot)
+    start = datetime(2026, 7, 15, 18, 5, tzinfo=timezone.utc)
+    base = int(start.timestamp())
+    bot.config = SimpleNamespace(pressure_signed_volume_lookback_seconds=30)
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=start,
+        market_end_utc=start,
+    )
+    bot.binance_spot = BinanceTickerFeed(name="binance_spot", url="wss://example.invalid")
+    bot.binance_perp = BinanceTickerFeed(name="binance_perp", url="wss://example.invalid")
+    bot.binance_spot.upsert_second_bar(base, 100.0, 0.0, signed_size=0.0)
+    bot.binance_spot.upsert_second_bar(base + 1, 100.0102, 9.0, signed_size=9.0)
+    bot.binance_spot.upsert_second_bar(base + 2, 100.0102, 3.0, signed_size=-3.0)
+    bot.binance_perp.upsert_second_bar(base, 100.0, 0.0, signed_size=0.0)
+    bot.binance_perp.upsert_second_bar(base + 2, 100.0135, 0.0, signed_size=0.0)
+
+    text = bot._dashboard_signed_bps_text({"cb_signed_bps_raw": 1.03})
+
+    assert text == "coinbase 1.03 | binance spot 1.02 | binance perp 1.35 | avg 1.13"
+    assert bot._dashboard_net_signed_flow_text() == "+6.00 BTC (30s)"

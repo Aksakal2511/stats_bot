@@ -911,6 +911,59 @@ class StatsBot:
         detail["pressure_z"] = best_z
         return detail
 
+    def _binance_window_signed_bps(self, feed: BinanceTickerFeed) -> float | None:
+        market = self.current_market
+        if market is None:
+            return None
+        rows = []
+        for row in feed.history_rows():
+            ts = row.get("timestamp_utc")
+            close = finite_float(row.get("close_1s"))
+            if isinstance(ts, datetime) and close is not None and close > 0:
+                rows.append((ts, close))
+        if len(rows) < 2:
+            return None
+        rows.sort(key=lambda item: item[0])
+        latest_price = rows[-1][1]
+        anchor_price = None
+        for ts, price in rows:
+            if ts <= market.market_start_utc:
+                anchor_price = price
+            else:
+                break
+        if anchor_price is None:
+            for ts, price in rows:
+                if ts >= market.market_start_utc:
+                    anchor_price = price
+                    break
+        if anchor_price is None or anchor_price <= 0:
+            return None
+        return (latest_price / anchor_price - 1.0) * 10_000.0
+
+    def _dashboard_signed_bps_text(self, snapshot: dict[str, Any]) -> str:
+        coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
+        spot_bps = self._binance_window_signed_bps(self.binance_spot)
+        perp_bps = self._binance_window_signed_bps(self.binance_perp)
+        values = [value for value in (coinbase_bps, spot_bps, perp_bps) if value is not None and math.isfinite(value)]
+        avg_bps = sum(values) / len(values) if values else None
+        return (
+            f"coinbase {_fmt(coinbase_bps, 2)} | "
+            f"binance spot {_fmt(spot_bps, 2)} | "
+            f"binance perp {_fmt(perp_bps, 2)} | "
+            f"avg {_fmt(avg_bps, 2)}"
+        )
+
+    def _dashboard_net_signed_flow_text(self) -> str:
+        lookback_seconds = getattr(self.config, "pressure_signed_volume_lookback_seconds", 30)
+        _, signed_total, _, _, _ = adverse_signed_volume(
+            self.binance_spot.history_rows(),
+            held_side="DOWN",
+            lookback_seconds=lookback_seconds,
+        )
+        if signed_total is None or not math.isfinite(signed_total):
+            return f"NA ({lookback_seconds}s)"
+        return f"{signed_total:+.2f} BTC ({lookback_seconds}s)"
+
     def _ffm_signed_volume_pressure(self, held_side: str) -> dict[str, Any]:
         adverse, signed_total, buy_total, sell_total, seconds = adverse_signed_volume(
             self.binance_spot.history_rows(),
@@ -3935,7 +3988,8 @@ class StatsBot:
                         lines.append(f"    style_ladder      : {level} ({session} {style} +{penalty * 100:.0f}c)")
             lines.append(f"    elapsed_seconds   : {_fmt(snapshot.get('elapsed_seconds_since_market_start'), 1)}")
             lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
-            lines.append(f"    signed_bps        : {_fmt(snapshot.get('cb_signed_bps_raw'), 2)}")
+            lines.append(f"    signed_bps        : {self._dashboard_signed_bps_text(snapshot)}")
+            lines.append(f"    net_signed_flow   : {self._dashboard_net_signed_flow_text()}")
             lines.append(
                 f"    local_vol_1h      : {_fmt(snapshot.get('local_volatility_1h_bps'), 3)} bps "
                 f"({snapshot.get('local_volatility_status')})"
