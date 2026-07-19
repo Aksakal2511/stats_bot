@@ -958,8 +958,8 @@ class StatsBot:
         ]
         avg_bps = sum(values) / len(values) if values else None
         return (
-            f"coinbase {_fmt(coinbase_bps, 2)} | "
-            f"chainlink {_fmt(chainlink_bps, 2)} | "
+            f"{_fmt(coinbase_bps, 2)} (cb) | "
+            f"{_fmt(chainlink_bps, 2)} (cl) | "
             f"avg {_fmt(avg_bps, 2)}"
         )
 
@@ -4078,11 +4078,6 @@ class StatsBot:
             lines.append(f"    elapsed_seconds   : {_fmt(snapshot.get('elapsed_seconds_since_market_start'), 1)}")
             lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
             lines.append(f"    signed_bps        : {self._dashboard_signed_bps_text(snapshot)}")
-            lines.append(f"    net_signed_flow   : {self._dashboard_net_signed_flow_text()}")
-            lines.append(
-                f"    local_vol_1h      : {_fmt(snapshot.get('local_volatility_1h_bps'), 3)} bps "
-                f"({snapshot.get('local_volatility_status')})"
-            )
             signal_name = str(snapshot.get("policy_signal_name") or "move_z")
             if signal_name not in {"move_z", "move_dz"}:
                 signal_name = "move_z"
@@ -4099,7 +4094,11 @@ class StatsBot:
                     f"    {selected_label:<18}: {_fmt(selected_signal, 3)} "
                     f"({snapshot.get(f'selected_{signal_name}_bucket') or 'NA'})"
                 )
-            lines.append(f"    tte_bucket        : {snapshot.get('tte_bucket')}")
+            lines.append(f"    net_signed_flow   : {self._dashboard_net_signed_flow_text()}")
+            lines.append(
+                f"    local_vol_1h      : {_fmt(snapshot.get('local_volatility_1h_bps'), 3)} bps "
+                f"({snapshot.get('local_volatility_status')})"
+            )
             lines.append("")
             lines.append("  QUOTES")
             lines.append(
