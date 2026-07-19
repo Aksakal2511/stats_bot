@@ -1,12 +1,12 @@
 # Execution Plan
 
-The strategic layer is `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1`. Execution can run as `event_driven_ws` (default) or `legacy_polling` (rollback).
+The strategic layer is `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1`. Execution can run as `event_driven_ws` (default) or `legacy_polling` (rollback).
 
 ## Entry Path
 
 1. Maintain in-memory UP and DOWN books from the public Polymarket market WebSocket.
 2. Re-evaluate UP and DOWN when either the BTC signal or Polymarket book changes.
-3. Require edge of at least the active style profile, currently `0.05` for continuation and `0.07` for mean reversion, at the displayed ask and at the execution-health-adjusted fast limit.
+3. Require edge of at least the active style profile, currently `0.05` for continuation and `0.05` for mean reversion, at the displayed ask and at the execution-health-adjusted fast limit.
 4. Atomically reserve the market entry before handing the pre-signed order to the submission worker.
 5. Submit through the persistent entry-only worker and isolated keepalive HTTP connection at no more than the execution-health fast limit when edge remains valid.
 6. Use the authenticated user WebSocket to trigger prompt fill reconciliation.

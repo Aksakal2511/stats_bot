@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "timezone": "Europe/London",
+  "source": "move_dz_no_tte_degradation_e_edge_grid",
+  "selected_spec": "FULL_RAW_MOVE_DZ_B11_W4_S50_WD120_WE120_NO_SESSION_C05_M05_T45_265",
+  "default": {
+    "edge": 0.05,
+    "min_tte": 45,
+    "max_tte": 265
+  },
+  "overrides": {
+    "weekday|h00_04|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h00_04|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h04_08|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h04_08|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h08_12|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h08_12|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h12_16|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h12_16|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h16_20|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h16_20|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h20_00|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h20_00|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h00_04|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h00_04|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h04_08|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h04_08|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h08_12|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h08_12|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h12_16|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h12_16|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h16_20|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h16_20|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h20_00|continuation": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h20_00|mean_reversion": {
+      "edge": 0.05,
+      "min_tte": 45,
+      "max_tte": 265
+    }
+  }
+}

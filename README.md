@@ -177,7 +177,7 @@ The whole game is calibration plus execution.
 ## Current Production Setup
 
 ```text
-Strategy ID       : z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1
+Strategy ID       : z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1
 Training window   : 2026-02-14 through 2026-07-13
 Signal source     : Coinbase BTC-USD move_dz
 Settlement labels : resolved Polymarket/Gamma outcomes
@@ -194,8 +194,8 @@ Position limit    : one filled trade per five-minute market
 The source of truth for the active model is:
 
 ```text
-strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/policy_bundle.json
-strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/entry_profiles.json
+strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1/policy_bundle.json
+strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1/entry_profiles.json
 ```
 
 The runtime refuses to start if key entry-shape settings differ from the frozen
@@ -277,11 +277,11 @@ The default profile is:
 
 ```text
 continuation    : 5c edge, 45-265s TTE
-mean reversion  : 7c edge, 45-265s TTE
+mean reversion  : 5c edge, 45-265s TTE
 ```
 
 Current day/session/style overrides are stored in
-`strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/entry_profiles.json`
+`strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1/entry_profiles.json`
 and documented in the strategy folder README.
 
 As of this README, the active shipped profile is:
@@ -289,7 +289,7 @@ As of this README, the active shipped profile is:
 | Day | Session | Style | Edge | TTE |
 |---|---|---|---:|---:|
 | All | All | Continuation | 0.05 | 45-265 |
-| All | All | Mean reversion | 0.07 | 45-265 |
+| All | All | Mean reversion | 0.05 | 45-265 |
 
 ## Active Entry Rules
 
@@ -326,7 +326,7 @@ If both UP and DOWN qualify, the bot chooses:
 ## Removed From Active Entry Logic
 
 These mechanisms/files may still exist for research history or legacy support,
-but they are not part of the active `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1` entry path:
+but they are not part of the active `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1` entry path:
 
 - twelve two-hour policy session buckets
 - raw signed-BPS policy buckets
@@ -417,7 +417,7 @@ stats_bot/
   strategy.py            legacy policy helpers and shared utilities
 
 strategy/
-  z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/
+  z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1/
     policy_bundle.json   active production policy bundle
     entry_profiles.json  active edge/TTE overrides
     README.md            strategy artifact notes

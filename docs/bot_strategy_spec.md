@@ -2,11 +2,11 @@
 
 ## Production Model
 
-The active model is `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1`, trained on full/raw offset250 observations from `2026-02-14` through `2026-07-13`.
+The active model is `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1`, trained on full/raw offset250 observations from `2026-02-14` through `2026-07-13`.
 
 ```text
-strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/policy_bundle.json
-strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/entry_profiles.json
+strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1/policy_bundle.json
+strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1/entry_profiles.json
 ```
 
 Coinbase BTC-USD supplies the causal BTC close and local volatility inputs. Policy settlement values are fitted against resolved Polymarket/Gamma outcomes.
@@ -55,7 +55,7 @@ Positive aligned distance is `continuation`; negative aligned distance is `mean_
 
 ## Entry Decision
 
-Both UP and DOWN are evaluated independently. The shipped profile is continuation `0.05 / 45-265` and mean reversion `0.07 / 45-265`.
+Both UP and DOWN are evaluated independently. The shipped profile is continuation `0.05 / 45-265` and mean reversion `0.05 / 45-265`.
 
 A side is eligible when:
 

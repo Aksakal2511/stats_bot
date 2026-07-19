@@ -26,7 +26,7 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_MACRO_POLICY_BUNDLE = (
     REPO_ROOT
     / "strategy"
-    / "z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1"
+    / "z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1"
     / "policy_bundle.json"
 )
 
