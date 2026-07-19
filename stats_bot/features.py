@@ -250,6 +250,7 @@ def compute_live_snapshot(
         "cb_close_1s": latest_close,
         "btc_mom_20s_bps": float("nan") if btc_mom_20s_bps is None else float(btc_mom_20s_bps),
         "window_open_btc_price": float(open_price),
+        "cb_price_to_beat_anchor": float(open_price),
         "cb_signed_bps_raw": float(signed_bps_raw),
         "signed_bps_raw": float(signed_bps_raw),
         "signed_bps_bucket": signed_bps_bucket,

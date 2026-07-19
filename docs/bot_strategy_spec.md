@@ -2,25 +2,23 @@
 
 ## Production Model
 
-The active model is `z6_fullraw_hl90_weekday_v1`, trained on full/raw offset250 Coinbase observations from `2026-02-14` through `2026-07-13`. Its source of truth is:
+The active model is `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1`, trained on full/raw offset250 observations from `2026-02-14` through `2026-07-13`.
 
 ```text
-strategy/z6_fullraw_hl90_weekday_v1/policy_bundle.json
-strategy/z6_fullraw_hl90_weekday_v1/entry_profiles.json
+strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/policy_bundle.json
+strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/entry_profiles.json
 ```
 
-Coinbase BTC-USD supplies the signal features. Policy settlement values are fitted against resolved Polymarket/Gamma outcomes, not Coinbase-derived outcomes.
+Coinbase BTC-USD supplies the causal BTC close and local volatility inputs. Policy settlement values are fitted against resolved Polymarket/Gamma outcomes.
 
-It contains the fitted move-z boundaries and four regularised lookup levels:
+The shipped hierarchy is intentionally small:
 
 1. `move_z_bucket + selected_price_bucket`
 2. `day_type + move_z_bucket + selected_price_bucket`
-3. `day_type + TTE + move_z_bucket + selected_price_bucket`
-4. `day_type + 6h London segment + TTE + move_z_bucket + selected_price_bucket`
 
-Lookup falls back to the deepest available parent. Values are settlement probabilities regularised toward their parent estimates. UP and DOWN share evidence through side alignment.
+`move_z_bucket` remains the stored schema key for compatibility, but the value being bucketed is the side-aligned distance-to-beat z-score, `move_dz`. Lookup falls back to the deepest available parent.
 
-Weekday observations receive weights of `0.5 ** (age_days / 90)`. The recursively weighted base, day, TTE and final levels each use parent strength `10`. Weekend lookups use the full/raw lifetime hierarchy. The bundle stores both complete feature configurations because their trained move-z boundaries differ.
+Weekday and weekend branches both use the `HL120/S50` recursive hierarchy. Bucket calibration uses 4h London segments with 11 move-dz buckets; the policy table itself does not include session or TTE.
 
 ## Causal Signal
 
@@ -31,63 +29,50 @@ rv_1h_bps = sqrt(sum(last 60 one-minute log returns squared)) * 10,000
 minimum valid history = 45 returns
 ```
 
-At a decision during minute `M`, the newest permitted close is minute `M-1`. Missing intermediate minutes are forward-filled to match the research dataset. The bot backfills Coinbase candles at startup; it blocks with `LOCAL_VOL_WARMUP` or `LOCAL_VOL_STALE` instead of substituting another feature.
-
 For each side:
 
 ```text
-aligned_bps(UP)   = signed_bps
-aligned_bps(DOWN) = -signed_bps
-expected_move     = rv_1h_bps * sqrt(elapsed_seconds / 3600)
-move_z            = aligned_bps / max(expected_move, 0.05)
+distance_to_beat_bps = 10,000 * (btc_close_1s - price_to_beat) / price_to_beat
+remaining_vol_bps    = rv_1h_bps * sqrt(TTE / 3600)
+move_dz(UP)          =  distance_to_beat_bps / max(remaining_vol_bps, 0.05)
+move_dz(DOWN)        = -distance_to_beat_bps / max(remaining_vol_bps, 0.05)
 ```
 
-Positive aligned movement is `continuation`; negative movement is `mean_reversion`. Near-zero movement is neutral and is not entered.
+Positive aligned distance is `continuation`; negative aligned distance is `mean_reversion`.
 
 ## Context
 
 `day_type` uses the London calendar: Monday-Friday is `weekday`, otherwise `weekend`.
 
-| London time | Display | Policy label |
+| London time | Display | Calibration label |
 |---|---|---|
-| 00:00-05:59 | `ASIA` | `h00_06` |
-| 06:00-11:59 | `EUROPE` | `h06_12` |
-| 12:00-17:59 | `US_OPEN` | `h12_18` |
-| 18:00-23:59 | `US_LATE` | `h18_24` |
-
-TTE and selected-side price buckets exactly match those stored in the bundle.
+| 00:00-03:59 | `ASIA_00_04` | `h00_04` |
+| 04:00-07:59 | `ASIA_04_08` | `h04_08` |
+| 08:00-11:59 | `EUROPE_08_12` | `h08_12` |
+| 12:00-15:59 | `US_OPEN_12_16` | `h12_16` |
+| 16:00-19:59 | `US_OPEN_16_20` | `h16_20` |
+| 20:00-23:59 | `US_LATE_20_00` | `h20_00` |
 
 ## Entry Decision
 
-Both UP and DOWN are evaluated independently. The shipped profile is continuation `0.06 / 60-255` and mean reversion `0.10 / 60-255`, loaded from `entry_profiles.json`. A side is eligible when:
+Both UP and DOWN are evaluated independently. The shipped profile is continuation `0.05 / 45-265` and mean reversion `0.07 / 45-265`.
+
+A side is eligible when:
 
 ```text
 elapsed >= 45 seconds
-style profile min_tte <= TTE <= style profile max_tte
+45 <= TTE <= 265
 0.20 <= current ask <= 0.80
 bid and ask are valid and ask > bid
 policy value - current ask >= style profile edge
 policy value - min(current ask + 0.01, 0.80) >= style profile edge
 BPS_YES_GUARD is inactive
-session/style two-hour drawdown kill is inactive by default
+session/style drawdown guard is inactive by default
 run peak-realised drawdown kill is inactive
 ```
 
-If both sides qualify, choose larger edge, then larger value, then UP as a deterministic tie-break. There can be only one filled trade per market.
+If both sides qualify, choose larger edge, then larger value, then UP as a deterministic tie-break. The bot permits only one filled trade per five-minute market.
 
-## Removed From Active Entry Logic
+## Defensive Guard
 
-- Twelve two-hour session buckets
-- Raw signed-BPS policy buckets
-- Independent volatility bucket
-- Separate UP and DOWN ask dimensions
-- Legacy twelve-session edge table
-- Recovery, staking and percentage high-water drawdown guards
-- Exact-cell damage pauses
-- High-volatility muting
-- Raw BTC-momentum blocker
-- Dynamic staking and anti-martingale bonus
-
-The old files remain for research history or optional `bps_loss_only` exit experiments, but they are not required by the shipped `hold_to_resolution` default and cannot influence `z6_fullraw_hl90_weekday_v1` entries.
-
-The session/style drawdown guard is disabled by default for this profile. It can be re-enabled with `STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED=1`, but the selected OOS profile leaves it off. The `$15` peak-realised drawdown kill switch remains available as an overnight run-level capital stop. These are not policy features and do not select trades.
+The FFM/pressure signed-volume hedge guard is disabled by default for this deployment (`STATS_PRESSURE_DEFENCE_ENABLED=false`). Binance spot signed flow remains on the dashboard as a 30s diagnostic, but it does not select entries or trigger hedges unless the guard is explicitly re-enabled.

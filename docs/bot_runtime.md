@@ -6,7 +6,7 @@ Paper and live call the same `MacroLocalPolicy.evaluate` function. Only order su
 
 At startup the bot:
 
-1. Loads `strategy/z6_fullraw_hl90_weekday_v1/policy_bundle.json` and `entry_profiles.json`.
+1. Loads `strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/policy_bundle.json` and `entry_profiles.json`.
 2. Verifies runtime price, global TTE, start gate and stake settings match the frozen model.
 3. Starts the Coinbase websocket.
 4. Backfills approximately 100 completed Coinbase one-minute candles.
@@ -28,13 +28,13 @@ Both require `STATS_STAKE_MODE=min_order_size` with `STATS_MIN_ORDER_SIZE_FALLBA
 The compact strategy fields are:
 
 ```text
-strategy          : z6_fullraw_hl90_weekday_v1 (frozen 2026-07-13)
+strategy          : z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1 (frozen 2026-07-13)
 day/session       : weekday/US_OPEN
-entry_profile     : weekday/US_OPEN | C=6c@60-255s | MR=10c@60-255s
+entry_profile     : weekday/US_OPEN | C=5c@45-265s | MR=7c@45-265s
 local_vol_1h      : 34.812 bps (ready)
-selected_move_z   : -0.731
-move_z_bucket     : z_01
-value / edge      : 0.612 / 0.112 (need 0.100)
+selected_move_dz  : -0.731
+move_dz_bucket    : z_01
+value / edge      : 0.612 / 0.112 (need 0.070)
 trade_style       : mean_reversion
 support / level   : 184 / final
 execution health  : HEALTHY
@@ -42,13 +42,13 @@ submission state  : NONE
 submission        : 28 / 31 fills/attempts
 ```
 
-Weekday support is rounded effective recency-weighted support; weekend support is raw lifetime support. The blocker line appears only when required. Feature failures are named `LOCAL_VOL_WARMUP`, `LOCAL_VOL_STALE`, `CB_SIGNED_BPS_MISSING`, or the standard quote/TTE/edge blockers.
+Support is rounded effective recency-weighted support from the shared HL120/S50 branch. The blocker line appears only when required. Feature failures are named `LOCAL_VOL_WARMUP`, `LOCAL_VOL_STALE`, `BTC_CLOSE_MISSING`, `PRICE_TO_BEAT_MISSING`, or the standard quote/TTE/edge blockers.
 
 ## Logs
 
 Every run writes under `logs/<session>_<paper|live>/`:
 
-- `stats_cadence_1s.csv`: includes macro session, local RV status/age, selected move-z, price bucket, policy support, unique markets and hierarchy level.
+- `stats_cadence_1s.csv`: includes macro session, local RV status/age, selected move-dz, price bucket, policy support, unique markets and hierarchy level.
 - `stats_orders.csv`: placements, fills, cancellations and failures.
 - `stats_trades.csv`: closed positions and realised PnL.
 - `stats_execution_latency.csv`: source-event, decision, submission/response, fill and cancellation timing with quote and edge context.
@@ -66,4 +66,4 @@ python3 -m pytest -q
 python3 run_bot.py --paper --once --status-interval-seconds 1
 ```
 
-The unit suite covers London session boundaries, right-closed move-z buckets, completed-minute volatility, clean warmup blocking, streamed-book updates and single-flight entry submission. Research/runtime row parity is checked against the offset250 production model before deployment.
+The unit suite covers London session boundaries, right-closed z buckets, completed-minute volatility, clean warmup blocking, streamed-book updates and single-flight entry submission. Research/runtime row parity is checked against the offset250 production model before deployment.

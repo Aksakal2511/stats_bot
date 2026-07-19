@@ -59,8 +59,8 @@ def test_dashboard_signed_bps_and_net_flow_diagnostics() -> None:
 
     text = bot._dashboard_signed_bps_text({"cb_signed_bps_raw": 1.03})
 
-    assert text == "coinbase 1.03 | chainlink 1.01 | binance spot 1.02 | binance perp 1.35 | avg 1.10"
-    assert bot._dashboard_net_signed_flow_text() == "+6.00 BTC (30s) | -3.00 BTC (1s)"
+    assert text == "coinbase 1.03 | chainlink 1.01 | avg 1.02"
+    assert bot._dashboard_net_signed_flow_text() == "+6.00 BTC (30s)"
 
 
 def test_dashboard_signed_bps_avg_ignores_display_zero_sources() -> None:
@@ -87,7 +87,7 @@ def test_dashboard_signed_bps_avg_ignores_display_zero_sources() -> None:
 
     text = bot._dashboard_signed_bps_text({"cb_signed_bps_raw": 2.0})
 
-    assert text == "coinbase 2.00 | chainlink NA | binance spot -0.00 | binance perp 2.00 | avg 2.00"
+    assert text == "coinbase 2.00 | chainlink NA | avg 2.00"
 
 
 def test_polymarket_reference_feed_extracts_chainlink_btc_price() -> None:

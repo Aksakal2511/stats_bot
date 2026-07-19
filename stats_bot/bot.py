@@ -951,19 +951,15 @@ class StatsBot:
     def _dashboard_signed_bps_text(self, snapshot: dict[str, Any]) -> str:
         coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
         chainlink_bps = self._feed_window_signed_bps(self.pm_chainlink)
-        spot_bps = self._feed_window_signed_bps(self.binance_spot)
-        perp_bps = self._feed_window_signed_bps(self.binance_perp)
         values = [
             value
-            for value in (coinbase_bps, chainlink_bps, spot_bps, perp_bps)
+            for value in (coinbase_bps, chainlink_bps)
             if value is not None and math.isfinite(value) and abs(round(value, 2)) > 0.0
         ]
         avg_bps = sum(values) / len(values) if values else None
         return (
             f"coinbase {_fmt(coinbase_bps, 2)} | "
             f"chainlink {_fmt(chainlink_bps, 2)} | "
-            f"binance spot {_fmt(spot_bps, 2)} | "
-            f"binance perp {_fmt(perp_bps, 2)} | "
             f"avg {_fmt(avg_bps, 2)}"
         )
 
@@ -981,10 +977,7 @@ class StatsBot:
                 return f"NA ({seconds}s)"
             return f"{signed_total:+.2f} BTC ({seconds}s)"
 
-        parts = [_signed_flow_part(lookback_seconds)]
-        if lookback_seconds != 1:
-            parts.append(_signed_flow_part(1))
-        return " | ".join(parts)
+        return _signed_flow_part(lookback_seconds)
 
     def _ffm_signed_volume_pressure(self, held_side: str) -> dict[str, Any]:
         adverse, signed_total, buy_total, sell_total, seconds = adverse_signed_volume(
@@ -3796,6 +3789,13 @@ class StatsBot:
                         "entry_session_enabled",
                         "exit_bps_threshold",
                         "selected_trade_style",
+                        "policy_signal_name",
+                        "up_move_dz",
+                        "up_move_dz_bucket",
+                        "down_move_dz",
+                        "down_move_dz_bucket",
+                        "selected_move_dz",
+                        "selected_move_dz_bucket",
                         "up_move_z",
                         "up_move_z_bucket",
                         "down_move_z",
@@ -3886,6 +3886,13 @@ class StatsBot:
                     int(bool(decision.entry_session_enabled)) if decision and decision.entry_session_enabled is not None else "",
                     _fmt(decision.threshold_bps, 6, "") if decision else "",
                     decision.selected_trade_style or "" if decision else "",
+                    snapshot.get("policy_signal_name", "") if snapshot else "",
+                    _fmt(snapshot.get("up_move_dz"), 6, "") if snapshot else "",
+                    snapshot.get("up_move_dz_bucket", "") if snapshot else "",
+                    _fmt(snapshot.get("down_move_dz"), 6, "") if snapshot else "",
+                    snapshot.get("down_move_dz_bucket", "") if snapshot else "",
+                    _fmt(snapshot.get("selected_move_dz"), 6, "") if snapshot else "",
+                    snapshot.get("selected_move_dz_bucket", "") if snapshot else "",
                     _fmt(snapshot.get("up_move_z"), 6, "") if snapshot else "",
                     snapshot.get("up_move_z_bucket", "") if snapshot else "",
                     _fmt(snapshot.get("down_move_z"), 6, "") if snapshot else "",
@@ -4076,15 +4083,20 @@ class StatsBot:
                 f"    local_vol_1h      : {_fmt(snapshot.get('local_volatility_1h_bps'), 3)} bps "
                 f"({snapshot.get('local_volatility_status')})"
             )
+            signal_name = str(snapshot.get("policy_signal_name") or "move_z")
+            if signal_name not in {"move_z", "move_dz"}:
+                signal_name = "move_z"
+            signal_label = "move_dz" if signal_name == "move_dz" else "move_z"
             lines.append(
-                f"    move_z UP/DOWN    : {_fmt(snapshot.get('up_move_z'), 3)} "
-                f"({snapshot.get('up_move_z_bucket') or 'NA'}) / "
-                f"{_fmt(snapshot.get('down_move_z'), 3)} ({snapshot.get('down_move_z_bucket') or 'NA'})"
+                f"    {signal_label} UP/DOWN   : {_fmt(snapshot.get(f'up_{signal_name}'), 3)} "
+                f"({snapshot.get(f'up_{signal_name}_bucket') or 'NA'}) / "
+                f"{_fmt(snapshot.get(f'down_{signal_name}'), 3)} ({snapshot.get(f'down_{signal_name}_bucket') or 'NA'})"
             )
-            if snapshot.get("selected_move_z") is not None:
+            selected_signal = snapshot.get(f"selected_{signal_name}")
+            if selected_signal is not None:
                 lines.append(
-                    f"    selected_move_z   : {_fmt(snapshot.get('selected_move_z'), 3)} "
-                    f"({snapshot.get('selected_move_z_bucket') or 'NA'})"
+                    f"    selected_{signal_label}: {_fmt(selected_signal, 3)} "
+                    f"({snapshot.get(f'selected_{signal_name}_bucket') or 'NA'})"
                 )
             lines.append(f"    tte_bucket        : {snapshot.get('tte_bucket')}")
             lines.append("")
@@ -4219,8 +4231,9 @@ class StatsBot:
             f"{self.macro_policy.training_start}..{self.macro_policy.training_end}"
         )
         log.info(f"  policy      : {self.config.macro_policy_bundle} ({len(self.macro_policy):,} hierarchical rows)")
-        continuation = self.macro_policy.entry_parameters("weekday", "h00_06", "continuation")
-        mean_reversion = self.macro_policy.entry_parameters("weekday", "h00_06", "mean_reversion")
+        first_session = next(iter(self.macro_policy.session_display_names), "h00_06")
+        continuation = self.macro_policy.entry_parameters("weekday", first_session, "continuation")
+        mean_reversion = self.macro_policy.entry_parameters("weekday", first_session, "mean_reversion")
         log.info(
             "  entry edges : continuation=%.02f mean_reversion=%.02f (%s profile)",
             continuation.edge,
@@ -4229,7 +4242,10 @@ class StatsBot:
         )
         log.info(f"  exit mode   : {self.config.exit_policy_mode}")
         session_names = "/".join(dict.fromkeys(self.macro_policy.session_display_names.values()))
-        log.info(f"  signal      : causal 1h Coinbase local RV; {session_names} London segments")
+        log.info(
+            f"  signal      : {self.macro_policy.signal_feature}; causal 1h Coinbase local RV; "
+            f"{session_names} London calibration segments"
+        )
         log.info(
             "  entry       : pre-signed GTC fast limit when ready "
             f"(ask+{PRESIGN_ENTRY_TOLERANCE_TICKS}/{DEGRADED_ENTRY_TOLERANCE_TICKS}/"

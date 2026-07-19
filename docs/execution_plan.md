@@ -1,12 +1,12 @@
 # Execution Plan
 
-The strategic layer is `z6_fullraw_hl90_weekday_v1`. Execution can run as `event_driven_ws` (default) or `legacy_polling` (rollback).
+The strategic layer is `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1`. Execution can run as `event_driven_ws` (default) or `legacy_polling` (rollback).
 
 ## Entry Path
 
 1. Maintain in-memory UP and DOWN books from the public Polymarket market WebSocket.
 2. Re-evaluate UP and DOWN when either the BTC signal or Polymarket book changes.
-3. Require edge of at least the active style profile, currently `0.06` for continuation and `0.10` for mean reversion, at the displayed ask and at the execution-health-adjusted fast limit.
+3. Require edge of at least the active style profile, currently `0.05` for continuation and `0.07` for mean reversion, at the displayed ask and at the execution-health-adjusted fast limit.
 4. Atomically reserve the market entry before handing the pre-signed order to the submission worker.
 5. Submit through the persistent entry-only worker and isolated keepalive HTTP connection at no more than the execution-health fast limit when edge remains valid.
 6. Use the authenticated user WebSocket to trigger prompt fill reconciliation.
@@ -17,7 +17,7 @@ Paper `fast_limit` uses the same side, limit and edge-preservation checks as liv
 
 An unresolved submission is labelled late after one second, but it is never retried until its state is known. This prevents a delayed GTC and a fallback order from both filling. Private wallet reads are deferred during the POST; public feeds and dashboard rendering continue.
 
-The session/style drawdown guard is disabled by default for this profile. If re-enabled with `STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED=1`, it blocks only the affected style for the current fixed two-hour London bucket after a realised-PnL drawdown of `1.5 * shares`. The run-level peak-drawdown kill switch latches after a `$15` decline from peak realised PnL, cancels pending entries and blocks new entries while allowing an existing position to settle normally.
+The session/style drawdown guard is disabled by default for this profile. If re-enabled with `STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED=1`, it blocks only the affected style after the configured realised-PnL drawdown threshold. The run-level peak-drawdown kill switch latches after the configured decline from peak realised PnL, cancels pending entries and blocks new entries while allowing an existing position to settle normally.
 
 ## Position And Exit
 

@@ -177,12 +177,12 @@ The whole game is calibration plus execution.
 ## Current Production Setup
 
 ```text
-Strategy ID       : z6_fullraw_hl90_weekday_v1
+Strategy ID       : z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1
 Training window   : 2026-02-14 through 2026-07-13
-Signal source     : Coinbase BTC-USD
+Signal source     : Coinbase BTC-USD move_dz
 Settlement labels : resolved Polymarket/Gamma outcomes
 Entry prices      : 0.20-0.80 selected-side ask
-Global TTE        : 60-255 seconds
+Global TTE        : 45-265 seconds
 Start gate        : elapsed >= 45 seconds
 Stake             : flat market-minimum shares, 5-share fallback
 Exit              : hold to resolution
@@ -194,8 +194,8 @@ Position limit    : one filled trade per five-minute market
 The source of truth for the active model is:
 
 ```text
-strategy/z6_fullraw_hl90_weekday_v1/policy_bundle.json
-strategy/z6_fullraw_hl90_weekday_v1/entry_profiles.json
+strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/policy_bundle.json
+strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/entry_profiles.json
 ```
 
 The runtime refuses to start if key entry-shape settings differ from the frozen
@@ -204,7 +204,7 @@ strategy bundle:
 ```text
 weekday price     : 0.20-0.80
 weekend price     : 0.20-0.80
-TTE               : 60-255 seconds
+TTE               : 45-265 seconds
 start gate        : 45 seconds
 stake mode        : min_order_size or ladder_shares
 fallback shares   : 5
@@ -225,11 +225,11 @@ The bot evaluates UP and DOWN independently.
 For each side:
 
 ```text
-aligned_bps(UP)      = signed Coinbase BTC bps
-aligned_bps(DOWN)    = -signed Coinbase BTC bps
-expected_move        = local_1h_rv_bps * sqrt(elapsed_seconds / 3600)
-move_z               = aligned_bps / max(expected_move, 0.05)
-trade_style          = continuation if move_z > 0, otherwise mean_reversion
+distance_bps         = 10,000 * (btc_close_1s - price_to_beat) / price_to_beat
+remaining_vol_bps    = local_1h_rv_bps * sqrt(TTE / 3600)
+move_dz(UP)          =  distance_bps / max(remaining_vol_bps, 0.05)
+move_dz(DOWN)        = -distance_bps / max(remaining_vol_bps, 0.05)
+trade_style          = continuation if side-aligned distance is positive, otherwise mean_reversion
 selected_side_edge   = policy_value - selected_side_ask
 ```
 
@@ -238,13 +238,10 @@ The policy value comes from a regularised hierarchy in the active bundle:
 ```text
 1. move_z_bucket + selected_price_bucket
 2. day_type + move_z_bucket + selected_price_bucket
-3. day_type + TTE + move_z_bucket + selected_price_bucket
-4. day_type + 6h London segment + TTE + move_z_bucket + selected_price_bucket
 ```
 
-UP and DOWN share evidence through side alignment. That means the model learns
-from the selected side's relationship to BTC movement rather than treating UP
-and DOWN as totally separate worlds.
+`move_z_bucket` is retained as the schema key, but it contains the b11
+side-aligned move-dz bucket. UP and DOWN share evidence through side alignment.
 
 ### Day And Session Labels
 
@@ -255,22 +252,21 @@ weekday : Monday-Friday
 weekend : Saturday-Sunday
 ```
 
-The active session display names are four fixed six-hour London segments:
+The active calibration display names are fixed four-hour London segments:
 
 | London time | Display | Bundle key |
 |---|---|---|
-| 00:00-05:59 | ASIA | h00_06 |
-| 06:00-11:59 | EUROPE | h06_12 |
-| 12:00-17:59 | US_OPEN | h12_18 |
-| 18:00-23:59 | US_LATE | h18_24 |
+| 00:00-03:59 | ASIA_00_04 | h00_04 |
+| 04:00-07:59 | ASIA_04_08 | h04_08 |
+| 08:00-11:59 | EUROPE_08_12 | h08_12 |
+| 12:00-15:59 | US_OPEN_12_16 | h12_16 |
+| 16:00-19:59 | US_OPEN_16_20 | h16_20 |
+| 20:00-23:59 | US_LATE_20_00 | h20_00 |
 
 ### Recency And Regularisation
 
-The active bundle combines two policy shapes:
-
-- **Weekdays:** recursively weighted hierarchy with a 90-day half-life and
-  parent strength 10 at base, day, TTE and final levels.
-- **Weekends:** full/raw lifetime hierarchy.
+The active bundle uses recursive weighting with a 120-day half-life and parent
+strength 50 for both weekdays and weekends.
 
 This is why support values shown in the dashboard should be read as effective
 support, not always literal historical trade count.
@@ -280,20 +276,20 @@ support, not always literal historical trade count.
 The default profile is:
 
 ```text
-continuation    : 6c edge, 60-255s TTE
-mean reversion  : 10c edge, 60-255s TTE
+continuation    : 5c edge, 45-265s TTE
+mean reversion  : 7c edge, 45-265s TTE
 ```
 
 Current day/session/style overrides are stored in
-`strategy/z6_fullraw_hl90_weekday_v1/entry_profiles.json` and documented in
-`strategy/z6_fullraw_hl90_weekday_v1/README.md`.
+`strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/entry_profiles.json`
+and documented in the strategy folder README.
 
 As of this README, the active shipped profile is:
 
 | Day | Session | Style | Edge | TTE |
 |---|---|---|---:|---:|
-| All | All | Continuation | 0.06 | 60-255 |
-| All | All | Mean reversion | 0.10 | 60-255 |
+| All | All | Continuation | 0.05 | 45-265 |
+| All | All | Mean reversion | 0.07 | 45-265 |
 
 ## Active Entry Rules
 
@@ -330,7 +326,7 @@ If both UP and DOWN qualify, the bot chooses:
 ## Removed From Active Entry Logic
 
 These mechanisms/files may still exist for research history or legacy support,
-but they are not part of the active `z6_fullraw_hl90_weekday_v1` entry path:
+but they are not part of the active `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1` entry path:
 
 - twelve two-hour policy session buckets
 - raw signed-BPS policy buckets
@@ -421,7 +417,7 @@ stats_bot/
   strategy.py            legacy policy helpers and shared utilities
 
 strategy/
-  z6_fullraw_hl90_weekday_v1/
+  z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/
     policy_bundle.json   active production policy bundle
     entry_profiles.json  active edge/TTE overrides
     README.md            strategy artifact notes
@@ -494,8 +490,8 @@ STATS_MAX_ENTRY_PRICE=0.80
 STATS_WEEKEND_MIN_ENTRY_PRICE=0.20
 STATS_WEEKEND_MAX_ENTRY_PRICE=0.80
 STATS_ENTRY_START_BLOCK_SECONDS=45
-STATS_ENTRY_MIN_TTE_SECONDS=60
-STATS_ENTRY_MAX_TTE_SECONDS=255
+STATS_ENTRY_MIN_TTE_SECONDS=45
+STATS_ENTRY_MAX_TTE_SECONDS=265
 STATS_EXIT_POLICY_MODE=hold_to_resolution
 STATS_PAPER_FILL_MODEL=fast_limit
 STATS_PEAK_DRAWDOWN_KILL_USD=15

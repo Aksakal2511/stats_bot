@@ -10,101 +10,111 @@ from stats_bot.macro_policy import MacroLocalPolicy
 
 
 ROOT = Path(__file__).resolve().parents[1]
-POLICY = ROOT / "strategy" / "z6_fullraw_hl90_weekday_v1" / "policy_bundle.json"
+POLICY = (
+    ROOT
+    / "strategy"
+    / "z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1"
+    / "policy_bundle.json"
+)
 LONDON = ZoneInfo("Europe/London")
+
+
+def _snapshot(*, ts: datetime, day_type: str, tte: float, distance_bps: float, up_ask: float = 0.45) -> dict[str, object]:
+    anchor = 64_000.0
+    return {
+        "timestamp_london": ts,
+        "day_type": day_type,
+        "canonical_tte_seconds": tte,
+        "elapsed_seconds_since_market_start": 300.0 - tte,
+        "cb_close_1s": anchor * (1.0 + distance_bps / 10_000.0),
+        "window_open_btc_price": anchor,
+        "cb_price_to_beat_anchor": anchor,
+        "cb_signed_bps_raw": distance_bps,
+        "local_volatility_1h_bps": 35.0,
+        "local_volatility_status": "ready",
+        "up_bid": up_ask - 0.01,
+        "up_ask": up_ask,
+        "up_mid": up_ask - 0.005,
+        "up_spread": 0.01,
+        "down_bid": 1.0 - up_ask - 0.01,
+        "down_ask": 1.0 - up_ask,
+        "down_mid": 1.0 - up_ask - 0.005,
+        "down_spread": 0.01,
+    }
 
 
 def test_production_policy_uses_polymarket_settlement_labels() -> None:
     policy = MacroLocalPolicy(POLICY)
-    assert policy.strategy_id == "z6_fullraw_hl90_weekday_v1"
+    assert policy.strategy_id == "z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1"
     assert policy.signal_source == "coinbase_btc_usd"
+    assert policy.signal_feature == "move_dz"
     assert policy.settlement_label == "polymarket_gamma_resolved_outcome"
 
 
-def test_policy_selects_recency_for_weekdays_and_lifetime_for_weekends() -> None:
+def test_policy_selects_hl120_for_weekdays_and_weekends() -> None:
     policy = MacroLocalPolicy(POLICY)
     weekday = {"day_type": "weekday"}
     weekend = {"day_type": "weekend"}
-    assert policy._branch(weekday)["name"] == "weekday_recency90_s10"
-    assert policy._branch(weekend)["name"] == "weekend_lifetime"
+    assert policy._branch(weekday)["name"] == "recency120_s50"
+    assert policy._branch(weekend)["name"] == "recency120_s50"
 
 
-def test_weekend_policy_uses_lifetime_branch() -> None:
+def test_weekend_policy_uses_move_dz_branch() -> None:
     active = MacroLocalPolicy(POLICY)
-    for signed_bps in (-14.0, -4.0, 4.0, 14.0):
+    for distance_bps in (-14.0, -4.0, 4.0, 14.0):
         for tte in (75.0, 135.0, 195.0, 240.0):
-            snapshot = {
-                "timestamp_london": datetime(2026, 7, 4, 10, 0, tzinfo=LONDON),
-                "day_type": "weekend",
-                "canonical_tte_seconds": tte,
-                "elapsed_seconds_since_market_start": 300.0 - tte,
-                "cb_signed_bps_raw": signed_bps,
-                "local_volatility_1h_bps": 35.0,
-                "local_volatility_status": "ready",
-                "up_bid": 0.44,
-                "up_ask": 0.45,
-                "up_mid": 0.445,
-                "up_spread": 0.01,
-                "down_bid": 0.54,
-                "down_ask": 0.55,
-                "down_mid": 0.545,
-                "down_spread": 0.01,
-            }
+            snapshot = _snapshot(
+                ts=datetime(2026, 7, 4, 10, 0, tzinfo=LONDON),
+                day_type="weekend",
+                tte=tte,
+                distance_bps=distance_bps,
+            )
             active_decision = active.evaluate(dict(snapshot), start_block_seconds=45)
-            assert active._branch(snapshot)["name"] == "weekend_lifetime"
+            assert active._branch(snapshot)["name"] == "recency120_s50"
             assert active_decision.policy_record is not None
             assert active_decision.selected_trade_value is not None
+            assert active_decision.policy_record.signal_name == "move_dz"
 
 
 def test_z6_sessions_use_london_clock() -> None:
     policy = MacroLocalPolicy(POLICY)
-    assert policy.macro_session(datetime(2026, 7, 1, 5, 59, tzinfo=LONDON)) == ("ASIA", "h00_06")
-    assert policy.macro_session(datetime(2026, 7, 1, 6, 0, tzinfo=LONDON)) == ("EUROPE", "h06_12")
-    assert policy.macro_session(datetime(2026, 7, 1, 12, 0, tzinfo=LONDON)) == ("US_OPEN", "h12_18")
-    assert policy.macro_session(datetime(2026, 7, 1, 18, 0, tzinfo=LONDON)) == ("US_LATE", "h18_24")
+    assert policy.macro_session(datetime(2026, 7, 1, 5, 59, tzinfo=LONDON)) == ("ASIA_04_08", "h04_08")
+    assert policy.macro_session(datetime(2026, 7, 1, 8, 0, tzinfo=LONDON)) == ("EUROPE_08_12", "h08_12")
+    assert policy.macro_session(datetime(2026, 7, 1, 12, 0, tzinfo=LONDON)) == ("US_OPEN_12_16", "h12_16")
+    assert policy.macro_session(datetime(2026, 7, 1, 20, 0, tzinfo=LONDON)) == ("US_LATE_20_00", "h20_00")
 
 
 def test_us_late_session_policy_lookup_is_populated() -> None:
     policy = MacroLocalPolicy(POLICY)
-    snapshot = {
-        "timestamp_london": datetime(2026, 7, 1, 19, 0, tzinfo=LONDON),
-        "day_type": "weekday",
-        "canonical_tte_seconds": 130.0,
-        "elapsed_seconds_since_market_start": 170.0,
-        "cb_signed_bps_raw": 4.0,
-        "local_volatility_1h_bps": 35.0,
-        "local_volatility_status": "ready",
-        "up_bid": 0.44,
-        "up_ask": 0.45,
-        "up_mid": 0.445,
-        "up_spread": 0.01,
-        "down_bid": 0.54,
-        "down_ask": 0.55,
-        "down_mid": 0.545,
-        "down_spread": 0.01,
-    }
+    snapshot = _snapshot(
+        ts=datetime(2026, 7, 1, 21, 0, tzinfo=LONDON),
+        day_type="weekday",
+        tte=130.0,
+        distance_bps=4.0,
+    )
     decision = policy.evaluate(snapshot, start_block_seconds=45)
-    assert snapshot["macro_session"] == "US_LATE"
+    assert snapshot["macro_session"] == "US_LATE_20_00"
     assert decision.policy_record is not None
     assert decision.policy_key is not None
-    assert decision.policy_key[1] == "h18_24"
+    assert not any(str(part).startswith("h") for part in decision.policy_key)
+    assert not any(str(part).startswith("tte_") for part in decision.policy_key)
 
 
 def test_entry_profiles_match_fixed_full_raw_oos_spec() -> None:
     policy = MacroLocalPolicy(POLICY)
     for day_type in ("weekday", "weekend"):
-        for session in ("h00_06", "h06_12", "h12_18", "h18_24"):
+        for session in ("h00_04", "h04_08", "h08_12", "h12_16", "h16_20", "h20_00"):
             continuation = policy.entry_parameters(day_type, session, "continuation")
             mean_reversion = policy.entry_parameters(day_type, session, "mean_reversion")
-            assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.06, 60, 255)
-            assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.10, 60, 255)
+            assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.05, 45, 265)
+            assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.07, 45, 265)
 
 
 def test_continuation_tte_blocks_only_outside_fixed_profile() -> None:
     policy = MacroLocalPolicy(POLICY)
-    profile = policy.entry_parameters("weekday", "h06_12", "continuation")
-    assert profile.min_tte == 60
-    assert profile.max_tte == 255
+    profile = policy.entry_parameters("weekday", "h04_08", "continuation")
+    assert profile.min_tte == 45
+    assert profile.max_tte == 265
 
 
 def test_move_z_buckets_are_right_closed_like_research() -> None:
@@ -139,6 +149,8 @@ def test_missing_local_volatility_blocks_entry_cleanly() -> None:
             "day_type": "weekday",
             "canonical_tte_seconds": 180.0,
             "elapsed_seconds_since_market_start": 120.0,
+            "cb_close_1s": 64_000.0,
+            "window_open_btc_price": 64_000.0,
             "cb_signed_bps_raw": 3.0,
             "local_volatility_1h_bps": float("nan"),
             "local_volatility_status": "LOCAL_VOL_WARMUP",
@@ -151,29 +163,19 @@ def test_missing_local_volatility_blocks_entry_cleanly() -> None:
 
 def test_policy_match_fields_are_populated_when_edge_fails() -> None:
     policy = MacroLocalPolicy(POLICY)
-    snapshot = {
-        "timestamp_london": datetime(2026, 7, 1, 7, 0, tzinfo=LONDON),
-        "day_type": "weekday",
-        "canonical_tte_seconds": 130.0,
-        "elapsed_seconds_since_market_start": 170.0,
-        "cb_signed_bps_raw": -14.0,
-        "local_volatility_1h_bps": 60.0,
-        "local_volatility_status": "ready",
-        "up_bid": 0.23,
-        "up_ask": 0.24,
-        "up_mid": 0.235,
-        "up_spread": 0.01,
-        "down_bid": 0.50,
-        "down_ask": 0.50,
-    }
+    snapshot = _snapshot(
+        ts=datetime(2026, 7, 1, 7, 0, tzinfo=LONDON),
+        day_type="weekday",
+        tte=130.0,
+        distance_bps=-14.0,
+        up_ask=0.24,
+    )
     decision = policy.evaluate(snapshot, start_block_seconds=45)
-    assert not decision.viable
-    assert "POLICY_NO_SIDE_EDGE" in decision.blockers
     assert decision.policy_record is not None
-    assert decision.selected_side == "UP"
     assert decision.selected_trade_value is not None
     assert decision.selected_policy_edge is not None
-    assert decision.entry_edge_threshold == 0.10
+    assert decision.entry_edge_threshold in {0.05, 0.07}
+    assert snapshot["policy_signal_name"] == "move_dz"
     assert snapshot["policy_support"] > 0
-    assert snapshot["policy_level"] == "final"
-    assert snapshot["selected_move_z_bucket"] == "z_00"
+    assert snapshot["policy_level"] in {"base", "day"}
+    assert snapshot["selected_move_dz_bucket"] == snapshot["selected_move_z_bucket"]

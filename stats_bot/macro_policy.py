@@ -20,6 +20,7 @@ class MacroPolicyMatch:
     level: str
     move_z: float
     move_z_bucket: str
+    signal_name: str
     price_bucket: str
     trade_style: str
     bid: float
@@ -46,6 +47,7 @@ class MacroLocalPolicy:
         self.training_start = str(payload["training_start"])
         self.training_end = str(payload["training_end"])
         self.signal_source = str(payload.get("signal_source") or "coinbase_btc_usd")
+        self.signal_feature = str(payload.get("signal_feature") or "move_z").strip().lower()
         self.settlement_label = str(payload.get("settlement_label") or "unspecified")
         self.entry = dict(payload["entry"])
         profile_path = path.with_name("entry_profiles.json")
@@ -83,6 +85,8 @@ class MacroLocalPolicy:
         self.feature_config = default_branch["feature_config"]
         self.levels = default_branch["levels"]
         self.lookups = default_branch["lookups"]
+        if self.signal_feature not in {"move_z", "move_dz"}:
+            raise ValueError(f"Unsupported macro policy signal_feature: {self.signal_feature!r}")
 
     @staticmethod
     def _build_branch(name: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +134,15 @@ class MacroLocalPolicy:
             width = int(candidate.get("session_width_hours") or 6)
             start = numeric_hour // width * width
             session_label = f"h{start:02d}_{min(start + width, 24):02d}"
+            wrapped_label = f"h{start:02d}_00"
+            z_edges = self.feature_config.get("z_edges", {})
+            has_wrapped_key = (
+                wrapped_label in self.session_display_names
+                or wrapped_label in z_edges
+                or any(str(key).endswith(f"|{wrapped_label}") for key in z_edges)
+            )
+            if start + width >= 24 and has_wrapped_key:
+                session_label = wrapped_label
         elif numeric_hour < 8:
             session_label = "h00_08"
         elif numeric_hour < 14:
@@ -179,32 +192,77 @@ class MacroLocalPolicy:
         boundaries = [-edge for edge in reversed(positive)] + positive
         return f"z_{bisect.bisect_left(boundaries, value):02d}"
 
+    @staticmethod
+    def _first_finite(snapshot: dict[str, Any], *names: str) -> float | None:
+        for name in names:
+            value = finite_float(snapshot.get(name))
+            if value is not None:
+                return value
+        return None
+
+    @staticmethod
+    def _z_edges(feature_config: dict[str, Any], day_type: str, session_label: str) -> list[float] | None:
+        edges_by_key = feature_config.get("z_edges", {})
+        return (
+            edges_by_key.get(f"{day_type}|{session_label}")
+            or edges_by_key.get(session_label)
+            or edges_by_key.get(str(day_type))
+            or edges_by_key.get("GLOBAL")
+        )
+
+    def _side_signal_value(self, snapshot: dict[str, Any], side: str) -> tuple[float, float] | None:
+        local_rv = finite_float(snapshot.get("local_volatility_1h_bps"))
+        if local_rv is None or local_rv <= 0.0:
+            return None
+        tte = finite_float(snapshot.get("canonical_tte_seconds"))
+        elapsed = finite_float(snapshot.get("elapsed_seconds_since_market_start"))
+        if elapsed is None and tte is not None:
+            elapsed = 300.0 - tte
+
+        if self.signal_feature == "move_dz":
+            close = finite_float(snapshot.get("cb_close_1s"))
+            anchor = self._first_finite(
+                snapshot,
+                "cb_price_to_beat_anchor",
+                "price_to_beat",
+                "window_open_btc_price",
+            )
+            if None in (close, anchor, tte) or anchor is None or anchor <= 0.0:
+                return None
+            distance_bps = 10_000.0 * (float(close) - float(anchor)) / float(anchor)
+            remaining_vol = max(0.05, local_rv * math.sqrt(max(1.0, float(tte)) / 3600.0))
+            aligned_bps = distance_bps if side == "UP" else -distance_bps
+            return float(aligned_bps / remaining_vol), float(aligned_bps)
+
+        signed_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
+        if None in (signed_bps, elapsed):
+            return None
+        expected_move = max(0.05, local_rv * math.sqrt(max(1.0, float(elapsed)) / 3600.0))
+        aligned_bps = signed_bps if side == "UP" else -signed_bps
+        return float(aligned_bps / expected_move), float(aligned_bps)
+
     def _annotate_side_signal(self, snapshot: dict[str, Any], side: str) -> tuple[float, str] | None:
         branch = self._branch(snapshot)
         feature_config = branch["feature_config"]
         day_type = str(snapshot.get("day_type") or "")
         _, session_label = self.macro_session(snapshot.get("timestamp_london"))
-        signed_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
-        local_rv = finite_float(snapshot.get("local_volatility_1h_bps"))
-        elapsed = finite_float(snapshot.get("elapsed_seconds_since_market_start"))
-        tte = finite_float(snapshot.get("canonical_tte_seconds"))
-        if elapsed is None and tte is not None:
-            elapsed = 300.0 - tte
-        if None in (session_label, signed_bps, local_rv, elapsed):
+        if session_label is None:
             return None
-        if local_rv <= 0.0:
-            return None
-        edge_key = f"{day_type}|{session_label}"
-        z_edges = feature_config["z_edges"].get(edge_key)
+        z_edges = self._z_edges(feature_config, day_type, session_label)
         if z_edges is None:
             return None
-        expected_move = max(0.05, local_rv * math.sqrt(max(1.0, elapsed) / 3600.0))
-        aligned_bps = signed_bps if side == "UP" else -signed_bps
-        move_z = aligned_bps / expected_move
-        move_z_bucket = self._move_z_bucket(move_z, z_edges)
-        snapshot[f"{side.lower()}_move_z"] = float(move_z)
-        snapshot[f"{side.lower()}_move_z_bucket"] = move_z_bucket
-        return float(move_z), move_z_bucket
+        signal = self._side_signal_value(snapshot, side)
+        if signal is None:
+            return None
+        signal_value, _ = signal
+        move_z_bucket = self._move_z_bucket(signal_value, z_edges)
+        side_key = side.lower()
+        snapshot["policy_signal_name"] = self.signal_feature
+        snapshot[f"{side_key}_{self.signal_feature}"] = float(signal_value)
+        snapshot[f"{side_key}_{self.signal_feature}_bucket"] = move_z_bucket
+        snapshot[f"{side_key}_move_z"] = float(signal_value)
+        snapshot[f"{side_key}_move_z_bucket"] = move_z_bucket
+        return float(signal_value), move_z_bucket
 
     def _side_match(self, snapshot: dict[str, Any], side: str) -> MacroPolicyMatch | None:
         branch = self._branch(snapshot)
@@ -212,28 +270,27 @@ class MacroLocalPolicy:
         day_type = str(snapshot.get("day_type") or "")
         macro_name, session_label = self.macro_session(snapshot.get("timestamp_london"))
         tte = finite_float(snapshot.get("canonical_tte_seconds"))
-        signed_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
-        local_rv = finite_float(snapshot.get("local_volatility_1h_bps"))
         bid = finite_float(snapshot.get(f"{side.lower()}_bid"))
         ask = finite_float(snapshot.get(f"{side.lower()}_ask"))
-        if None in (macro_name, session_label, tte, signed_bps, local_rv, bid, ask):
+        if None in (macro_name, session_label, bid, ask):
             return None
-        if local_rv <= 0.0 or ask <= bid:
+        if ask <= bid:
             return None
         price_bucket = bucket_price(ask)
-        tte_bucket = bucket_tte(tte)
-        if price_bucket is None or tte_bucket is None:
+        uses_tte_bucket = any("tte_bucket" in keys for _, keys, _ in branch["lookups"])
+        tte_bucket = bucket_tte(tte) if tte is not None else None
+        if price_bucket is None or (uses_tte_bucket and tte_bucket is None):
             return None
-        elapsed = max(1.0, 300.0 - tte)
-        expected_move = max(0.05, local_rv * math.sqrt(elapsed / 3600.0))
-        aligned_bps = signed_bps if side == "UP" else -signed_bps
-        move_z = aligned_bps / expected_move
-        edge_key = f"{day_type}|{session_label}"
-        z_edges = feature_config["z_edges"].get(edge_key)
+        signal = self._side_signal_value(snapshot, side)
+        if signal is None:
+            return None
+        move_z, aligned_bps = signal
+        z_edges = self._z_edges(feature_config, day_type, session_label)
         if z_edges is None:
             return None
         move_z_bucket = self._move_z_bucket(move_z, z_edges)
-        style = "continuation" if aligned_bps > 0.01 else "mean_reversion" if aligned_bps < -0.01 else "neutral"
+        style_epsilon = 0.01 if self.signal_feature == "move_z" else 1e-12
+        style = "continuation" if aligned_bps > style_epsilon else "mean_reversion" if aligned_bps < -style_epsilon else "neutral"
         fields = {
             "day_type": day_type,
             "seasonal_session": session_label,
@@ -257,13 +314,14 @@ class MacroLocalPolicy:
         spread = finite_float(snapshot.get(f"{side.lower()}_spread"))
         return MacroPolicyMatch(
             side=side,
-            key=(day_type, session_label, tte_bucket, move_z_bucket, price_bucket, side),
+            key=tuple(str(part) for part in (*matched_key, side)),
             value=float(matched_row["regularized_value"]),
             support=int(round(float(matched_row["observations"]))),
             unique_markets=int(matched_row.get("unique_markets") or 0),
             level=matched_level,
             move_z=float(move_z),
             move_z_bucket=move_z_bucket,
+            signal_name=self.signal_feature,
             price_bucket=price_bucket,
             trade_style=style,
             bid=float(bid),
@@ -276,6 +334,7 @@ class MacroLocalPolicy:
         blockers: list[str] = []
         if snapshot is None:
             return _empty_decision(("NO_SNAPSHOT",))
+        snapshot["policy_signal_name"] = self.signal_feature
         macro_name, _ = self.macro_session(snapshot.get("timestamp_london"))
         snapshot["macro_session"] = macro_name
         for side in ("UP", "DOWN"):
@@ -290,8 +349,13 @@ class MacroLocalPolicy:
             blockers.append("ELAPSED_SECONDS_MISSING")
         elif elapsed < start_block_seconds:
             blockers.append("WINDOW_START_BLOCK_ACTIVE")
-        if finite_float(snapshot.get("cb_signed_bps_raw")) is None:
+        if self.signal_feature == "move_z" and finite_float(snapshot.get("cb_signed_bps_raw")) is None:
             blockers.append("CB_SIGNED_BPS_MISSING")
+        if self.signal_feature == "move_dz":
+            if finite_float(snapshot.get("cb_close_1s")) is None:
+                blockers.append("BTC_CLOSE_MISSING")
+            if self._first_finite(snapshot, "cb_price_to_beat_anchor", "price_to_beat", "window_open_btc_price") is None:
+                blockers.append("PRICE_TO_BEAT_MISSING")
         local_rv = finite_float(snapshot.get("local_volatility_1h_bps"))
         if local_rv is None:
             blockers.append(str(snapshot.get("local_volatility_status") or "LOCAL_VOL_WARMUP"))
@@ -314,6 +378,8 @@ class MacroLocalPolicy:
             )
             side_threshold = parameters.edge
             snapshot[f"{side.lower()}_policy_value"] = match.value
+            snapshot[f"{side.lower()}_{match.signal_name}"] = match.move_z
+            snapshot[f"{side.lower()}_{match.signal_name}_bucket"] = match.move_z_bucket
             snapshot[f"{side.lower()}_move_z"] = match.move_z
             snapshot[f"{side.lower()}_move_z_bucket"] = match.move_z_bucket
             limit = min(match.ask + 0.01, float(self.entry["max_price"]))
@@ -342,6 +408,9 @@ class MacroLocalPolicy:
             best_match, best_edge, best_parameters, _, _ = best
             snapshot.update({
                 "macro_session": self.macro_session(snapshot.get("timestamp_london"))[0],
+                "policy_signal_name": best_match.signal_name,
+                f"selected_{best_match.signal_name}": best_match.move_z,
+                f"selected_{best_match.signal_name}_bucket": best_match.move_z_bucket,
                 "selected_move_z": best_match.move_z,
                 "selected_move_z_bucket": best_match.move_z_bucket,
                 "selected_price_bucket": best_match.price_bucket,
@@ -375,6 +444,9 @@ class MacroLocalPolicy:
         ).edge
         snapshot.update({
             "macro_session": self.macro_session(snapshot.get("timestamp_london"))[0],
+            "policy_signal_name": selected.signal_name,
+            f"selected_{selected.signal_name}": selected.move_z,
+            f"selected_{selected.signal_name}_bucket": selected.move_z_bucket,
             "selected_move_z": selected.move_z,
             "selected_move_z_bucket": selected.move_z_bucket,
             "selected_price_bucket": selected.price_bucket,

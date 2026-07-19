@@ -23,7 +23,12 @@ DEFAULT_VOLATILITY_EDGES_FILE = (
     REPO_ROOT / "strategy" / "bucket_config" / "volatility_bucket_edges_offset250_12bucket_2h_cb_sources.json"
 )
 DEFAULT_LOG_DIR = REPO_ROOT / "logs"
-DEFAULT_MACRO_POLICY_BUNDLE = REPO_ROOT / "strategy" / "z6_fullraw_hl90_weekday_v1" / "policy_bundle.json"
+DEFAULT_MACRO_POLICY_BUNDLE = (
+    REPO_ROOT
+    / "strategy"
+    / "z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1"
+    / "policy_bundle.json"
+)
 
 
 def load_env_file(path: Path) -> None:
@@ -292,8 +297,8 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         weekend_min_entry_price=weekend_min_entry_price,
         weekend_max_entry_price=weekend_max_entry_price,
         entry_start_block_seconds=max(0, _int_env("STATS_ENTRY_START_BLOCK_SECONDS", 45)),
-        entry_min_tte_seconds=max(0, _int_env("STATS_ENTRY_MIN_TTE_SECONDS", 60)),
-        entry_max_tte_seconds=max(0, _int_env("STATS_ENTRY_MAX_TTE_SECONDS", 255)),
+        entry_min_tte_seconds=max(0, _int_env("STATS_ENTRY_MIN_TTE_SECONDS", 45)),
+        entry_max_tte_seconds=max(0, _int_env("STATS_ENTRY_MAX_TTE_SECONDS", 265)),
         cooldown_seconds=max(0, _int_env("STATS_COOLDOWN_SECONDS", 10)),
         maker_min_spread_ticks=max(1, _int_env("STATS_MAKER_MIN_SPREAD_TICKS", 1)),
         entry_quote_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_QUOTE_MAX_AGE_SECONDS", 1.5)),
