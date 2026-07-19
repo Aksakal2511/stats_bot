@@ -4094,8 +4094,9 @@ class StatsBot:
             )
             selected_signal = snapshot.get(f"selected_{signal_name}")
             if selected_signal is not None:
+                selected_label = f"selected_{signal_label}"
                 lines.append(
-                    f"    selected_{signal_label}: {_fmt(selected_signal, 3)} "
+                    f"    {selected_label:<18}: {_fmt(selected_signal, 3)} "
                     f"({snapshot.get(f'selected_{signal_name}_bucket') or 'NA'})"
                 )
             lines.append(f"    tte_bucket        : {snapshot.get('tte_bucket')}")
