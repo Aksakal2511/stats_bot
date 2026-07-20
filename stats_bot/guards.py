@@ -8,8 +8,8 @@ from typing import Any
 from .strategy import finite_float
 
 
-BPS_YES_CONFLICT_GUARD_START_TTE_SECONDS = 209.0
-BPS_YES_CONFLICT_BPS_THRESHOLD = 0.5
+BPS_YES_CONFLICT_GUARD_START_TTE_SECONDS = 270.0
+BPS_YES_CONFLICT_BPS_THRESHOLD = 0.05
 BPS_YES_CONFLICT_UP_MIN_YES_MID = 0.45
 BPS_YES_CONFLICT_DOWN_MAX_YES_MID = 0.55
 BPS_YES_CONFLICT_GUARD_MIN_PERSISTENCE_SECONDS = 3
@@ -220,6 +220,20 @@ class BpsYesGuard:
             setattr(self, attr_last, current_second)
         return int(getattr(self, attr_count))
 
+    def _contradictory(self, *, signed_bps_raw: float, yes_mid: float, side: str | None) -> bool:
+        normalized_side = str(side or "").upper()
+        if normalized_side == "UP":
+            return signed_bps_raw > BPS_YES_CONFLICT_BPS_THRESHOLD and yes_mid < BPS_YES_CONFLICT_UP_MIN_YES_MID
+        if normalized_side == "DOWN":
+            return signed_bps_raw < -BPS_YES_CONFLICT_BPS_THRESHOLD and yes_mid > BPS_YES_CONFLICT_DOWN_MAX_YES_MID
+        return (
+            (signed_bps_raw > BPS_YES_CONFLICT_BPS_THRESHOLD and yes_mid < BPS_YES_CONFLICT_UP_MIN_YES_MID)
+            or (
+                signed_bps_raw < -BPS_YES_CONFLICT_BPS_THRESHOLD
+                and yes_mid > BPS_YES_CONFLICT_DOWN_MAX_YES_MID
+            )
+        )
+
     def update_entry_guard(self, *, now_utc: datetime, snapshot: dict[str, Any] | None) -> tuple[bool, str | None]:
         if snapshot is None:
             return False, None
@@ -233,15 +247,10 @@ class BpsYesGuard:
             and yes_mid is not None
             and math.isfinite(tte)
             and tte <= BPS_YES_CONFLICT_GUARD_START_TTE_SECONDS
-            and (
-                (
-                    signed_bps_raw > BPS_YES_CONFLICT_BPS_THRESHOLD
-                    and yes_mid < BPS_YES_CONFLICT_UP_MIN_YES_MID
-                )
-                or (
-                    signed_bps_raw < -BPS_YES_CONFLICT_BPS_THRESHOLD
-                    and yes_mid > BPS_YES_CONFLICT_DOWN_MAX_YES_MID
-                )
+            and self._contradictory(
+                signed_bps_raw=signed_bps_raw,
+                yes_mid=yes_mid,
+                side=None,
             )
         )
         observed = self._bump_persistence(
@@ -293,17 +302,11 @@ class BpsYesGuard:
             return False, None
 
         side = str(held_side).upper()
-        contradictory = False
-        if side == "UP":
-            contradictory = (
-                signed_bps_raw > BPS_YES_CONFLICT_BPS_THRESHOLD
-                and yes_mid < BPS_YES_CONFLICT_UP_MIN_YES_MID
-            )
-        elif side == "DOWN":
-            contradictory = (
-                signed_bps_raw < -BPS_YES_CONFLICT_BPS_THRESHOLD
-                and yes_mid > BPS_YES_CONFLICT_DOWN_MAX_YES_MID
-            )
+        contradictory = self._contradictory(
+            signed_bps_raw=signed_bps_raw,
+            yes_mid=yes_mid,
+            side=side,
+        )
         observed = self._bump_persistence(
             current_second=current_second,
             condition=contradictory,

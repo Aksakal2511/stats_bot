@@ -59,7 +59,7 @@ def test_dashboard_signed_bps_and_net_flow_diagnostics() -> None:
 
     text = bot._dashboard_signed_bps_text({"cb_signed_bps_raw": 1.03})
 
-    assert text == "1.03 (cb) | 1.01 (cl) | avg 1.02"
+    assert text == "1.03"
     assert bot._dashboard_net_signed_flow_text() == "+6.00 BTC (30s)"
 
 
@@ -87,7 +87,7 @@ def test_dashboard_signed_bps_avg_ignores_display_zero_sources() -> None:
 
     text = bot._dashboard_signed_bps_text({"cb_signed_bps_raw": 2.0})
 
-    assert text == "2.00 (cb) | NA (cl) | avg 2.00"
+    assert text == "2.00"
 
 
 def test_polymarket_reference_feed_extracts_chainlink_btc_price() -> None:

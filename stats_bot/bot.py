@@ -950,18 +950,7 @@ class StatsBot:
 
     def _dashboard_signed_bps_text(self, snapshot: dict[str, Any]) -> str:
         coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
-        chainlink_bps = self._feed_window_signed_bps(self.pm_chainlink)
-        values = [
-            value
-            for value in (coinbase_bps, chainlink_bps)
-            if value is not None and math.isfinite(value) and abs(round(value, 2)) > 0.0
-        ]
-        avg_bps = sum(values) / len(values) if values else None
-        return (
-            f"{_fmt(coinbase_bps, 2)} (cb) | "
-            f"{_fmt(chainlink_bps, 2)} (cl) | "
-            f"avg {_fmt(avg_bps, 2)}"
-        )
+        return _fmt(coinbase_bps, 2)
 
     def _dashboard_net_signed_flow_text(self) -> str:
         lookback_seconds = getattr(self.config, "pressure_signed_volume_lookback_seconds", 30)
@@ -3642,10 +3631,12 @@ class StatsBot:
         if getattr(self, "peak_drawdown_kill_active", False):
             self.last_guard_blocker = "PEAK_DRAWDOWN_KILL"
             decision = self._entry_decision_with_blockers(decision, ("PEAK_DRAWDOWN_KILL",))
-        active, reason = self.guard.update_entry_guard(now_utc=now_utc, snapshot=snapshot)
-        if active and reason:
-            self.last_guard_blocker = reason
-            decision = self._entry_decision_with_blockers(decision, (reason,))
+        bps_yes_guard_enabled = bool(getattr(self.config, "bps_yes_guard_enabled", True))
+        if bps_yes_guard_enabled:
+            active, reason = self.guard.update_entry_guard(now_utc=now_utc, snapshot=snapshot)
+            if active and reason:
+                self.last_guard_blocker = reason
+                decision = self._entry_decision_with_blockers(decision, (reason,))
         session_style_blockers, effective_entry_edge = self._session_style_entry_blockers(now_utc, snapshot, decision)
         if decision is not None and effective_entry_edge is not None:
             decision = self._entry_decision_with_entry_threshold(decision, effective_entry_edge)
@@ -4182,13 +4173,16 @@ class StatsBot:
             lines.append(f"    tte               : {_fmt(detail.get('tte'), 1)}")
             lines.append(f"    adverse_btc       : {_fmt(detail.get('pressure_adverse_volume_btc'), 3)}")
             lines.append(f"    signed_btc        : {_fmt(detail.get('pressure_signed_volume_btc'), 3)}")
+            lines.append(f"    lookback_seconds  : {_fmt(detail.get('pressure_volume_lookback_seconds'), 0)}")
             lines.append(f"    threshold_btc     : {_fmt(detail.get('pressure_volume_threshold_btc'), 3)}")
             lines.append(f"    source            : {detail.get('pressure_source') or 'NA'}")
             if detail.get("hedge_side"):
                 lines.append(f"    hedge_side        : {detail.get('hedge_side')}")
                 lines.append(f"    hedge_ask/price   : {_fmt(detail.get('hedge_ask'))} / {_fmt(detail.get('hedge_price'))}")
                 lines.append(f"    hedge_fee         : {_fmt(detail.get('hedge_fee'), 4)}")
-        if self.guard.persistence_seconds or self.guard.cooldown_until_utc or self.guard.window_blocked:
+        if bool(getattr(self.config, "bps_yes_guard_enabled", True)) and (
+            self.guard.persistence_seconds or self.guard.cooldown_until_utc or self.guard.window_blocked
+        ):
             lines.append("")
             lines.append("  BPS YES GUARD")
             lines.append(f"    persistence_secs  : {self.guard.persistence_seconds}")
@@ -4264,12 +4258,19 @@ class StatsBot:
             f"weekday price={self.config.min_entry_price:.2f}-{self.config.max_entry_price:.2f} "
             f"weekend price={self.config.weekend_min_entry_price:.2f}-{self.config.weekend_max_entry_price:.2f}"
         )
+        bps_yes_guard_enabled = bool(getattr(self.config, "bps_yes_guard_enabled", True))
         if self.config.exit_policy_mode == "hold_to_resolution":
             log.info("  exit        : hold to resolution; all live tactical/guard sells disabled")
-            log.info("  guard       : BPS_YES_GUARD entry blocking")
+            if bps_yes_guard_enabled:
+                log.info("  guard       : BPS_YES_GUARD entry blocking")
+            else:
+                log.info("  guard       : BPS_YES_GUARD disabled")
         else:
             log.info("  exit        : FOK SELL first; if it fails, repeated FAK SELL until shares are nil excluding dust")
-            log.info("  guard       : BPS_YES_GUARD entry/position guards")
+            if bps_yes_guard_enabled:
+                log.info("  guard       : BPS_YES_GUARD entry/position guards")
+            else:
+                log.info("  guard       : BPS_YES_GUARD disabled")
         log.info(f"  session     : {self.session_name}")
         log.info(f"  logs        : {self.session_dir}")
         if self.pm.wallet_address:
@@ -4329,7 +4330,10 @@ class StatsBot:
                             snapshot=snapshot,
                             policy_cube=self.policy_cube,
                         )
-                    if self.config.exit_policy_mode != "hold_to_resolution":
+                    if (
+                        bool(getattr(self.config, "bps_yes_guard_enabled", True))
+                        and self.config.exit_policy_mode != "hold_to_resolution"
+                    ):
                         force_exit, force_reason = self.guard.update_position_exit_guard(
                             now_utc=now_utc,
                             snapshot=snapshot,

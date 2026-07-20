@@ -66,7 +66,7 @@ elapsed >= 45 seconds
 bid and ask are valid and ask > bid
 policy value - current ask >= style profile edge
 policy value - min(current ask + 0.01, 0.80) >= style profile edge
-BPS_YES_GUARD is inactive
+BPS_YES_GUARD is inactive for the current second/window
 session/style drawdown guard is inactive by default
 run peak-realised drawdown kill is inactive
 ```
@@ -75,4 +75,6 @@ If both sides qualify, choose larger edge, then larger value, then UP as a deter
 
 ## Defensive Guard
 
-The FFM/pressure signed-volume hedge guard is disabled by default for this deployment (`STATS_PRESSURE_DEFENCE_ENABLED=false`). Binance spot signed flow remains on the dashboard as a 30s diagnostic, but it does not select entries or trigger hedges unless the guard is explicitly re-enabled.
+The BPS/YES contradiction guard remains implemented but is disabled for the current live strategy (`STATS_BPS_YES_GUARD_ENABLED=false`). When re-enabled, it compares Coinbase signed BPS to the Polymarket UP/YES mid and blocks incoherent windows through `TTE <= 270s`: `cb_bps > +0.05` with UP mid below `0.45`, or `cb_bps < -0.05` with UP mid above `0.55`.
+
+The FFM/pressure signed-volume hedge guard is enabled in live `.env` for this deployment. It watches Binance spot taker-signed flow while a position is open, arms in the last 60 seconds, and buys one opposite-side hedge when the held side is trading at 0.75-1.00 and the rolling 40 second adverse net flow reaches 5 BTC. The hedge uses the opposite outcome, full held share size, and a GTC buy limit of 0.99. A submitted, filled, failed, or already-attempted pressure hedge prevents any second hedge order for that position.

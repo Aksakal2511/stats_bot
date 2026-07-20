@@ -119,6 +119,7 @@ class BotConfig:
     pressure_hedge_fraction: float
     pressure_max_hedge_ask: float
     pressure_hedge_limit_price: float
+    bps_yes_guard_enabled: bool
     session_style_drawdown_guard_enabled: bool
     max_loop_seconds: float | None
     once: bool
@@ -317,7 +318,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         pressure_arm_tte_seconds=max(0, _int_env("STATS_PRESSURE_ARM_TTE_SECONDS", _int_env("STATS_FFM_ARM_TTE_SECONDS", 60))),
         pressure_trigger_tte_seconds=max(
             0,
-            _int_env("STATS_PRESSURE_TRIGGER_TTE_SECONDS", _int_env("STATS_FFM_TRIGGER_TTE_SECONDS", 40)),
+            _int_env("STATS_PRESSURE_TRIGGER_TTE_SECONDS", _int_env("STATS_FFM_TRIGGER_TTE_SECONDS", 60)),
         ),
         pressure_max_tte_seconds=max(0, _int_env("STATS_PRESSURE_MAX_TTE_SECONDS", _int_env("STATS_FFM_ARM_TTE_SECONDS", 60))),
         pressure_z_threshold=max(0.0, _float_env("STATS_PRESSURE_Z_THRESHOLD", 2.0)),
@@ -326,16 +327,17 @@ def build_config(args: argparse.Namespace) -> BotConfig:
             1,
             _int_env(
                 "STATS_PRESSURE_SIGNED_VOLUME_LOOKBACK_SECONDS",
-                _int_env("STATS_FFM_SIGNED_VOLUME_LOOKBACK_SECONDS", 30),
+                _int_env("STATS_FFM_SIGNED_VOLUME_LOOKBACK_SECONDS", 40),
             ),
         ),
         pressure_adverse_volume_btc=max(
             0.0,
-            _float_env("STATS_PRESSURE_ADVERSE_VOLUME_BTC", _float_env("STATS_FFM_ADVERSE_VOLUME_BTC", 8.0)),
+            _float_env("STATS_PRESSURE_ADVERSE_VOLUME_BTC", _float_env("STATS_FFM_ADVERSE_VOLUME_BTC", 5.0)),
         ),
         pressure_hedge_fraction=max(0.0, min(1.0, _float_env("STATS_PRESSURE_HEDGE_FRACTION", 1.0))),
         pressure_max_hedge_ask=max(0.0, min(1.0, _float_env("STATS_PRESSURE_MAX_HEDGE_ASK", 0.99))),
         pressure_hedge_limit_price=max(0.01, min(0.99, _float_env("STATS_PRESSURE_HEDGE_LIMIT_PRICE", 0.99))),
+        bps_yes_guard_enabled=_bool_env("STATS_BPS_YES_GUARD_ENABLED", False),
         session_style_drawdown_guard_enabled=_bool_env("STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED", False),
         max_loop_seconds=max_loop_seconds,
         once=bool(args.once),

@@ -10,7 +10,13 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
-from stats_bot.guards import DrawdownGuard, BpsYesGuard, SessionStyleDrawdownGuard, normalised_5_share_pnl
+from stats_bot.guards import (
+    BPS_YES_CONFLICT_GUARD_START_TTE_SECONDS,
+    DrawdownGuard,
+    BpsYesGuard,
+    SessionStyleDrawdownGuard,
+    normalised_5_share_pnl,
+)
 from stats_bot.bot import (
     PresignLadderState,
     StatsBot,
@@ -18,6 +24,7 @@ from stats_bot.bot import (
     _policy_support_level,
     _submission_fill_attempt_counts,
 )
+from stats_bot.binance import BinanceTickerFeed
 from stats_bot.features import compute_live_snapshot
 from stats_bot.models import OpenPosition, PendingEntryOrder
 from stats_bot.polymarket import BookSnapshot, MarketInfo, MarketResolution, OrderResult, SignedBuyOrder
@@ -353,6 +360,82 @@ def test_bps_yes_guard_persistence_and_window_lock() -> None:
     active, reason = guard.update_entry_guard(now_utc=now + timedelta(seconds=6), snapshot={**snapshot, "up_mid": 0.50})
     assert active
     assert reason == "BPS_YES_CONFLICT_WINDOW_BLOCKED"
+
+
+def test_bps_yes_guard_uses_fixed_thresholds_and_270s_tte_boundary() -> None:
+    guard = BpsYesGuard()
+    now = datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc)
+    base = {"canonical_tte_seconds": 260, "local_volatility_1h_bps": 40.78}
+
+    active, reason = guard.update_entry_guard(
+        now_utc=now,
+        snapshot={**base, "cb_signed_bps_raw": 0.049, "up_mid": 0.449},
+    )
+    assert not active
+    assert reason is None
+
+    active, reason = guard.update_entry_guard(
+        now_utc=now + timedelta(seconds=1),
+        snapshot={**base, "cb_signed_bps_raw": 0.051, "up_mid": 0.449},
+    )
+    assert active
+    assert reason == "BPS_YES_CONFLICT_CONDITION_MET"
+
+    guard.reset_window()
+    active, reason = guard.update_entry_guard(
+        now_utc=now,
+        snapshot={
+            **base,
+            "canonical_tte_seconds": BPS_YES_CONFLICT_GUARD_START_TTE_SECONDS + 0.1,
+            "cb_signed_bps_raw": 2.0,
+            "up_mid": 0.20,
+        },
+    )
+    assert not active
+    assert reason is None
+
+
+def test_bps_yes_guard_can_be_disabled_in_bot_entry_path() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "entry_start_block_seconds": 45,
+            "bps_yes_guard_enabled": False,
+            "session_style_drawdown_guard_enabled": False,
+        },
+    )()
+    bot.guard = BpsYesGuard()
+    bot.peak_drawdown_kill_active = False
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("weekday", "z_06", "p40_to_p45", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.43,
+        selected_ask=0.44,
+        selected_mid=0.435,
+        selected_spread=0.01,
+        selected_trade_value=0.51,
+        selected_policy_edge=0.07,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.05,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+    bot.macro_policy = type("MacroPolicy", (), {"evaluate": lambda *_args, **_kwargs: decision})()
+
+    guarded = bot._entry_decision_with_guard(
+        datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc),
+        {"canonical_tte_seconds": 260, "cb_signed_bps_raw": 1.0, "up_mid": 0.44},
+    )
+
+    assert guarded is not None
+    assert guarded.viable
+    assert not guarded.blockers
+    assert bot.last_guard_blocker is None
 
 
 def test_one_tick_spread_is_valid_maker_quote() -> None:
@@ -909,6 +992,57 @@ def test_pressure_defence_requires_signed_volume_threshold() -> None:
     assert bot.active_position is not None
     assert bot.active_position.hedge_leg is None
     assert bot.active_position.pressure_defence_status == "armed"
+
+
+def test_pressure_defence_replays_0930_manipulation_trigger_shape() -> None:
+    result = OrderResult(True, "hedge-1", "MATCHED", matched_shares=5.0, price=0.23)
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+    assert bot.active_position is not None
+    bot.config.pressure_min_held_mid = 0.75
+    bot.config.pressure_trigger_tte_seconds = 60
+    bot.config.pressure_signed_volume_lookback_seconds = 40
+    bot.config.pressure_adverse_volume_btc = 5.0
+    bot.active_position.avg_entry_price = 0.37
+    bot.binance_spot = BinanceTickerFeed(name="binance_spot", url="wss://example.invalid")
+    bot._ffm_signed_volume_pressure = StatsBot._ffm_signed_volume_pressure.__get__(bot, StatsBot)
+
+    trigger_second = int((now + timedelta(seconds=267)).timestamp())
+    for second in range(trigger_second - 39, trigger_second + 1):
+        bot.binance_spot.upsert_second_bar(second, 64242.0, 0.0, signed_size=0.0)
+    bot.binance_spot.upsert_second_bar(trigger_second - 39, 64242.0, 0.00001, signed_size=0.00001)
+    bot.binance_spot.upsert_second_bar(trigger_second, 64242.0, 17.42001, signed_size=-17.42001)
+    bot._side_book = lambda side: BookSnapshot(
+        bid=0.22 if side == "DOWN" else 0.77,
+        ask=0.23 if side == "DOWN" else 0.78,
+        mid=0.225 if side == "DOWN" else 0.775,
+        spread=0.01,
+        bid_depth_total=10.0,
+        ask_depth_total=10.0,
+        best_bid_depth=5.0,
+        best_ask_depth=5.0,
+        captured_at_utc=now,
+    )
+    snapshot = {
+        "up_mid": 0.775,
+        "down_mid": 0.225,
+        "canonical_tte_seconds": 32.994,
+    }
+
+    bot._maybe_execute_pressure_defence(now + timedelta(seconds=267), snapshot)
+    bot._maybe_execute_pressure_defence(now + timedelta(seconds=268), snapshot)
+
+    assert bot.pm.post_count == 1
+    assert bot.pressure_hedges_submitted == 1
+    assert bot.pressure_hedges_filled == 1
+    assert bot.active_position.hedge_leg is not None
+    assert bot.active_position.hedge_leg.side == "DOWN"
+    assert bot.active_position.hedge_leg.avg_price == 0.23
+    assert bot.active_position.extra["pressure_defence_attempted"] is True
+    assert round(bot.last_pressure_defence["held_mid"], 3) == 0.775
+    assert round(bot.last_pressure_defence["pressure_signed_volume_btc"], 5) == -17.42
+    assert round(bot.last_pressure_defence["pressure_adverse_volume_btc"], 5) == 17.42
+    assert bot.last_pressure_defence["pressure_volume_lookback_seconds"] == 40
+    assert bot.last_pressure_defence["pressure_volume_threshold_btc"] == 5.0
 
 
 def test_pressure_defence_waiting_tte_refreshes_detail() -> None:
