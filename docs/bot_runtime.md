@@ -6,7 +6,7 @@ Paper and live call the same `MacroLocalPolicy.evaluate` function. Only order su
 
 At startup the bot:
 
-1. Loads `strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1/policy_bundle.json` and `entry_profiles.json`.
+1. Loads `strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/policy_bundle.json` and `entry_profiles.json`.
 2. Verifies runtime price, global TTE, start gate and stake settings match the frozen model.
 3. Starts the Coinbase websocket.
 4. Backfills approximately 100 completed Coinbase one-minute candles.
@@ -28,13 +28,13 @@ Both require `STATS_STAKE_MODE=min_order_size` with `STATS_MIN_ORDER_SIZE_FALLBA
 The compact strategy fields are:
 
 ```text
-strategy          : z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m05_v1 (frozen 2026-07-13)
+strategy          : z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1 (frozen 2026-07-13)
 day/session       : weekday/US_OPEN
-entry_profile     : weekday/US_OPEN | C=5c@45-265s | MR=5c@45-265s
+entry_profile     : weekday/US_OPEN | C=5c@45-265s | MR=7c@45-265s
 local_vol_1h      : 34.812 bps (ready)
 selected_move_dz  : -0.731
 move_dz_bucket    : z_01
-value / edge      : 0.612 / 0.112 (need 0.050)
+value / edge      : 0.612 / 0.112 (need 0.070)
 trade_style       : mean_reversion
 support / level   : 184 / final
 execution health  : HEALTHY
