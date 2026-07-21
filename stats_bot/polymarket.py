@@ -56,6 +56,7 @@ class BookSnapshot:
     best_bid_depth: float | None
     best_ask_depth: float | None
     captured_at_utc: datetime
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -434,6 +435,7 @@ class PolymarketClient:
                 best_bid_depth=best_bid_depth if best_bid_depth is not None else (previous.best_bid_depth if previous else None),
                 best_ask_depth=best_ask_depth if best_ask_depth is not None else (previous.best_ask_depth if previous else None),
                 captured_at_utc=captured_at,
+                source="ws",
             )
             return previous is None or previous.bid != bid or previous.ask != ask
 
@@ -873,11 +875,12 @@ class PolymarketClient:
                     best_bid_depth=best_bid_depth,
                     best_ask_depth=best_ask_depth,
                     captured_at_utc=now,
+                    source="public_rest",
                 )
             except Exception:
-                return BookSnapshot(None, None, None, None, None, None, None, None, now)
+                return BookSnapshot(None, None, None, None, None, None, None, None, now, source="public_rest_error")
         if self.client is None:
-            return BookSnapshot(None, None, None, None, None, None, None, None, now)
+            return BookSnapshot(None, None, None, None, None, None, None, None, now, source="no_client")
         try:
             book = self.client.get_order_book(token_id)
             bids = book.bids if hasattr(book, "bids") else book.get("bids", [])
@@ -913,9 +916,10 @@ class PolymarketClient:
                 best_bid_depth=best_bid_depth,
                 best_ask_depth=best_ask_depth,
                 captured_at_utc=now,
+                source="clob_rest",
             )
         except Exception:
-            return BookSnapshot(None, None, None, None, None, None, None, None, now)
+            return BookSnapshot(None, None, None, None, None, None, None, None, now, source="clob_rest_error")
 
     def place_maker_buy(
         self,

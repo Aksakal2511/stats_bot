@@ -26,8 +26,8 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_MACRO_POLICY_BUNDLE = (
     REPO_ROOT
     / "strategy"
-    / "z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1"
-    / "policy_bundle.json"
+    / "surface_spline_b5x5_p1_hl120_no_session_c01_m01_v1"
+    / "strategy_manifest.json"
 )
 
 
@@ -139,7 +139,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--starting-balance", type=float, default=None, help="Paper starting balance.")
     parser.add_argument("--policy-file", default=None, help="Override policy cube JSONL path.")
-    parser.add_argument("--macro-policy-bundle", default=None, help="Override macro/local production policy bundle JSON path.")
+    parser.add_argument("--macro-policy-bundle", default=None, help="Override macro/local production strategy manifest or policy bundle JSON path.")
     parser.add_argument("--exit-thresholds-file", default=None, help="Override exit threshold CSV path.")
     parser.add_argument("--entry-edge-thresholds-file", default=None, help="Override entry edge threshold CSV path.")
     parser.add_argument("--volatility-edges-file", default=None, help="Override volatility edge JSON path.")

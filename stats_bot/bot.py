@@ -540,7 +540,10 @@ class StatsBot:
             "wire_elapsed_ms": fields.get("wire_elapsed_ms", ""),
             "local_submit_overhead_ms": fields.get("local_submit_overhead_ms", ""),
             "entry_path_elapsed_ms": fields.get("entry_path_elapsed_ms", ""),
+            "decision_to_submit_ms": fields.get("decision_to_submit_ms", ""),
             "worker_queue_delay_ms": fields.get("worker_queue_delay_ms", ""),
+            "quote_book_age_ms": fields.get("quote_book_age_ms", ""),
+            "quote_source": fields.get("quote_source", ""),
             "connection_idle_seconds": fields.get("connection_idle_seconds", ""),
             "warm_probe_age_seconds": fields.get("warm_probe_age_seconds", ""),
             "warm_probe_ok": fields.get("warm_probe_ok", ""),
@@ -1999,6 +2002,8 @@ class StatsBot:
             execution_mode = "maker_post_only_async"
 
         submitted_at = datetime.now(tz=timezone.utc)
+        decision_to_submit_ms = max(0.0, (submitted_at - now_utc).total_seconds() * 1000.0)
+        quote_book_age_ms = max(0.0, (submitted_at - quote.book.captured_at_utc).total_seconds() * 1000.0)
         attempt_count = attempts + 1
         submission_id = uuid.uuid4().hex[:12]
         snapshot_with_meta = self._entry_snapshot_with_meta(
@@ -2062,6 +2067,9 @@ class StatsBot:
             edge_at_limit=quote.edge_at_limit,
             execution_health_status=quote.execution_health_status,
             entry_tolerance_ticks=quote.tolerance_ticks,
+            decision_to_submit_ms=round(decision_to_submit_ms, 3),
+            quote_book_age_ms=round(quote_book_age_ms, 3),
+            quote_source=quote.book.source,
             detail=execution_mode,
         )
         try:
@@ -2119,7 +2127,16 @@ class StatsBot:
                 wire_elapsed_ms=round(wire_elapsed_ms, 3),
                 local_submit_overhead_ms=round(local_overhead_ms, 3),
                 entry_path_elapsed_ms=round(decision_to_response_ms, 3),
+                decision_to_submit_ms=round(
+                    max(0.0, (submission.submitted_at_utc - submission.decision_at_utc).total_seconds() * 1000.0),
+                    3,
+                ),
                 worker_queue_delay_ms=round(submission_result.queue_delay_ms, 3),
+                quote_book_age_ms=round(
+                    max(0.0, (submission.submitted_at_utc - submission.quote.book.captured_at_utc).total_seconds() * 1000.0),
+                    3,
+                ),
+                quote_source=submission.quote.book.source,
                 connection_idle_seconds=result.transport_metrics.get("connection_idle_seconds", "") if result.transport_metrics else "",
                 warm_probe_age_seconds=result.transport_metrics.get("warm_probe_age_seconds", "") if result.transport_metrics else "",
                 warm_probe_ok=result.transport_metrics.get("warm_probe_ok", "") if result.transport_metrics else "",
@@ -4073,18 +4090,49 @@ class StatsBot:
             if signal_name not in {"move_z", "move_dz"}:
                 signal_name = "move_z"
             signal_label = "move_dz" if signal_name == "move_dz" else "move_z"
-            lines.append(
-                f"    {signal_label} UP/DOWN   : {_fmt(snapshot.get(f'up_{signal_name}'), 3)} "
-                f"({snapshot.get(f'up_{signal_name}_bucket') or 'NA'}) / "
-                f"{_fmt(snapshot.get(f'down_{signal_name}'), 3)} ({snapshot.get(f'down_{signal_name}_bucket') or 'NA'})"
+            continuous_signal = (
+                str(snapshot.get(f"up_{signal_name}_bucket") or "") == "continuous"
+                or str(snapshot.get(f"down_{signal_name}_bucket") or "") == "continuous"
             )
+            if continuous_signal:
+                lines.append(
+                    f"    {signal_label} UP/DOWN   : {_fmt(snapshot.get(f'up_{signal_name}'), 3)} / "
+                    f"{_fmt(snapshot.get(f'down_{signal_name}'), 3)}"
+                )
+            else:
+                lines.append(
+                    f"    {signal_label} UP/DOWN   : {_fmt(snapshot.get(f'up_{signal_name}'), 3)} "
+                    f"({snapshot.get(f'up_{signal_name}_bucket') or 'NA'}) / "
+                    f"{_fmt(snapshot.get(f'down_{signal_name}'), 3)} ({snapshot.get(f'down_{signal_name}_bucket') or 'NA'})"
+                )
             selected_signal = snapshot.get(f"selected_{signal_name}")
             if selected_signal is not None:
                 selected_label = f"selected_{signal_label}"
+                if continuous_signal:
+                    lines.append(f"    {selected_label:<18}: {_fmt(selected_signal, 3)}")
+                else:
+                    lines.append(
+                        f"    {selected_label:<18}: {_fmt(selected_signal, 3)} "
+                        f"({snapshot.get(f'selected_{signal_name}_bucket') or 'NA'})"
+                    )
+            if continuous_signal and decision is not None and decision.selected_side:
+                side_prefix = decision.selected_side.lower()
+                selected_bid = snapshot.get(f"{side_prefix}_bid")
+                selected_ask = snapshot.get(f"{side_prefix}_ask")
                 lines.append(
-                    f"    {selected_label:<18}: {_fmt(selected_signal, 3)} "
-                    f"({snapshot.get(f'selected_{signal_name}_bucket') or 'NA'})"
+                    f"    selected_price    : ask {_fmt(selected_ask)} | bid {_fmt(selected_bid)}"
                 )
+                lines.append(
+                    f"    surface_values    : UP {_fmt(snapshot.get('up_policy_value'), 3)} "
+                    f"edge {_fmt(snapshot.get('up_policy_edge'), 3)} | "
+                    f"DOWN {_fmt(snapshot.get('down_policy_value'), 3)} "
+                    f"edge {_fmt(snapshot.get('down_policy_edge'), 3)}"
+                )
+                stressed_edge = finite_float(snapshot.get("selected_policy_stressed_edge"))
+                if stressed_edge is not None:
+                    edge = finite_float(decision.selected_policy_edge)
+                    edge_text = f"{edge:+.3f}" if edge is not None else "NA"
+                    lines.append(f"    edge              : {edge_text} | stressed {stressed_edge:+.3f}")
             lines.append(f"    net_signed_flow   : {self._dashboard_net_signed_flow_text()}")
             lines.append(
                 f"    local_vol_1h      : {_fmt(snapshot.get('local_volatility_1h_bps'), 3)} bps "
@@ -4114,7 +4162,10 @@ class StatsBot:
             lines.append(
                 f"    support / level   : {policy_support} / {policy_level}"
             )
-            lines.append(f"    policy_key        : {decision.policy_key_text or 'NA'}")
+            label = "strategy_key" if (
+                snapshot is not None and str(snapshot.get("selected_move_dz_bucket") or "") == "continuous"
+            ) else "policy_key"
+            lines.append(f"    {label:<18}: {decision.policy_key_text or 'NA'}")
             if decision.blockers:
                 lines.append(f"    blockers          : {self._format_entry_blockers(decision.blockers, snapshot, now_utc, decision)}")
         if self.pending_entry:
@@ -4224,7 +4275,13 @@ class StatsBot:
             f"  strategy    : {self.macro_policy.strategy_id} trained "
             f"{self.macro_policy.training_start}..{self.macro_policy.training_end}"
         )
-        log.info(f"  policy      : {self.config.macro_policy_bundle} ({len(self.macro_policy):,} hierarchical rows)")
+        if getattr(self.macro_policy, "policy_type", "") == "continuous_surface":
+            log.info(
+                f"  model       : {self.config.macro_policy_bundle} "
+                f"({len(self.macro_policy):,} continuous surface)"
+            )
+        else:
+            log.info(f"  policy      : {self.config.macro_policy_bundle} ({len(self.macro_policy):,} hierarchical rows)")
         first_session = next(iter(self.macro_policy.session_display_names), "h00_06")
         continuation = self.macro_policy.entry_parameters("weekday", first_session, "continuation")
         mean_reversion = self.macro_policy.entry_parameters("weekday", first_session, "mean_reversion")
@@ -4236,10 +4293,16 @@ class StatsBot:
         )
         log.info(f"  exit mode   : {self.config.exit_policy_mode}")
         session_names = "/".join(dict.fromkeys(self.macro_policy.session_display_names.values()))
-        log.info(
-            f"  signal      : {self.macro_policy.signal_feature}; causal 1h Coinbase local RV; "
-            f"{session_names} London calibration segments"
-        )
+        if getattr(self.macro_policy, "policy_type", "") == "continuous_surface":
+            log.info(
+                f"  signal      : {self.macro_policy.signal_feature}; causal 1h Coinbase local RV; "
+                f"{session_names} London display context"
+            )
+        else:
+            log.info(
+                f"  signal      : {self.macro_policy.signal_feature}; causal 1h Coinbase local RV; "
+                f"{session_names} London calibration segments"
+            )
         log.info(
             "  entry       : pre-signed GTC fast limit when ready "
             f"(ask+{PRESIGN_ENTRY_TOLERANCE_TICKS}/{DEGRADED_ENTRY_TOLERANCE_TICKS}/"

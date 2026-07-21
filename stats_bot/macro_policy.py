@@ -3,10 +3,12 @@ from __future__ import annotations
 import bisect
 import json
 import math
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .continuous_surface import SurfaceModel
 from .strategy import EntryDecision, bucket_price, bucket_tte, finite_float
 
 
@@ -27,6 +29,11 @@ class MacroPolicyMatch:
     ask: float
     mid: float | None
     spread: float | None
+    stressed_edge: float | None = None
+    up_value: float | None = None
+    up_edge: float | None = None
+    down_value: float | None = None
+    down_edge: float | None = None
 
 
 @dataclass(frozen=True)
@@ -40,9 +47,11 @@ class MacroLocalPolicy:
     def __init__(self, path: Path):
         payload = json.loads(path.read_text(encoding="utf-8"))
         schema_version = int(payload.get("schema_version", 0))
-        if schema_version not in {1, 2}:
+        if schema_version not in {1, 2, 3}:
             raise ValueError(f"Unsupported macro policy schema: {payload.get('schema_version')}")
         self.path = path
+        self.schema_version = schema_version
+        self.policy_type = str(payload.get("policy_type") or "bucket_lookup")
         self.strategy_id = str(payload["strategy_id"])
         self.training_start = str(payload["training_start"])
         self.training_end = str(payload["training_end"])
@@ -63,6 +72,15 @@ class MacroLocalPolicy:
         self.session_display_names = {
             str(key): str(value) for key, value in payload.get("session_display_names", {}).items()
         }
+        self.surface_model: SurfaceModel | None = None
+        self.surface_day_type_mode = "included"
+        self.surface_side_mode = "pooled"
+        self.surface_model_label = ""
+        self.surface_policy_level = ""
+        self.surface_model_rows = 0
+        if schema_version == 3:
+            self._init_surface(payload)
+            return
         if schema_version == 1:
             branches = {
                 "default": {
@@ -88,6 +106,34 @@ class MacroLocalPolicy:
         if self.signal_feature not in {"move_z", "move_dz"}:
             raise ValueError(f"Unsupported macro policy signal_feature: {self.signal_feature!r}")
 
+    def _init_surface(self, payload: dict[str, Any]) -> None:
+        if self.signal_feature != "move_dz":
+            raise ValueError("Continuous surface policies currently require signal_feature='move_dz'")
+        model_cfg = dict(payload.get("model") or {})
+        artifact = Path(str(model_cfg.get("artifact") or ""))
+        if not artifact.is_absolute():
+            artifact = self.path.parent / artifact
+        with artifact.open("rb") as handle:
+            model = pickle.load(handle)
+        if not isinstance(model, SurfaceModel):
+            raise TypeError(f"Unsupported surface model artifact type: {type(model)!r}")
+        self.surface_model = model
+        self.surface_day_type_mode = str(model_cfg.get("day_type_mode") or "excluded")
+        self.surface_side_mode = str(model_cfg.get("side_mode") or model.side_mode or "pooled")
+        self.surface_model_label = str(model_cfg.get("label") or model.model_kind)
+        self.surface_policy_level = str(model_cfg.get("policy_level") or "ALL|POOLED")
+        self.surface_model_rows = int(model_cfg.get("training_rows") or model.rows or 0)
+        self.feature_config = {
+            "candidate": {
+                "session_kind": "equal",
+                "session_width_hours": int(payload.get("display_session_width_hours") or 4),
+            }
+        }
+        self.levels = []
+        self.lookups = []
+        self.branches = {}
+        self.branch_selection = {"weekday": "surface", "weekend": "surface"}
+
     @staticmethod
     def _build_branch(name: str, payload: dict[str, Any]) -> dict[str, Any]:
         levels = list(payload["model_config"]["levels"])
@@ -109,6 +155,15 @@ class MacroLocalPolicy:
         }
 
     def _branch(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        if self.schema_version == 3:
+            snapshot["policy_branch"] = self.surface_policy_level or "surface"
+            return {
+                "name": self.surface_policy_level or "surface",
+                "feature_config": self.feature_config,
+                "levels": [],
+                "lookups": [],
+                "support_kind": "weighted_training_rows",
+            }
         day_type = str(snapshot.get("day_type") or "weekday")
         name = self.branch_selection.get(day_type, self.branch_selection.get("weekday"))
         if name not in self.branches:
@@ -117,6 +172,8 @@ class MacroLocalPolicy:
         return self.branches[name]
 
     def __len__(self) -> int:
+        if self.schema_version == 3:
+            return 1 if self.surface_model is not None else 0
         return sum(
             len(lookup)
             for branch in self.branches.values()
@@ -242,6 +299,18 @@ class MacroLocalPolicy:
         return float(aligned_bps / expected_move), float(aligned_bps)
 
     def _annotate_side_signal(self, snapshot: dict[str, Any], side: str) -> tuple[float, str] | None:
+        if self.schema_version == 3:
+            signal = self._side_signal_value(snapshot, side)
+            if signal is None:
+                return None
+            signal_value, _ = signal
+            side_key = side.lower()
+            snapshot["policy_signal_name"] = self.signal_feature
+            snapshot[f"{side_key}_{self.signal_feature}"] = float(signal_value)
+            snapshot[f"{side_key}_{self.signal_feature}_bucket"] = "continuous"
+            snapshot[f"{side_key}_move_z"] = float(signal_value)
+            snapshot[f"{side_key}_move_z_bucket"] = "continuous"
+            return float(signal_value), "continuous"
         branch = self._branch(snapshot)
         feature_config = branch["feature_config"]
         day_type = str(snapshot.get("day_type") or "")
@@ -265,6 +334,8 @@ class MacroLocalPolicy:
         return float(signal_value), move_z_bucket
 
     def _side_match(self, snapshot: dict[str, Any], side: str) -> MacroPolicyMatch | None:
+        if self.schema_version == 3:
+            return self._surface_side_match(snapshot, side)
         branch = self._branch(snapshot)
         feature_config = branch["feature_config"]
         day_type = str(snapshot.get("day_type") or "")
@@ -330,6 +401,48 @@ class MacroLocalPolicy:
             spread=spread,
         )
 
+    def _surface_side_match(self, snapshot: dict[str, Any], side: str) -> MacroPolicyMatch | None:
+        if self.surface_model is None:
+            return None
+        bid = finite_float(snapshot.get(f"{side.lower()}_bid"))
+        ask = finite_float(snapshot.get(f"{side.lower()}_ask"))
+        if bid is None or ask is None or ask <= bid:
+            return None
+        signal = self._side_signal_value(snapshot, side)
+        if signal is None:
+            return None
+        move_dz, aligned_bps = signal
+        value = self.surface_model.predict_one(move_dz=move_dz, selected_ask=ask, side=side)
+        if value is None:
+            return None
+        style = "continuation" if aligned_bps > 1e-12 else "mean_reversion" if aligned_bps < -1e-12 else "neutral"
+        mid = finite_float(snapshot.get(f"{side.lower()}_mid"))
+        spread = finite_float(snapshot.get(f"{side.lower()}_spread"))
+        limit = min(float(ask) + 0.01, float(self.entry["max_price"]))
+        return MacroPolicyMatch(
+            side=side,
+            key=(
+                self.strategy_id,
+                self.surface_model_label or "surface",
+                self.surface_policy_level or "ALL|POOLED",
+                side,
+            ),
+            value=float(value),
+            support=int(self.surface_model_rows),
+            unique_markets=int(self.entry.get("unique_markets") or 0),
+            level="surface",
+            move_z=float(move_dz),
+            move_z_bucket="continuous",
+            signal_name="move_dz",
+            price_bucket="continuous",
+            trade_style=style,
+            bid=float(bid),
+            ask=float(ask),
+            mid=mid,
+            spread=spread,
+            stressed_edge=float(value) - float(limit),
+        )
+
     def evaluate(self, snapshot: dict[str, Any] | None, *, start_block_seconds: int) -> EntryDecision:
         blockers: list[str] = []
         if snapshot is None:
@@ -378,6 +491,8 @@ class MacroLocalPolicy:
             )
             side_threshold = parameters.edge
             snapshot[f"{side.lower()}_policy_value"] = match.value
+            snapshot[f"{side.lower()}_policy_edge"] = match.value - match.ask
+            snapshot[f"{side.lower()}_policy_stressed_edge"] = match.stressed_edge
             snapshot[f"{side.lower()}_{match.signal_name}"] = match.move_z
             snapshot[f"{side.lower()}_{match.signal_name}_bucket"] = match.move_z_bucket
             snapshot[f"{side.lower()}_move_z"] = match.move_z
@@ -417,6 +532,7 @@ class MacroLocalPolicy:
                 "policy_support": best_match.support,
                 "policy_unique_markets": best_match.unique_markets,
                 "policy_level": best_match.level,
+                "selected_policy_stressed_edge": best_match.stressed_edge,
             })
             return EntryDecision(
                 viable=False,
@@ -453,6 +569,7 @@ class MacroLocalPolicy:
             "policy_support": selected.support,
             "policy_unique_markets": selected.unique_markets,
             "policy_level": selected.level,
+            "selected_policy_stressed_edge": selected.stressed_edge,
         })
         return EntryDecision(
             viable=not blockers,

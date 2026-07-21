@@ -13,8 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY = (
     ROOT
     / "strategy"
-    / "z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1"
-    / "policy_bundle.json"
+    / "surface_spline_b5x5_p1_hl120_no_session_c01_m01_v1"
+    / "strategy_manifest.json"
 )
 LONDON = ZoneInfo("Europe/London")
 
@@ -45,7 +45,8 @@ def _snapshot(*, ts: datetime, day_type: str, tte: float, distance_bps: float, u
 
 def test_production_policy_uses_polymarket_settlement_labels() -> None:
     policy = MacroLocalPolicy(POLICY)
-    assert policy.strategy_id == "z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1"
+    assert policy.strategy_id == "surface_spline_b5x5_p1_hl120_no_session_c01_m01_v1"
+    assert policy.policy_type == "continuous_surface"
     assert policy.signal_source == "coinbase_btc_usd"
     assert policy.signal_feature == "move_dz"
     assert policy.settlement_label == "polymarket_gamma_resolved_outcome"
@@ -55,8 +56,10 @@ def test_policy_selects_hl120_for_weekdays_and_weekends() -> None:
     policy = MacroLocalPolicy(POLICY)
     weekday = {"day_type": "weekday"}
     weekend = {"day_type": "weekend"}
-    assert policy._branch(weekday)["name"] == "recency120_s50"
-    assert policy._branch(weekend)["name"] == "recency120_s50"
+    assert policy._branch(weekday)["name"] == "ALL|POOLED"
+    assert policy._branch(weekend)["name"] == "ALL|POOLED"
+    assert policy.surface_day_type_mode == "excluded"
+    assert policy.surface_model.rows > 0
 
 
 def test_weekend_policy_uses_move_dz_branch() -> None:
@@ -70,10 +73,11 @@ def test_weekend_policy_uses_move_dz_branch() -> None:
                 distance_bps=distance_bps,
             )
             active_decision = active.evaluate(dict(snapshot), start_block_seconds=45)
-            assert active._branch(snapshot)["name"] == "recency120_s50"
+            assert active._branch(snapshot)["name"] == "ALL|POOLED"
             assert active_decision.policy_record is not None
             assert active_decision.selected_trade_value is not None
             assert active_decision.policy_record.signal_name == "move_dz"
+            assert active_decision.policy_record.move_z_bucket == "continuous"
 
 
 def test_z6_sessions_use_london_clock() -> None:
@@ -106,8 +110,8 @@ def test_entry_profiles_match_fixed_full_raw_oos_spec() -> None:
         for session in ("h00_04", "h04_08", "h08_12", "h12_16", "h16_20", "h20_00"):
             continuation = policy.entry_parameters(day_type, session, "continuation")
             mean_reversion = policy.entry_parameters(day_type, session, "mean_reversion")
-            assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.05, 45, 265)
-            assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.07, 45, 265)
+            assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.01, 45, 265)
+            assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.01, 45, 265)
 
 
 def test_continuation_tte_blocks_only_outside_fixed_profile() -> None:
@@ -174,8 +178,35 @@ def test_policy_match_fields_are_populated_when_edge_fails() -> None:
     assert decision.policy_record is not None
     assert decision.selected_trade_value is not None
     assert decision.selected_policy_edge is not None
-    assert decision.entry_edge_threshold in {0.05, 0.07}
+    assert decision.entry_edge_threshold == 0.01
     assert snapshot["policy_signal_name"] == "move_dz"
     assert snapshot["policy_support"] > 0
-    assert snapshot["policy_level"] in {"base", "day"}
+    assert snapshot["policy_level"] == "surface"
     assert snapshot["selected_move_dz_bucket"] == snapshot["selected_move_z_bucket"]
+    assert snapshot["selected_move_dz_bucket"] == "continuous"
+    assert snapshot["selected_policy_stressed_edge"] is not None
+
+
+def test_surface_policy_requires_edge_to_survive_ask_plus_one_cent() -> None:
+    class BarelyPositiveModel:
+        rows = 1
+
+        @staticmethod
+        def predict_one(*, move_dz: float, selected_ask: float, side: str) -> float:
+            return selected_ask + 0.015
+
+    policy = MacroLocalPolicy(POLICY)
+    policy.surface_model = BarelyPositiveModel()  # type: ignore[assignment]
+    snapshot = _snapshot(
+        ts=datetime(2026, 7, 1, 10, 0, tzinfo=LONDON),
+        day_type="weekday",
+        tte=130.0,
+        distance_bps=8.0,
+        up_ask=0.45,
+    )
+    decision = policy.evaluate(snapshot, start_block_seconds=45)
+    assert not decision.viable
+    assert "POLICY_NO_SIDE_EDGE" in decision.blockers
+    assert decision.selected_policy_edge is not None
+    assert decision.selected_policy_edge >= 0.01
+    assert snapshot["selected_policy_stressed_edge"] < 0.01
