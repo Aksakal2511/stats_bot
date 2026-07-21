@@ -1,0 +1,52 @@
+{
+  "schema_version": 3,
+  "policy_type": "continuous_surface",
+  "strategy_id": "surface_spline_b5x5_p1_hl120_no_session_c02_m02_v1",
+  "training_start": "2026-02-14",
+  "training_end": "2026-07-13",
+  "source_dataset": "full_raw_offset250_distance_to_beat_pm_clean_ffm_observations",
+  "coinbase_source_only": true,
+  "signal_source": "coinbase_btc_usd",
+  "signal_feature": "move_dz",
+  "settlement_label": "polymarket_gamma_resolved_outcome",
+  "outcome_markets": 41913,
+  "built_at_utc": "2026-07-21T20:31:11.398322+00:00",
+  "display_session_width_hours": 4,
+  "session_display_names": {
+    "h00_04": "ASIA_00_04",
+    "h04_08": "ASIA_04_08",
+    "h08_12": "EUROPE_08_12",
+    "h12_16": "US_OPEN_12_16",
+    "h16_20": "US_OPEN_16_20",
+    "h20_00": "US_LATE_20_00"
+  },
+  "entry": {
+    "continuation_edge": 0.02,
+    "mean_reversion_edge": 0.02,
+    "min_price": 0.2,
+    "max_price": 0.8,
+    "min_tte": 45,
+    "max_tte": 265,
+    "shares": 5,
+    "unique_markets": 41913
+  },
+  "model": {
+    "artifact": "surface_model.pkl",
+    "kind": "surface_spline",
+    "label": "surface_spline_b5x5_p1",
+    "basis": [
+      5,
+      5
+    ],
+    "penalty": 1.0,
+    "c_value": 1.0,
+    "recency_half_life_days": 120,
+    "day_type_mode": "excluded",
+    "side_mode": "pooled",
+    "policy_level": "ALL|POOLED",
+    "training_rows": 10809491
+  },
+  "export_inputs": {
+    "distance_root": "/Volumes/Kate_DATA/policy_finder/data/artifacts/distance_to_beat_offset250_20260214_20260713"
+  }
+}
