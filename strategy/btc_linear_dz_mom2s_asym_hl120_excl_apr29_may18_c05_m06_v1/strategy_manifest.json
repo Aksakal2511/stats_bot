@@ -1,0 +1,92 @@
+{
+  "schema_version": 3,
+  "policy_type": "continuous_surface",
+  "strategy_id": "btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1",
+  "training_start": "2026-02-14",
+  "training_end": "2026-06-12",
+  "training_segments": [
+    [
+      "2026-02-14",
+      "2026-04-28"
+    ],
+    [
+      "2026-05-19",
+      "2026-06-12"
+    ]
+  ],
+  "excluded_training_ranges": [
+    [
+      "2026-04-29",
+      "2026-05-18"
+    ]
+  ],
+  "source_dataset": "full_raw_offset250_distance_to_beat_pm_clean_ffm_observations",
+  "coinbase_source_only": true,
+  "signal_source": "coinbase_btc_usd",
+  "signal_feature": "move_dz",
+  "settlement_label": "polymarket_gamma_resolved_outcome",
+  "outcome_markets": 27556,
+  "built_at_utc": "2026-07-25T23:46:42.709280+00:00",
+  "display_session_width_hours": 4,
+  "session_display_names": {
+    "h00_04": "ASIA_00_04",
+    "h04_08": "ASIA_04_08",
+    "h08_12": "EUROPE_08_12",
+    "h12_16": "US_OPEN_12_16",
+    "h16_20": "US_OPEN_16_20",
+    "h20_00": "US_LATE_20_00"
+  },
+  "entry": {
+    "continuation_edge": 0.05,
+    "mean_reversion_edge": 0.06,
+    "min_price": 0.2,
+    "max_price": 0.8,
+    "min_tte": 45,
+    "max_tte": 265,
+    "shares": 5,
+    "unique_markets": 27556
+  },
+  "model": {
+    "artifact": "surface_model.pkl",
+    "kind": "btc_linear_z_momentum_price_bucket",
+    "label": "btc_linear_z_momentum_price_bucket_asymmetric_side_dz_delta_2s_c0.03",
+    "basis": null,
+    "penalty": null,
+    "c_value": 0.03,
+    "recency_half_life_days": 120,
+    "day_type_mode": "excluded",
+    "side_mode": "pooled",
+    "policy_level": "ALL|POOLED",
+    "training_rows": 7115882,
+    "price_bucket_scheme": "asymmetric",
+    "momentum_feature": "side_dz_delta_2s",
+    "price_bucket_min_rows": 5000,
+    "price_bucket_min_class": 100,
+    "trained_price_buckets": [
+      "p20_30",
+      "p30_40",
+      "p40_45",
+      "p45_48",
+      "p48_52",
+      "p52_55",
+      "p55_60",
+      "p60_70",
+      "p70_80"
+    ],
+    "bucket_rows": {
+      "p20_30": 1012036,
+      "p30_40": 1170345,
+      "p40_45": 631055,
+      "p45_48": 387261,
+      "p48_52": 532884,
+      "p52_55": 387860,
+      "p55_60": 638831,
+      "p60_70": 1204510,
+      "p70_80": 1151100
+    }
+  },
+  "export_inputs": {
+    "distance_root": "/Volumes/Kate_DATA/policy_finder/data/artifacts/distance_to_beat_offset250_20260214_20260713",
+    "daily_dir": "/Volumes/Kate_DATA/policy_finder/data/combined_new/session_splits/statsbot_12_bucket_2h_london/combined_asof_offset250/intermediate/daily"
+  }
+}

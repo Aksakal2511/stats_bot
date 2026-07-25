@@ -26,7 +26,7 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_MACRO_POLICY_BUNDLE = (
     REPO_ROOT
     / "strategy"
-    / "surface_spline_b5x5_p1_hl120_no_session_c02_m02_v1"
+    / "btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1"
     / "strategy_manifest.json"
 )
 
@@ -119,6 +119,11 @@ class BotConfig:
     pressure_hedge_fraction: float
     pressure_max_hedge_ask: float
     pressure_hedge_limit_price: float
+    binance_spot_feed_enabled: bool
+    binance_spot_trigger_enabled: bool
+    binance_perp_feed_enabled: bool
+    binance_perp_trigger_enabled: bool
+    pm_chainlink_feed_enabled: bool
     bps_yes_guard_enabled: bool
     session_style_drawdown_guard_enabled: bool
     max_loop_seconds: float | None
@@ -337,6 +342,11 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         pressure_hedge_fraction=max(0.0, min(1.0, _float_env("STATS_PRESSURE_HEDGE_FRACTION", 1.0))),
         pressure_max_hedge_ask=max(0.0, min(1.0, _float_env("STATS_PRESSURE_MAX_HEDGE_ASK", 0.99))),
         pressure_hedge_limit_price=max(0.01, min(0.99, _float_env("STATS_PRESSURE_HEDGE_LIMIT_PRICE", 0.99))),
+        binance_spot_feed_enabled=_bool_env("STATS_BINANCE_SPOT_FEED_ENABLED", True),
+        binance_spot_trigger_enabled=_bool_env("STATS_BINANCE_SPOT_TRIGGER_ENABLED", False),
+        binance_perp_feed_enabled=_bool_env("STATS_BINANCE_PERP_FEED_ENABLED", False),
+        binance_perp_trigger_enabled=_bool_env("STATS_BINANCE_PERP_TRIGGER_ENABLED", False),
+        pm_chainlink_feed_enabled=_bool_env("STATS_PM_CHAINLINK_FEED_ENABLED", False),
         bps_yes_guard_enabled=_bool_env("STATS_BPS_YES_GUARD_ENABLED", False),
         session_style_drawdown_guard_enabled=_bool_env("STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED", False),
         max_loop_seconds=max_loop_seconds,

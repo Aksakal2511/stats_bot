@@ -17,6 +17,7 @@ from .strategy import (
 
 VOLATILITY_WINDOW_SECONDS = 60
 BTC_MOMENTUM_GUARD_WINDOW_SECONDS = 20
+MOVE_DZ_MOMENTUM_SECONDS = 2
 BTC_FIELDS = ("open_1s", "high_1s", "low_1s", "close_1s", "volume_1s")
 PM_FIELDS = (
     "up_bid",
@@ -148,6 +149,68 @@ def _momentum_bps(rows: list[dict[str, Any]], *, latest_ts: datetime, latest_clo
     return 10000.0 * (latest_close - prior_close) / prior_close
 
 
+def _distance_to_beat_z(
+    *,
+    close: float | None,
+    anchor: float | None,
+    local_volatility_1h_bps: float | None,
+    tte_seconds: float | None,
+) -> float | None:
+    if (
+        close is None
+        or anchor is None
+        or local_volatility_1h_bps is None
+        or tte_seconds is None
+        or anchor <= 0.0
+        or local_volatility_1h_bps <= 0.0
+    ):
+        return None
+    distance_bps = 10_000.0 * (float(close) - float(anchor)) / float(anchor)
+    remaining_vol = max(0.05, float(local_volatility_1h_bps) * math.sqrt(max(1.0, float(tte_seconds)) / 3600.0))
+    return float(distance_bps / remaining_vol)
+
+
+def _distance_z_delta(
+    rows: list[dict[str, Any]],
+    *,
+    now_utc: datetime,
+    market_end_utc: datetime,
+    latest_close: float,
+    anchor: float,
+    local_volatility_1h_bps: float | None,
+    current_tte_seconds: float,
+    seconds: int,
+) -> tuple[float | None, float | None]:
+    current_z = _distance_to_beat_z(
+        close=latest_close,
+        anchor=anchor,
+        local_volatility_1h_bps=local_volatility_1h_bps,
+        tte_seconds=current_tte_seconds,
+    )
+    target_ts = now_utc.timestamp() - float(seconds)
+    prior_close: float | None = None
+    for row in rows:
+        ts = _coerce_timestamp(row.get("timestamp_utc"))
+        if ts is None or ts.timestamp() > target_ts:
+            break
+        close = finite_float(row.get("close_1s"))
+        if close is not None and close > 0.0:
+            prior_close = close
+    if current_z is None or prior_close is None:
+        return current_z, None
+    prior_dt = datetime.fromtimestamp(target_ts, tz=timezone.utc)
+    prior_tte = max(0.0, (market_end_utc - prior_dt).total_seconds())
+    prior_z = _distance_to_beat_z(
+        close=prior_close,
+        anchor=anchor,
+        local_volatility_1h_bps=local_volatility_1h_bps,
+        tte_seconds=prior_tte,
+    )
+    if prior_z is None:
+        return current_z, None
+    return current_z, float(current_z - prior_z)
+
+
 def compute_live_snapshot(
     *,
     btc_history,
@@ -210,6 +273,16 @@ def compute_live_snapshot(
     day_type, session_bucket, london_ts = classify_day_type_and_session(now_utc)
     tte_seconds = max(0.0, (market_end_utc - now_utc).total_seconds())
     elapsed_seconds = max(0.0, (now_utc - market_start_utc).total_seconds())
+    distance_z, distance_z_delta_2s = _distance_z_delta(
+        merged_rows,
+        now_utc=now_utc,
+        market_end_utc=market_end_utc,
+        latest_close=latest_close,
+        anchor=float(open_price),
+        local_volatility_1h_bps=local_volatility_1h_bps,
+        current_tte_seconds=float(tte_seconds),
+        seconds=MOVE_DZ_MOMENTUM_SECONDS,
+    )
     signed_bps_bucket = bucket_signed_bps(signed_bps_raw)
     tte_bucket = bucket_tte(tte_seconds)
     volatility_bucket = (
@@ -249,6 +322,10 @@ def compute_live_snapshot(
         "session_bucket": session_bucket,
         "cb_close_1s": latest_close,
         "btc_mom_20s_bps": float("nan") if btc_mom_20s_bps is None else float(btc_mom_20s_bps),
+        "distance_to_beat_z": float("nan") if distance_z is None else float(distance_z),
+        "distance_z_delta_2s": float("nan") if distance_z_delta_2s is None else float(distance_z_delta_2s),
+        "up_side_dz_delta_2s": float("nan") if distance_z_delta_2s is None else float(distance_z_delta_2s),
+        "down_side_dz_delta_2s": float("nan") if distance_z_delta_2s is None else float(-distance_z_delta_2s),
         "window_open_btc_price": float(open_price),
         "cb_price_to_beat_anchor": float(open_price),
         "cb_signed_bps_raw": float(signed_bps_raw),

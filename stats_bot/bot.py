@@ -396,12 +396,12 @@ class StatsBot:
         self.binance_spot = BinanceTickerFeed(
             name="binance_spot",
             url="wss://stream.binance.com:9443/ws/btcusdt@trade",
-            on_update=self._on_execution_event,
+            on_update=self._on_execution_event if config.binance_spot_trigger_enabled else None,
         )
         self.binance_perp = BinanceTickerFeed(
             name="binance_perp",
             url="wss://fstream.binance.com/ws/btcusdt@trade",
-            on_update=self._on_execution_event,
+            on_update=self._on_execution_event if config.binance_perp_trigger_enabled else None,
         )
         self.pm_chainlink = PolymarketReferenceFeed(on_update=self._on_execution_event)
         self.guard = BpsYesGuard()
@@ -453,12 +453,23 @@ class StatsBot:
         ws_started = self.coinbase.start()
         log.info(f"  init: Coinbase feed setup in {time.time() - t0:.2f}s")
         t0 = time.time()
-        binance_spot_started = self.binance_spot.start()
-        binance_perp_started = self.binance_perp.start()
-        pm_chainlink_started = self.pm_chainlink.start()
+        binance_spot_started = self.binance_spot.start() if config.binance_spot_feed_enabled else False
+        binance_perp_started = self.binance_perp.start() if config.binance_perp_feed_enabled else False
+        pm_chainlink_started = self.pm_chainlink.start() if config.pm_chainlink_feed_enabled else False
         log.info(
             "  init: Binance/PM reference feeds %s in %.2fs",
-            "started" if binance_spot_started or binance_perp_started or pm_chainlink_started else "unavailable",
+            (
+                ", ".join(
+                    name
+                    for name, started in (
+                        ("binance_spot", binance_spot_started),
+                        ("binance_perp", binance_perp_started),
+                        ("pm_chainlink", pm_chainlink_started),
+                    )
+                    if started
+                )
+                or "disabled/unavailable"
+            ),
             time.time() - t0,
         )
         t0 = time.time()
@@ -470,8 +481,12 @@ class StatsBot:
         self._log_event("startup", "Coinbase WebSocket started" if ws_started else "Coinbase REST fallback active", {})
         self._log_event(
             "startup",
-            "Polymarket Chainlink reference started" if pm_chainlink_started else "Polymarket Chainlink reference unavailable",
-            {"started": pm_chainlink_started, "topic": "crypto_prices_chainlink"},
+            "Polymarket Chainlink reference started" if pm_chainlink_started else "Polymarket Chainlink reference disabled/unavailable",
+            {
+                "started": pm_chainlink_started,
+                "enabled": config.pm_chainlink_feed_enabled,
+                "topic": "crypto_prices_chainlink",
+            },
         )
         self._log_event(
             "startup",
@@ -3804,6 +3819,10 @@ class StatsBot:
                         "down_move_dz_bucket",
                         "selected_move_dz",
                         "selected_move_dz_bucket",
+                        "distance_z_delta_2s",
+                        "up_side_dz_delta_2s",
+                        "down_side_dz_delta_2s",
+                        "selected_side_dz_delta_2s",
                         "up_move_z",
                         "up_move_z_bucket",
                         "down_move_z",
@@ -3901,6 +3920,10 @@ class StatsBot:
                     snapshot.get("down_move_dz_bucket", "") if snapshot else "",
                     _fmt(snapshot.get("selected_move_dz"), 6, "") if snapshot else "",
                     snapshot.get("selected_move_dz_bucket", "") if snapshot else "",
+                    _fmt(snapshot.get("distance_z_delta_2s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("up_side_dz_delta_2s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("down_side_dz_delta_2s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("selected_side_dz_delta_2s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("up_move_z"), 6, "") if snapshot else "",
                     snapshot.get("up_move_z_bucket", "") if snapshot else "",
                     _fmt(snapshot.get("down_move_z"), 6, "") if snapshot else "",
@@ -4115,12 +4138,21 @@ class StatsBot:
                         f"    {selected_label:<18}: {_fmt(selected_signal, 3)} "
                         f"({snapshot.get(f'selected_{signal_name}_bucket') or 'NA'})"
                     )
+            if snapshot.get("distance_z_delta_2s") is not None:
+                lines.append(
+                    f"    {'dz_mom_2s UP/DOWN':<18}: {_fmt(snapshot.get('up_side_dz_delta_2s'), 3)} / "
+                    f"{_fmt(snapshot.get('down_side_dz_delta_2s'), 3)}"
+                )
+                selected_momentum = snapshot.get("selected_side_dz_delta_2s")
+                if selected_momentum is not None:
+                    lines.append(f"    {'selected_dz_mom_2s':<18}: {_fmt(selected_momentum, 3)}")
             if continuous_signal and decision is not None and decision.selected_side:
                 side_prefix = decision.selected_side.lower()
                 selected_bid = snapshot.get(f"{side_prefix}_bid")
                 selected_ask = snapshot.get(f"{side_prefix}_ask")
                 lines.append(
-                    f"    selected_price    : ask {_fmt(selected_ask)} | bid {_fmt(selected_bid)}"
+                    f"    selected_price    : ask {_fmt(selected_ask)} | bid {_fmt(selected_bid)} "
+                    f"| bucket {snapshot.get('selected_price_bucket') or 'NA'}"
                 )
                 lines.append(
                     f"    surface_values    : UP {_fmt(snapshot.get('up_policy_value'), 3)} "

@@ -2,23 +2,25 @@
 
 ## Production Model
 
-The active model is `z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1`, trained on full/raw offset250 observations from `2026-02-14` through `2026-07-13`.
+The active model is `btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1`, trained on full/raw offset250 observations from `2026-02-14` through `2026-06-12` with `2026-04-29` through `2026-05-18` excluded.
 
 ```text
-strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/policy_bundle.json
-strategy/z6_move_dz_b11_w4_s50_wd120_we120_no_session_c05_m07_v1/entry_profiles.json
+strategy/btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1/strategy_manifest.json
+strategy/btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1/entry_profiles.json
 ```
 
-Coinbase BTC-USD supplies the causal BTC close and local volatility inputs. Policy settlement values are fitted against resolved Polymarket/Gamma outcomes.
+Coinbase BTC-USD supplies the causal BTC close and local volatility inputs. Surface settlement values are fitted against resolved Polymarket/Gamma outcomes.
 
-The shipped hierarchy is intentionally small:
+The shipped model is a continuous logistic model inside asymmetric Polymarket
+price buckets:
 
-1. `move_z_bucket + selected_price_bucket`
-2. `day_type + move_z_bucket + selected_price_bucket`
+```text
+value = F(move_dz, side_dz_delta_2s | selected_side_ask_bucket)
+```
 
-`move_z_bucket` remains the stored schema key for compatibility, but the value being bucketed is the side-aligned distance-to-beat z-score, `move_dz`. Lookup falls back to the deepest available parent.
-
-Weekday and weekend branches both use the `HL120/S50` recursive hierarchy. Bucket calibration uses 4h London segments with 11 move-dz buckets; the policy table itself does not include session or TTE.
+The fitted model is `btc_linear_z_momentum_price_bucket` with `C=0.03`, HL120
+recency, asymmetric PM price buckets, day type excluded and side pooled. Macro
+session remains visible as runtime context but is not part of the value model.
 
 ## Causal Signal
 
@@ -55,7 +57,7 @@ Positive aligned distance is `continuation`; negative aligned distance is `mean_
 
 ## Entry Decision
 
-Both UP and DOWN are evaluated independently. The shipped profile is continuation `0.05 / 45-265` and mean reversion `0.07 / 45-265`.
+Both UP and DOWN are evaluated independently. The shipped profile is continuation `0.05 / 45-265` and mean reversion `0.06 / 45-265`.
 
 A side is eligible when:
 

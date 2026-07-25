@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .continuous_surface import SurfaceModel
+from .continuous_surface import PriceBucketSurfaceModel, SurfaceModel
 from .strategy import EntryDecision, bucket_price, bucket_tte, finite_float
 
 
@@ -72,7 +72,7 @@ class MacroLocalPolicy:
         self.session_display_names = {
             str(key): str(value) for key, value in payload.get("session_display_names", {}).items()
         }
-        self.surface_model: SurfaceModel | None = None
+        self.surface_model: SurfaceModel | PriceBucketSurfaceModel | None = None
         self.surface_day_type_mode = "included"
         self.surface_side_mode = "pooled"
         self.surface_model_label = ""
@@ -115,7 +115,7 @@ class MacroLocalPolicy:
             artifact = self.path.parent / artifact
         with artifact.open("rb") as handle:
             model = pickle.load(handle)
-        if not isinstance(model, SurfaceModel):
+        if not isinstance(model, (SurfaceModel, PriceBucketSurfaceModel)):
             raise TypeError(f"Unsupported surface model artifact type: {type(model)!r}")
         self.surface_model = model
         self.surface_day_type_mode = str(model_cfg.get("day_type_mode") or "excluded")
@@ -412,19 +412,34 @@ class MacroLocalPolicy:
         if signal is None:
             return None
         move_dz, aligned_bps = signal
-        value = self.surface_model.predict_one(move_dz=move_dz, selected_ask=ask, side=side)
+        momentum_feature = str(getattr(self.surface_model, "momentum_feature", "") or "")
+        momentum_value: float | None = None
+        if momentum_feature:
+            momentum_value = finite_float(snapshot.get(f"{side.lower()}_{momentum_feature}"))
+            if momentum_value is None:
+                return None
+        value = self.surface_model.predict_one(
+            move_dz=move_dz,
+            selected_ask=ask,
+            side=side,
+            side_dz_delta_2s=momentum_value,
+        )
         if value is None:
             return None
         style = "continuation" if aligned_bps > 1e-12 else "mean_reversion" if aligned_bps < -1e-12 else "neutral"
         mid = finite_float(snapshot.get(f"{side.lower()}_mid"))
         spread = finite_float(snapshot.get(f"{side.lower()}_spread"))
         limit = min(float(ask) + 0.01, float(self.entry["max_price"]))
+        price_bucket = "continuous"
+        bucket_label = getattr(self.surface_model, "bucket_label", None)
+        if callable(bucket_label):
+            price_bucket = str(bucket_label(ask) or "NA")
         return MacroPolicyMatch(
             side=side,
             key=(
                 self.strategy_id,
                 self.surface_model_label or "surface",
-                self.surface_policy_level or "ALL|POOLED",
+                f"{self.surface_policy_level or 'ALL|POOLED'}|{price_bucket}",
                 side,
             ),
             value=float(value),
@@ -434,7 +449,7 @@ class MacroLocalPolicy:
             move_z=float(move_dz),
             move_z_bucket="continuous",
             signal_name="move_dz",
-            price_bucket="continuous",
+            price_bucket=price_bucket,
             trade_style=style,
             bid=float(bid),
             ask=float(ask),
@@ -497,6 +512,11 @@ class MacroLocalPolicy:
             snapshot[f"{side.lower()}_{match.signal_name}_bucket"] = match.move_z_bucket
             snapshot[f"{side.lower()}_move_z"] = match.move_z
             snapshot[f"{side.lower()}_move_z_bucket"] = match.move_z_bucket
+            momentum_feature = str(getattr(self.surface_model, "momentum_feature", "") or "")
+            if momentum_feature:
+                momentum_value = finite_float(snapshot.get(f"{side.lower()}_{momentum_feature}"))
+                if momentum_value is not None:
+                    snapshot[f"candidate_{side.lower()}_{momentum_feature}"] = momentum_value
             limit = min(match.ask + 0.01, float(self.entry["max_price"]))
             price_ok = float(self.entry["min_price"]) <= match.ask <= float(self.entry["max_price"])
             tte_ok = tte is not None and parameters.min_tte <= tte <= parameters.max_tte
@@ -534,6 +554,11 @@ class MacroLocalPolicy:
                 "policy_level": best_match.level,
                 "selected_policy_stressed_edge": best_match.stressed_edge,
             })
+            momentum_feature = str(getattr(self.surface_model, "momentum_feature", "") or "")
+            if momentum_feature:
+                momentum_value = finite_float(snapshot.get(f"{best_match.side.lower()}_{momentum_feature}"))
+                if momentum_value is not None:
+                    snapshot[f"selected_{momentum_feature}"] = momentum_value
             return EntryDecision(
                 viable=False,
                 blockers=tuple(dict.fromkeys(blockers)),
@@ -571,6 +596,11 @@ class MacroLocalPolicy:
             "policy_level": selected.level,
             "selected_policy_stressed_edge": selected.stressed_edge,
         })
+        momentum_feature = str(getattr(self.surface_model, "momentum_feature", "") or "")
+        if momentum_feature:
+            momentum_value = finite_float(snapshot.get(f"{selected.side.lower()}_{momentum_feature}"))
+            if momentum_value is not None:
+                snapshot[f"selected_{momentum_feature}"] = momentum_value
         return EntryDecision(
             viable=not blockers,
             blockers=tuple(dict.fromkeys(blockers)),
