@@ -90,6 +90,8 @@ DEGRADED_ENTRY_TOLERANCE_TICKS = 2
 POOR_ENTRY_TOLERANCE_TICKS = 2
 DEGRADED_ENTRY_MIN_RESIDUAL_EDGE = 0.03
 POOR_ENTRY_MIN_RESIDUAL_EDGE = 0.02
+POLICY_NO_LONGER_VIABLE_LATCH_SECONDS = 2.0
+POLICY_NO_LONGER_VIABLE_LATCH_MIN_EDGE = 0.01
 EXECUTION_LATE_WARNING_SECONDS = 1.0
 EXECUTION_HEALTH_MIN_SAMPLES = 5
 EXECUTION_HEALTH_WINDOW = 10
@@ -1723,6 +1725,28 @@ class StatsBot:
         edge_at_pending_price = trade_value - float(pending.price)
         return edge_at_pending_price + 1e-12 >= required_edge, edge_at_pending_price, required_edge
 
+    def _pending_entry_can_latch_no_longer_viable(
+        self,
+        pending: PendingEntryOrder,
+        decision: EntryDecision | None,
+        *,
+        age_seconds: float,
+        pending_edge: float | None,
+        pending_required_edge: float | None,
+    ) -> bool:
+        if decision is None:
+            return False
+        if age_seconds > POLICY_NO_LONGER_VIABLE_LATCH_SECONDS:
+            return False
+        if decision.selected_side != pending.policy_side or decision.policy_key_text != pending.policy_key_text:
+            return False
+        blockers = set(decision.blockers or ())
+        if blockers - {"POLICY_NO_SIDE_EDGE"}:
+            return False
+        if pending_edge is None or pending_required_edge is None:
+            return False
+        return pending_edge + 1e-12 >= POLICY_NO_LONGER_VIABLE_LATCH_MIN_EDGE
+
     def _fast_entry_quote(
         self,
         now_utc: datetime,
@@ -3054,12 +3078,38 @@ class StatsBot:
 
         age = (now_utc - pending.created_at_utc).total_seconds()
         pending_edge_ok, pending_edge, pending_required_edge = self._pending_entry_still_has_edge(pending, decision)
-        if snapshot is None or decision is None or (not decision.viable and not pending_edge_ok):
+        if snapshot is None or decision is None:
             self._cancel_pending_entry("POLICY_NO_LONGER_VIABLE")
             return
         if decision.selected_side != pending.policy_side or decision.policy_key_text != pending.policy_key_text:
             self._cancel_pending_entry("POLICY_CHANGED")
             return
+        no_longer_viable_latched = False
+        if not decision.viable and not pending_edge_ok:
+            no_longer_viable_latched = self._pending_entry_can_latch_no_longer_viable(
+                pending,
+                decision,
+                age_seconds=age,
+                pending_edge=pending_edge,
+                pending_required_edge=pending_required_edge,
+            )
+            if not no_longer_viable_latched:
+                self._cancel_pending_entry("POLICY_NO_LONGER_VIABLE")
+                return
+            self._log_latency(
+                "pending_entry_kept",
+                market_slug=pending.market_slug,
+                source="entry_manager",
+                order_id=pending.order_id,
+                side=pending.policy_side,
+                limit_price=pending.price,
+                detail=(
+                    "policy_no_longer_viable_latch;"
+                    f"age={age:.3f};resting_edge={pending_edge:.6f};"
+                    f"normal_required={pending_required_edge:.6f};"
+                    f"latch_min={POLICY_NO_LONGER_VIABLE_LATCH_MIN_EDGE:.6f}"
+                ),
+            )
         if self.config.stake_mode in {"dynamic_shares", "ladder_shares"} and self.current_market is not None:
             current_shares, _, _ = self._entry_target_size(price=pending.price, market=self.current_market)
             if not math.isclose(current_shares, pending.target_shares, abs_tol=1e-9):
@@ -3070,7 +3120,7 @@ class StatsBot:
         execution_mode = str(pending.snapshot.get("entry_execution_mode") or "maker_post_only")
         if execution_mode.startswith("presigned_fast_limit"):
             fast_quote = self._fast_entry_quote(now_utc, snapshot, decision)
-            if fast_quote is None and pending_edge_ok:
+            if fast_quote is None and (pending_edge_ok or no_longer_viable_latched):
                 spread_ticks = None
             elif fast_quote is None:
                 self._cancel_pending_entry("FAST_LIMIT_NO_LONGER_VALID")
