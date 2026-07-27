@@ -1,14 +1,14 @@
 # Execution Plan
 
-The strategic layer is `btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1`. Execution can run as `event_driven_ws` (default) or `legacy_polling` (rollback).
+The strategic layer is `btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1`. Execution can run as `event_driven_ws` (default) or `legacy_polling` (rollback).
 
 ## Entry Path
 
 1. Maintain in-memory UP and DOWN books from the public Polymarket market WebSocket.
 2. Re-evaluate UP and DOWN when either the BTC signal or Polymarket book changes.
-3. Require edge of at least the active style profile, currently `0.05` for continuation and `0.06` for mean reversion, at the displayed ask and at the execution-health-adjusted fast limit.
+3. Require edge of at least the active style profile, currently `0.04` for continuation and `0.06` for mean reversion, at the displayed ask and at the execution-health-adjusted fast limit.
 4. Atomically reserve the market entry before handing the pre-signed order to the submission worker.
-5. Submit through the persistent entry-only worker and isolated keepalive HTTP connection at no more than the execution-health fast limit when edge remains valid.
+5. Submit through the persistent entry-only worker and isolated keepalive HTTP connection at no more than `ask+1` tick when edge remains valid at that limit. Degraded execution health raises required C/MR edges by +1c; Poor raises them by +2c.
 6. Use the authenticated user WebSocket to trigger prompt fill reconciliation.
 7. If the fast path is unavailable, use the existing post-only maker quote at `best_ask - 1 tick`.
 8. Cancel pending entry immediately when side, policy key, price range or edge is no longer valid.

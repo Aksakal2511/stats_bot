@@ -703,7 +703,7 @@ def test_fast_presigned_quote_requires_edge_at_signed_limit() -> None:
     assert round(strong.edge_at_limit, 6) == 0.11
 
 
-def test_fast_presigned_quote_widens_limit_by_execution_health_without_breaking_edge() -> None:
+def test_fast_presigned_quote_bumps_required_edge_by_execution_health() -> None:
     bot = object.__new__(StatsBot)
     bot.config = type(
         "Config",
@@ -766,24 +766,27 @@ def test_fast_presigned_quote_widens_limit_by_execution_health_without_breaking_
     degraded = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
     assert degraded is not None
     assert degraded.execution_health_status == "Degraded"
-    assert degraded.tolerance_ticks == 2
-    assert degraded.price == 0.44
+    assert degraded.tolerance_ticks == 1
+    assert degraded.price == 0.43
     assert round(degraded.edge_at_ask, 6) == 0.08
-    assert round(degraded.edge_at_limit, 6) == 0.06
-    assert round(degraded.required_edge, 6) == 0.03
+    assert round(degraded.edge_at_limit, 6) == 0.07
+    assert round(degraded.required_edge, 6) == 0.06
 
     bot.recent_clob_ack_ms = deque([900.0, 920.0, 930.0, 940.0, 950.0], maxlen=10)
     poor = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
     assert poor is not None
     assert poor.execution_health_status == "Poor"
-    assert poor.tolerance_ticks == 2
-    assert poor.price == 0.44
+    assert poor.tolerance_ticks == 1
+    assert poor.price == 0.43
     assert round(poor.edge_at_ask, 6) == 0.08
-    assert round(poor.edge_at_limit, 6) == 0.06
-    assert round(poor.required_edge, 6) == 0.02
+    assert round(poor.edge_at_limit, 6) == 0.07
+    assert round(poor.required_edge, 6) == 0.07
 
-    weak = EntryDecision(**{**decision.__dict__, "selected_trade_value": 0.455, "selected_policy_edge": 0.035})
-    assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, weak) is None
+    degraded_only = EntryDecision(**{**decision.__dict__, "selected_trade_value": 0.495, "selected_policy_edge": 0.075})
+    bot.recent_clob_ack_ms = deque([500.0, 520.0, 530.0, 540.0, 550.0], maxlen=10)
+    assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, degraded_only) is not None
+    bot.recent_clob_ack_ms = deque([900.0, 920.0, 930.0, 940.0, 950.0], maxlen=10)
+    assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, degraded_only) is None
 
 
 def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False, order_progress: list[object | None] | None = None):

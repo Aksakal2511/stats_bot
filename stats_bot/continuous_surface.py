@@ -98,6 +98,14 @@ def btc_momentum_feature_matrix(frame: pd.DataFrame, side_mode: str, momentum_fe
     return np.column_stack(pieces)
 
 
+def btc_z_feature_matrix(frame: pd.DataFrame, side_mode: str) -> np.ndarray:
+    z = pd.to_numeric(frame["move_dz"], errors="coerce").to_numpy(float)
+    pieces: list[Any] = [z]
+    if side_mode == "with_side":
+        pieces.append(frame["side"].astype(str).str.upper().eq("DOWN").to_numpy(float))
+    return np.column_stack(pieces)
+
+
 class SurfaceModel:
     def __init__(
         self,
@@ -164,6 +172,8 @@ class SurfaceModel:
     def _feature_matrix(self, frame: pd.DataFrame, *, fit: bool = False) -> np.ndarray:
         if self.model_kind == "surface_spline":
             return self._spline_matrix(frame, fit=fit)
+        if self.model_kind == "btc_linear_z_price_bucket":
+            return btc_z_feature_matrix(frame, self.side_mode)
         if self.model_kind == "btc_linear_z_momentum_price_bucket":
             if not self.momentum_feature:
                 raise ValueError("Momentum feature is required for btc_linear_z_momentum_price_bucket")
@@ -226,13 +236,15 @@ class PriceBucketSurfaceModel:
         price_bucket_min_rows: int = 5000,
         price_bucket_min_class: int = 100,
     ) -> None:
-        if model_kind != "btc_linear_z_momentum_price_bucket":
+        if model_kind not in {"btc_linear_z_price_bucket", "btc_linear_z_momentum_price_bucket"}:
             raise ValueError(f"Unsupported price-bucket model kind: {model_kind!r}")
         self.model_kind = str(model_kind)
         self.side_mode = str(side_mode)
         self.c_value = float(c_value)
         self.price_bucket_scheme = normalize_price_bucket_scheme(price_bucket_scheme)
-        self.momentum_feature = str(momentum_feature)
+        self.momentum_feature = str(momentum_feature or "") if model_kind == "btc_linear_z_momentum_price_bucket" else ""
+        if self.model_kind == "btc_linear_z_momentum_price_bucket" and not self.momentum_feature:
+            raise ValueError("Momentum feature is required for btc_linear_z_momentum_price_bucket")
         self.price_bucket_min_rows = int(price_bucket_min_rows)
         self.price_bucket_min_class = int(price_bucket_min_class)
         self.bucket_models: dict[str, SurfaceModel] = {}

@@ -86,10 +86,10 @@ STAKE_DRAWDOWN_RECOVERY_EXIT_PCT = 8.0
 SIDE_MOMENTUM_GUARD_WINDOW_SECONDS = 20
 SIDE_MOMENTUM_GUARD_THRESHOLD_BPS = 2.5
 PRESIGN_ENTRY_TOLERANCE_TICKS = 1
-DEGRADED_ENTRY_TOLERANCE_TICKS = 2
-POOR_ENTRY_TOLERANCE_TICKS = 2
-DEGRADED_ENTRY_MIN_RESIDUAL_EDGE = 0.03
-POOR_ENTRY_MIN_RESIDUAL_EDGE = 0.02
+DEGRADED_ENTRY_TOLERANCE_TICKS = 1
+POOR_ENTRY_TOLERANCE_TICKS = 1
+DEGRADED_ENTRY_EDGE_BUMP = 0.01
+POOR_ENTRY_EDGE_BUMP = 0.02
 POLICY_NO_LONGER_VIABLE_LATCH_SECONDS = 2.0
 POLICY_NO_LONGER_VIABLE_LATCH_MIN_EDGE = 0.01
 EXECUTION_LATE_WARNING_SECONDS = 1.0
@@ -269,9 +269,9 @@ def _entry_tolerance_ticks_for_execution_health(status: str) -> int:
 
 def _required_limit_edge_for_execution_health(status: str, base_required_edge: float) -> float:
     if status == "Poor":
-        return min(base_required_edge, POOR_ENTRY_MIN_RESIDUAL_EDGE)
+        return base_required_edge + POOR_ENTRY_EDGE_BUMP
     if status == "Degraded":
-        return min(base_required_edge, DEGRADED_ENTRY_MIN_RESIDUAL_EDGE)
+        return base_required_edge + DEGRADED_ENTRY_EDGE_BUMP
     return base_required_edge
 
 
@@ -1719,7 +1719,9 @@ class StatsBot:
         if blockers - {"POLICY_NO_SIDE_EDGE"}:
             return False, None, None
         trade_value = finite_float(decision.selected_trade_value)
-        required_edge = finite_float(decision.entry_edge_threshold)
+        required_edge = finite_float(pending.snapshot.get("entry_required_edge_at_limit"))
+        if required_edge is None:
+            required_edge = finite_float(decision.entry_edge_threshold)
         if trade_value is None or required_edge is None:
             return False, trade_value, required_edge
         edge_at_pending_price = trade_value - float(pending.price)
@@ -1777,9 +1779,9 @@ class StatsBot:
         if trade_value is None or base_required_edge is None:
             return None
         edge_at_ask = trade_value - ask
-        if edge_at_ask + 1e-12 < base_required_edge:
-            return None
         required_edge_at_limit = _required_limit_edge_for_execution_health(health_status, base_required_edge)
+        if edge_at_ask + 1e-12 < required_edge_at_limit:
+            return None
         edge_at_limit = trade_value - price
         if edge_at_limit + 1e-12 < required_edge_at_limit:
             return None
@@ -4387,8 +4389,9 @@ class StatsBot:
             )
         log.info(
             "  entry       : pre-signed GTC fast limit when ready "
-            f"(ask+{PRESIGN_ENTRY_TOLERANCE_TICKS}/{DEGRADED_ENTRY_TOLERANCE_TICKS}/"
-            f"{POOR_ENTRY_TOLERANCE_TICKS} ticks by health, residual-edge guarded); "
+            f"(ask+{PRESIGN_ENTRY_TOLERANCE_TICKS} tick, residual-edge guarded; "
+            f"+{int(round(DEGRADED_ENTRY_EDGE_BUMP * 100))}c/"
+            f"+{int(round(POOR_ENTRY_EDGE_BUMP * 100))}c edge in Degraded/Poor health); "
             "fallback post-only maker @ best_ask-1tick"
         )
         if not self.config.paper_trading:

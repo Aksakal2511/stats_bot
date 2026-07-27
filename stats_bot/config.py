@@ -26,7 +26,7 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_MACRO_POLICY_BUNDLE = (
     REPO_ROOT
     / "strategy"
-    / "btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1"
+    / "btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1"
     / "strategy_manifest.json"
 )
 

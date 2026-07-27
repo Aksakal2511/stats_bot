@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 POLICY = (
     ROOT
     / "strategy"
-    / "btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1"
+    / "btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1"
     / "strategy_manifest.json"
 )
 LONDON = ZoneInfo("Europe/London")
@@ -59,17 +59,17 @@ def _snapshot(
 def test_production_policy_uses_polymarket_settlement_labels() -> None:
     policy = MacroLocalPolicy(POLICY)
     manifest = json.loads(POLICY.read_text(encoding="utf-8"))
-    assert policy.strategy_id == "btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1"
+    assert policy.strategy_id == "btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1"
     assert policy.policy_type == "continuous_surface"
     assert policy.signal_source == "coinbase_btc_usd"
     assert policy.signal_feature == "move_dz"
     assert policy.settlement_label == "polymarket_gamma_resolved_outcome"
     assert policy.training_start == "2026-02-14"
-    assert policy.training_end == "2026-06-12"
+    assert policy.training_end == "2026-07-25"
     assert manifest["excluded_training_ranges"] == [["2026-04-29", "2026-05-18"]]
     assert manifest["model"]["recency_half_life_days"] == 120
     assert manifest["model"]["price_bucket_scheme"] == "asymmetric"
-    assert manifest["model"]["momentum_feature"] == "side_dz_delta_2s"
+    assert manifest["model"]["momentum_feature"] is None
 
 
 def test_policy_selects_hl120_for_weekdays_and_weekends() -> None:
@@ -81,11 +81,11 @@ def test_policy_selects_hl120_for_weekdays_and_weekends() -> None:
     assert policy.surface_day_type_mode == "excluded"
     assert policy.surface_side_mode == "pooled"
     assert policy.surface_model is not None
-    assert policy.surface_model.model_kind == "btc_linear_z_momentum_price_bucket"
-    assert policy.surface_model.c_value == 0.03
+    assert policy.surface_model.model_kind == "btc_linear_z_price_bucket"
+    assert policy.surface_model.c_value == 0.05
     assert policy.surface_model.rows > 0
     assert getattr(policy.surface_model, "price_bucket_scheme") == "asymmetric"
-    assert getattr(policy.surface_model, "momentum_feature") == "side_dz_delta_2s"
+    assert getattr(policy.surface_model, "momentum_feature") == ""
     assert set(getattr(policy.surface_model, "bucket_models")) == {
         "p20_30",
         "p30_40",
@@ -149,7 +149,7 @@ def test_entry_profiles_match_fixed_full_raw_oos_spec() -> None:
         for session in ("h00_04", "h04_08", "h08_12", "h12_16", "h16_20", "h20_00"):
             continuation = policy.entry_parameters(day_type, session, "continuation")
             mean_reversion = policy.entry_parameters(day_type, session, "mean_reversion")
-            assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.05, 45, 265)
+            assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.04, 45, 265)
             assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.06, 45, 265)
 
 
@@ -233,7 +233,7 @@ def test_policy_match_fields_are_populated_when_edge_fails() -> None:
     assert decision.policy_record is not None
     assert decision.selected_trade_value is not None
     assert decision.selected_policy_edge is not None
-    assert decision.entry_edge_threshold in {0.05, 0.06}
+    assert decision.entry_edge_threshold in {0.04, 0.06}
     assert snapshot["policy_signal_name"] == "move_dz"
     assert snapshot["policy_support"] > 0
     assert snapshot["policy_level"] == "surface"
@@ -241,7 +241,6 @@ def test_policy_match_fields_are_populated_when_edge_fails() -> None:
     assert snapshot["selected_move_dz_bucket"] == "continuous"
     assert snapshot["selected_policy_stressed_edge"] is not None
     assert snapshot["selected_price_bucket"].startswith("p")
-    assert snapshot["selected_side_dz_delta_2s"] is not None
 
 
 def test_surface_policy_requires_edge_to_survive_ask_plus_one_cent() -> None:
@@ -270,7 +269,7 @@ def test_surface_policy_requires_edge_to_survive_ask_plus_one_cent() -> None:
     assert snapshot["selected_policy_stressed_edge"] < 0.05
 
 
-def test_surface_policy_requires_momentum_feature() -> None:
+def test_surface_policy_does_not_require_momentum_feature() -> None:
     policy = MacroLocalPolicy(POLICY)
     snapshot = _snapshot(
         ts=datetime(2026, 7, 1, 10, 0, tzinfo=LONDON),
@@ -282,6 +281,5 @@ def test_surface_policy_requires_momentum_feature() -> None:
     snapshot.pop("up_side_dz_delta_2s")
     snapshot.pop("down_side_dz_delta_2s")
     decision = policy.evaluate(snapshot, start_block_seconds=45)
-    assert not decision.viable
-    assert "POLICY_NO_SIDE_EDGE" in decision.blockers
-    assert decision.policy_record is None
+    assert decision.policy_record is not None
+    assert decision.selected_trade_value is not None

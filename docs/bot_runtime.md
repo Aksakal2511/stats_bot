@@ -6,7 +6,7 @@ Paper and live call the same `MacroLocalPolicy.evaluate` function. Only order su
 
 At startup the bot:
 
-1. Loads `strategy/btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1/strategy_manifest.json` and `entry_profiles.json`.
+1. Loads `strategy/btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1/strategy_manifest.json` and `entry_profiles.json`.
 2. Verifies runtime price, global TTE, start gate and stake settings match the frozen model.
 3. Starts the Coinbase websocket.
 4. Backfills approximately 100 completed Coinbase one-minute candles.
@@ -28,13 +28,12 @@ Both require `STATS_STAKE_MODE=min_order_size` with `STATS_MIN_ORDER_SIZE_FALLBA
 The compact strategy fields are:
 
 ```text
-strategy          : btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1 (frozen 2026-06-12)
+strategy          : btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1 (frozen 2026-07-25)
 day/session       : weekday/US_OPEN
-entry_profile     : weekday/US_OPEN | C=5c@45-265s | MR=6c@45-265s
+entry_profile     : weekday/US_OPEN | C=4c@45-265s | MR=6c@45-265s
 local_vol_1h      : 34.812 bps (ready)
 selected_move_dz  : -0.731
 move_dz_bucket    : continuous
-dz_mom_2s         : -0.084
 selected_price    : ask 0.5000 | bid 0.4900 | bucket p48_52
 value / edge      : 0.612 / 0.112 (need 0.060)
 trade_style       : mean_reversion
@@ -57,7 +56,7 @@ Every run writes under `logs/<session>_<paper|live>/`:
 
 `event_driven_ws` is the default. `legacy_polling` is the rollback mode. The dashboard shows the selected mode but keeps detailed timing out of the main display.
 
-In event-driven mode, a persistent worker owns an entry-only HTTP/2 connection. Wallet refreshes are briefly deferred while an entry POST is unresolved, while market data, signals, positions and the dashboard continue updating. Responses over one second are labelled `LATE`; duplicate protection remains active and the bot does not retry blindly.
+In event-driven mode, a persistent worker owns an entry-only HTTP/2 connection. Wallet refreshes are briefly deferred while an entry POST is unresolved, while market data, signals, positions and the dashboard continue updating. Responses over one second are labelled `LATE`; duplicate protection remains active and the bot does not retry blindly. Fast-limit entries use `ask+1` tick and must preserve the full style edge at that limit; Degraded health adds +1c required edge and Poor health adds +2c.
 
 The session/style drawdown guard is disabled by default for this profile. `STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED=1` restores the fixed two-hour London bucket guard. `STATS_PEAK_DRAWDOWN_KILL_USD=15` separately blocks new entries for the rest of the run once `peak_realized_pnl - realized_pnl` reaches `$15`. Cadence and latency logs include the peak, drawdown and latched state for live/paper comparison.
 

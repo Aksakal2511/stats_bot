@@ -177,26 +177,26 @@ The whole game is calibration plus execution.
 ## Current Production Setup
 
 ```text
-Strategy ID       : btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1
-Training window   : 2026-02-14 through 2026-06-12, excluding 2026-04-29 through 2026-05-18
+Strategy ID       : btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1
+Training window   : 2026-02-14 through 2026-07-25, excluding 2026-04-29 through 2026-05-18
 Signal source     : Coinbase BTC-USD move_dz
 Settlement labels : resolved Polymarket/Gamma outcomes
-Value model       : btc_linear_z_momentum_price_bucket, asymmetric PM price buckets, C=0.03, HL120, day type excluded, side pooled
+Value model       : btc_linear_z_price_bucket, asymmetric PM price buckets, C=0.05, HL120, day type excluded, side pooled
 Entry prices      : 0.20-0.80 selected-side ask
 Global TTE        : 45-265 seconds
 Start gate        : elapsed >= 45 seconds
 Stake             : flat market-minimum shares, 5-share fallback
 Exit              : hold to resolution
 Execution         : event_driven_ws by default
-Fast limit        : ask + 1/2/2 ticks for HEALTHY/DEGRADED/POOR, residual-edge guarded
+Fast limit        : ask + 1 tick, residual-edge guarded; Degraded adds +1c edge, Poor adds +2c edge
 Position limit    : one filled trade per five-minute market
 ```
 
 The source of truth for the active model is:
 
 ```text
-strategy/btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1/strategy_manifest.json
-strategy/btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1/entry_profiles.json
+strategy/btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1/strategy_manifest.json
+strategy/btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1/entry_profiles.json
 ```
 
 The runtime refuses to start if key entry-shape settings differ from the frozen
@@ -266,7 +266,7 @@ The active calibration display names are fixed four-hour London segments:
 
 ### Recency And Regularisation
 
-The active momentum price-bucket surface uses 120-day recency weighting. Support
+The active move-dz price-bucket surface uses 120-day recency weighting. Support
 values shown in the dashboard are the fitted surface training-row count.
 
 ### Entry Profiles
@@ -274,19 +274,19 @@ values shown in the dashboard are the fitted surface training-row count.
 The default profile is:
 
 ```text
-continuation    : 5c edge, 45-265s TTE
+continuation    : 4c edge, 45-265s TTE
 mean reversion  : 6c edge, 45-265s TTE
 ```
 
 Current day/session/style overrides are stored in
-`strategy/btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1/entry_profiles.json`
+`strategy/btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1/entry_profiles.json`
 and documented in the strategy folder README.
 
 As of this README, the active shipped profile is:
 
 | Day | Session | Style | Edge | TTE |
 |---|---|---|---:|---:|
-| All | All | Continuation | 0.05 | 45-265 |
+| All | All | Continuation | 0.04 | 45-265 |
 | All | All | Mean reversion | 0.06 | 45-265 |
 
 ## Active Entry Rules
@@ -324,7 +324,7 @@ If both UP and DOWN qualify, the bot chooses:
 ## Removed From Active Entry Logic
 
 These mechanisms/files may still exist for research history or legacy support,
-but they are not part of the active `btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1` entry path:
+but they are not part of the active `btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1` entry path:
 
 - twelve two-hour policy session buckets
 - raw signed-BPS policy buckets
@@ -415,7 +415,7 @@ stats_bot/
   strategy.py            legacy policy helpers and shared utilities
 
 strategy/
-  btc_linear_dz_mom2s_asym_hl120_excl_apr29_may18_c05_m06_v1/
+  btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1/
     strategy_manifest.json active production surface manifest
     surface_model.pkl    active production surface model
     entry_profiles.json  active edge/TTE overrides
