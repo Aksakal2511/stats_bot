@@ -90,7 +90,7 @@ DEGRADED_ENTRY_TOLERANCE_TICKS = 1
 POOR_ENTRY_TOLERANCE_TICKS = 1
 DEGRADED_ENTRY_EDGE_BUMP = 0.01
 POOR_ENTRY_EDGE_BUMP = 0.02
-POLICY_NO_LONGER_VIABLE_LATCH_SECONDS = 1.0
+POLICY_NO_LONGER_VIABLE_LATCH_SECONDS = 1.5
 POLICY_NO_LONGER_VIABLE_LATCH_MIN_EDGE = 0.01
 EXECUTION_LATE_WARNING_SECONDS = 1.0
 EXECUTION_HEALTH_MIN_SAMPLES = 5
@@ -3094,10 +3094,24 @@ class StatsBot:
         if snapshot is None or decision is None:
             self._cancel_pending_entry("POLICY_NO_LONGER_VIABLE")
             return
-        if decision.selected_side and decision.selected_side != pending.policy_side:
-            self._cancel_pending_entry("POLICY_SIDE_CHANGED")
-            return
         no_longer_viable_latched = False
+        side_changed = bool(decision.selected_side and decision.selected_side != pending.policy_side)
+        if side_changed and pending_edge_ok:
+            self._log_latency(
+                "pending_entry_kept",
+                market_slug=pending.market_slug,
+                source="entry_manager",
+                order_id=pending.order_id,
+                side=pending.policy_side,
+                limit_price=pending.price,
+                detail=(
+                    "policy_side_changed_kept;"
+                    f"resting_edge={pending_edge:.6f};"
+                    f"required={pending_required_edge:.6f};"
+                    f"old_side={pending.policy_side};"
+                    f"new_side={decision.selected_side}"
+                ),
+            )
         policy_key_changed = decision.policy_key_text != pending.policy_key_text
         if policy_key_changed and pending_edge_ok:
             self._log_latency(
@@ -3116,6 +3130,9 @@ class StatsBot:
                 ),
             )
         if not pending_edge_ok:
+            if side_changed:
+                self._cancel_pending_entry("POLICY_SIDE_CHANGED")
+                return
             no_longer_viable_latched = self._pending_entry_can_latch_no_longer_viable(
                 pending,
                 decision,

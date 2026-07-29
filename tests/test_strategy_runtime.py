@@ -2580,7 +2580,7 @@ def test_pending_fast_limit_stays_live_when_resting_price_still_has_edge() -> No
     assert bot.pending_entry.order_id == "0xresting"
 
 
-def test_pending_fast_limit_cancels_when_policy_side_flips() -> None:
+def test_pending_fast_limit_keeps_policy_side_flip_when_pending_edge_survives() -> None:
     bot = object.__new__(StatsBot)
     bot.config = type(
         "Config",
@@ -2590,6 +2590,8 @@ def test_pending_fast_limit_cancels_when_policy_side_flips() -> None:
             "paper_fill_model": "fast_limit",
             "stake_mode": "min_order_size",
             "entry_quote_max_age_seconds": 999.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
         },
     )()
     bot.pending_entry = PendingEntryOrder(
@@ -2603,6 +2605,66 @@ def test_pending_fast_limit_cancels_when_policy_side_flips() -> None:
         policy_key_text="weekday|h12_18|210-239|z_06|p40_to_p50|UP",
         policy_side="UP",
         snapshot={"entry_execution_mode": "presigned_fast_limit"},
+        target_notional=2.05,
+    )
+    kept: list[tuple] = []
+    bot._fast_entry_quote = lambda *_args: None
+    bot._cancel_pending_entry = lambda reason: (_ for _ in ()).throw(AssertionError(f"unexpected cancel: {reason}"))
+    bot._log_latency = lambda *args, **kwargs: kept.append((args, kwargs))
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("weekday", "h12_18", "210-239", "z_06", "p45_to_p55", "DOWN"),
+        policy_record=None,
+        selected_side="DOWN",
+        selected_bid=0.46,
+        selected_ask=0.47,
+        selected_mid=0.465,
+        selected_spread=0.01,
+        selected_trade_value=0.52,
+        selected_policy_edge=0.05,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+
+    bot._manage_pending_entry(
+        datetime(2026, 7, 15, 16, 11, 21, 750_000, tzinfo=timezone.utc),
+        {"up_policy_value": 0.46},
+        decision,
+    )
+
+    assert bot.pending_entry is not None
+    assert bot.pending_entry.order_id == "0xstale"
+    assert any(kwargs.get("detail", "").startswith("policy_side_changed_kept") for _, kwargs in kept)
+
+
+def test_pending_fast_limit_cancels_policy_side_flip_when_pending_edge_is_gone() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "paper_trading": True,
+            "paper_fill_model": "fast_limit",
+            "stake_mode": "min_order_size",
+            "entry_quote_max_age_seconds": 999.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
+        },
+    )()
+    bot.pending_entry = PendingEntryOrder(
+        order_id="0xstale",
+        token_id="up",
+        side="BUY",
+        price=0.41,
+        target_shares=5.0,
+        created_at_utc=datetime(2026, 7, 15, 16, 11, 21, tzinfo=timezone.utc),
+        market_slug="btc-updown-5m-test",
+        policy_key_text="weekday|h12_18|210-239|z_06|p40_to_p50|UP",
+        policy_side="UP",
+        snapshot={"entry_execution_mode": "presigned_fast_limit", "entry_required_edge_at_limit": 0.04},
         target_notional=2.05,
     )
     cancelled: list[str] = []
@@ -2630,7 +2692,11 @@ def test_pending_fast_limit_cancels_when_policy_side_flips() -> None:
         threshold_bps=2.0,
     )
 
-    bot._manage_pending_entry(datetime(2026, 7, 15, 16, 11, 22, tzinfo=timezone.utc), {}, decision)
+    bot._manage_pending_entry(
+        datetime(2026, 7, 15, 16, 11, 21, 750_000, tzinfo=timezone.utc),
+        {"up_policy_value": 0.43},
+        decision,
+    )
 
     assert cancelled == ["POLICY_SIDE_CHANGED"]
     assert bot.pending_entry is None
@@ -2646,8 +2712,8 @@ def test_pending_fast_limit_cancels_when_blocked_policy_side_flips() -> None:
             "paper_fill_model": "fast_limit",
             "stake_mode": "min_order_size",
             "entry_quote_max_age_seconds": 999.0,
-            "entry_resting_max_age_seconds": 1.5,
-            "policy_no_longer_viable_latch_seconds": 1.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
         },
     )()
     bot.pending_entry = PendingEntryOrder(
@@ -2704,8 +2770,8 @@ def test_pending_fast_limit_keeps_same_side_policy_key_change_when_resting_edge_
             "paper_fill_model": "fast_limit",
             "stake_mode": "min_order_size",
             "entry_quote_max_age_seconds": 999.0,
-            "entry_resting_max_age_seconds": 1.5,
-            "policy_no_longer_viable_latch_seconds": 1.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
         },
     )()
     bot.pending_entry = PendingEntryOrder(
@@ -2865,7 +2931,7 @@ def test_pending_fast_limit_hard_cancels_after_resting_max_age() -> None:
     assert bot.pending_entry is None
 
 
-def test_pending_fast_limit_no_longer_viable_latch_expires_after_one_second() -> None:
+def test_pending_fast_limit_no_longer_viable_latch_expires_after_one_and_half_seconds() -> None:
     bot = object.__new__(StatsBot)
     bot.config = type(
         "Config",
@@ -2875,8 +2941,8 @@ def test_pending_fast_limit_no_longer_viable_latch_expires_after_one_second() ->
             "paper_fill_model": "fast_limit",
             "stake_mode": "min_order_size",
             "entry_quote_max_age_seconds": 999.0,
-            "entry_resting_max_age_seconds": 1.5,
-            "policy_no_longer_viable_latch_seconds": 1.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
         },
     )()
     bot.pending_entry = PendingEntryOrder(
@@ -2919,7 +2985,7 @@ def test_pending_fast_limit_no_longer_viable_latch_expires_after_one_second() ->
         threshold_bps=0.0,
     )
 
-    bot._manage_pending_entry(datetime(2026, 7, 15, 16, 11, 22, 100_000, tzinfo=timezone.utc), {}, decision)
+    bot._manage_pending_entry(datetime(2026, 7, 15, 16, 11, 22, 600_000, tzinfo=timezone.utc), {}, decision)
 
     assert cancelled == ["POLICY_EDGE_NO_LONGER_VALID"]
     assert bot.pending_entry is None

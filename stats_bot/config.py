@@ -310,10 +310,10 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         cooldown_seconds=max(0, _int_env("STATS_COOLDOWN_SECONDS", 10)),
         maker_min_spread_ticks=max(1, _int_env("STATS_MAKER_MIN_SPREAD_TICKS", 1)),
         entry_quote_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_QUOTE_MAX_AGE_SECONDS", 1.5)),
-        entry_resting_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_RESTING_MAX_AGE_SECONDS", 1.5)),
+        entry_resting_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_RESTING_MAX_AGE_SECONDS", 2.0)),
         policy_no_longer_viable_latch_seconds=max(
             0.0,
-            _float_env("STATS_POLICY_NO_LONGER_VIABLE_LATCH_SECONDS", 1.0),
+            _float_env("STATS_POLICY_NO_LONGER_VIABLE_LATCH_SECONDS", 1.5),
         ),
         live_entry_retry_cooldown_seconds=max(0.0, _float_env("STATS_LIVE_ENTRY_RETRY_COOLDOWN_SECONDS", 8.0)),
         live_max_entry_attempts_per_window=max(1, _int_env("STATS_LIVE_MAX_ENTRY_ATTEMPTS_PER_WINDOW", 3)),
