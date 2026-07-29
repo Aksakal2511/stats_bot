@@ -100,6 +100,8 @@ class BotConfig:
     cooldown_seconds: int
     maker_min_spread_ticks: int
     entry_quote_max_age_seconds: float
+    entry_resting_max_age_seconds: float
+    policy_no_longer_viable_latch_seconds: float
     live_entry_retry_cooldown_seconds: float
     live_max_entry_attempts_per_window: int
     live_wallet_reconcile_tolerance_usd: float
@@ -308,6 +310,11 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         cooldown_seconds=max(0, _int_env("STATS_COOLDOWN_SECONDS", 10)),
         maker_min_spread_ticks=max(1, _int_env("STATS_MAKER_MIN_SPREAD_TICKS", 1)),
         entry_quote_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_QUOTE_MAX_AGE_SECONDS", 1.5)),
+        entry_resting_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_RESTING_MAX_AGE_SECONDS", 1.5)),
+        policy_no_longer_viable_latch_seconds=max(
+            0.0,
+            _float_env("STATS_POLICY_NO_LONGER_VIABLE_LATCH_SECONDS", 1.0),
+        ),
         live_entry_retry_cooldown_seconds=max(0.0, _float_env("STATS_LIVE_ENTRY_RETRY_COOLDOWN_SECONDS", 8.0)),
         live_max_entry_attempts_per_window=max(1, _int_env("STATS_LIVE_MAX_ENTRY_ATTEMPTS_PER_WINDOW", 3)),
         live_wallet_reconcile_tolerance_usd=max(0.0, _float_env("STATS_LIVE_WALLET_RECONCILE_TOLERANCE_USD", 0.02)),

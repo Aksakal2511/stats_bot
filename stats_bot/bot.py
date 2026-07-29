@@ -90,7 +90,7 @@ DEGRADED_ENTRY_TOLERANCE_TICKS = 1
 POOR_ENTRY_TOLERANCE_TICKS = 1
 DEGRADED_ENTRY_EDGE_BUMP = 0.01
 POOR_ENTRY_EDGE_BUMP = 0.02
-POLICY_NO_LONGER_VIABLE_LATCH_SECONDS = 2.0
+POLICY_NO_LONGER_VIABLE_LATCH_SECONDS = 1.0
 POLICY_NO_LONGER_VIABLE_LATCH_MIN_EDGE = 0.01
 EXECUTION_LATE_WARNING_SECONDS = 1.0
 EXECUTION_HEALTH_MIN_SAMPLES = 5
@@ -1710,15 +1710,19 @@ class StatsBot:
         self,
         pending: PendingEntryOrder,
         decision: EntryDecision | None,
+        snapshot: dict[str, Any] | None = None,
     ) -> tuple[bool, float | None, float | None]:
         if decision is None:
-            return False, None, None
-        if decision.selected_side != pending.policy_side or decision.policy_key_text != pending.policy_key_text:
             return False, None, None
         blockers = set(decision.blockers or ())
         if blockers - {"POLICY_NO_SIDE_EDGE"}:
             return False, None, None
-        trade_value = finite_float(decision.selected_trade_value)
+        if decision.selected_side == pending.policy_side:
+            trade_value = finite_float(decision.selected_trade_value)
+        else:
+            trade_value = None
+            if snapshot is not None:
+                trade_value = finite_float(snapshot.get(f"{pending.policy_side.lower()}_policy_value"))
         required_edge = finite_float(pending.snapshot.get("entry_required_edge_at_limit"))
         if required_edge is None:
             required_edge = finite_float(decision.entry_edge_threshold)
@@ -1738,9 +1742,12 @@ class StatsBot:
     ) -> bool:
         if decision is None:
             return False
-        if age_seconds > POLICY_NO_LONGER_VIABLE_LATCH_SECONDS:
-            return False
-        if decision.selected_side != pending.policy_side or decision.policy_key_text != pending.policy_key_text:
+        latch_seconds = finite_float(
+            getattr(self.config, "policy_no_longer_viable_latch_seconds", POLICY_NO_LONGER_VIABLE_LATCH_SECONDS)
+        )
+        if latch_seconds is None:
+            latch_seconds = POLICY_NO_LONGER_VIABLE_LATCH_SECONDS
+        if age_seconds > latch_seconds:
             return False
         blockers = set(decision.blockers or ())
         if blockers - {"POLICY_NO_SIDE_EDGE"}:
@@ -3079,15 +3086,36 @@ class StatsBot:
                 return
 
         age = (now_utc - pending.created_at_utc).total_seconds()
-        pending_edge_ok, pending_edge, pending_required_edge = self._pending_entry_still_has_edge(pending, decision)
+        max_resting_age = finite_float(getattr(self.config, "entry_resting_max_age_seconds", math.inf))
+        if max_resting_age is not None and age >= max_resting_age:
+            self._cancel_pending_entry("ENTRY_RESTING_MAX_AGE")
+            return
+        pending_edge_ok, pending_edge, pending_required_edge = self._pending_entry_still_has_edge(pending, decision, snapshot)
         if snapshot is None or decision is None:
             self._cancel_pending_entry("POLICY_NO_LONGER_VIABLE")
             return
-        if decision.selected_side != pending.policy_side or decision.policy_key_text != pending.policy_key_text:
-            self._cancel_pending_entry("POLICY_CHANGED")
+        if decision.selected_side and decision.selected_side != pending.policy_side:
+            self._cancel_pending_entry("POLICY_SIDE_CHANGED")
             return
         no_longer_viable_latched = False
-        if not decision.viable and not pending_edge_ok:
+        policy_key_changed = decision.policy_key_text != pending.policy_key_text
+        if policy_key_changed and pending_edge_ok:
+            self._log_latency(
+                "pending_entry_kept",
+                market_slug=pending.market_slug,
+                source="entry_manager",
+                order_id=pending.order_id,
+                side=pending.policy_side,
+                limit_price=pending.price,
+                detail=(
+                    "policy_key_changed_kept;"
+                    f"resting_edge={pending_edge:.6f};"
+                    f"required={pending_required_edge:.6f};"
+                    f"old_key={pending.policy_key_text};"
+                    f"new_key={decision.policy_key_text}"
+                ),
+            )
+        if not pending_edge_ok:
             no_longer_viable_latched = self._pending_entry_can_latch_no_longer_viable(
                 pending,
                 decision,
@@ -3096,7 +3124,7 @@ class StatsBot:
                 pending_required_edge=pending_required_edge,
             )
             if not no_longer_viable_latched:
-                self._cancel_pending_entry("POLICY_NO_LONGER_VIABLE")
+                self._cancel_pending_entry("POLICY_EDGE_NO_LONGER_VALID")
                 return
             self._log_latency(
                 "pending_entry_kept",
@@ -3109,6 +3137,7 @@ class StatsBot:
                     "policy_no_longer_viable_latch;"
                     f"age={age:.3f};resting_edge={pending_edge:.6f};"
                     f"normal_required={pending_required_edge:.6f};"
+                    f"latch_seconds={getattr(self.config, 'policy_no_longer_viable_latch_seconds', POLICY_NO_LONGER_VIABLE_LATCH_SECONDS):.3f};"
                     f"latch_min={POLICY_NO_LONGER_VIABLE_LATCH_MIN_EDGE:.6f}"
                 ),
             )
@@ -3121,7 +3150,11 @@ class StatsBot:
                 return
         execution_mode = str(pending.snapshot.get("entry_execution_mode") or "maker_post_only")
         if execution_mode.startswith("presigned_fast_limit"):
-            fast_quote = self._fast_entry_quote(now_utc, snapshot, decision)
+            fast_quote = (
+                self._fast_entry_quote(now_utc, snapshot, decision)
+                if decision.selected_side == pending.policy_side
+                else None
+            )
             if fast_quote is None and (pending_edge_ok or no_longer_viable_latched):
                 spread_ticks = None
             elif fast_quote is None:
