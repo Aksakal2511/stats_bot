@@ -4366,15 +4366,23 @@ class StatsBot:
             )
         else:
             log.info(f"  policy      : {self.config.macro_policy_bundle} ({len(self.macro_policy):,} hierarchical rows)")
-        first_session = next(iter(self.macro_policy.session_display_names), "h00_06")
-        continuation = self.macro_policy.entry_parameters("weekday", first_session, "continuation")
-        mean_reversion = self.macro_policy.entry_parameters("weekday", first_session, "mean_reversion")
-        log.info(
-            "  entry edges : continuation=%.02f mean_reversion=%.02f (%s profile)",
-            continuation.edge,
-            mean_reversion.edge,
-            self.macro_policy.strategy_id,
-        )
+        timed_edges = getattr(self.macro_policy, "timed_entry_overrides", [])
+        if timed_edges:
+            log.info(
+                "  entry edges : conservative dynamic day-type/time table (%d bands, %s fallback)",
+                len(timed_edges),
+                self.macro_policy.strategy_id,
+            )
+        else:
+            first_session = next(iter(self.macro_policy.session_display_names), "h00_06")
+            continuation = self.macro_policy.entry_parameters("weekday", first_session, "continuation")
+            mean_reversion = self.macro_policy.entry_parameters("weekday", first_session, "mean_reversion")
+            log.info(
+                "  entry edges : continuation=%.02f mean_reversion=%.02f (%s profile)",
+                continuation.edge,
+                mean_reversion.edge,
+                self.macro_policy.strategy_id,
+            )
         log.info(f"  exit mode   : {self.config.exit_policy_mode}")
         session_names = "/".join(dict.fromkeys(self.macro_policy.session_display_names.values()))
         if getattr(self.macro_policy, "policy_type", "") == "continuous_surface":

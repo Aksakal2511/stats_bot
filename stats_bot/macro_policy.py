@@ -43,6 +43,15 @@ class EntryParameters:
     max_tte: int
 
 
+@dataclass(frozen=True)
+class TimedEntryOverride:
+    day_type: str
+    start_minute: int
+    end_minute: int
+    label: str
+    parameters: dict[str, EntryParameters]
+
+
 class MacroLocalPolicy:
     def __init__(self, path: Path):
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -69,6 +78,10 @@ class MacroLocalPolicy:
             )
             for key, value in profile_payload.get("overrides", {}).items()
         }
+        self.timed_entry_overrides = [
+            self._parse_timed_entry_override(row)
+            for row in profile_payload.get("timed_overrides", [])
+        ]
         self.session_display_names = {
             str(key): str(value) for key, value in payload.get("session_display_names", {}).items()
         }
@@ -230,12 +243,110 @@ class MacroLocalPolicy:
             f"{day_type}|{session_label}|{trade_style}", default
         )
 
+    @staticmethod
+    def _parse_time_minutes(value: Any) -> int:
+        if isinstance(value, (int, float)) and math.isfinite(float(value)):
+            minutes = int(value)
+        else:
+            text = str(value or "").strip()
+            if not text:
+                raise ValueError("Timed entry override is missing a start/end time")
+            if ":" in text:
+                hour_text, minute_text = text.split(":", 1)
+                minutes = int(hour_text) * 60 + int(minute_text)
+            elif len(text) in {3, 4} and text.isdigit():
+                minutes = int(text[:-2]) * 60 + int(text[-2:])
+            else:
+                minutes = int(text) * 60
+        if not 0 <= minutes <= 24 * 60:
+            raise ValueError(f"Timed entry override time is outside 00:00-24:00: {value!r}")
+        return minutes
+
+    @classmethod
+    def _parse_timed_entry_override(cls, row: dict[str, Any]) -> TimedEntryOverride:
+        day_type = str(row.get("day_type") or "").strip().lower()
+        if day_type not in {"weekday", "weekend"}:
+            raise ValueError(f"Timed entry override has invalid day_type: {row.get('day_type')!r}")
+        start_minute = cls._parse_time_minutes(row.get("start"))
+        end_minute = cls._parse_time_minutes(row.get("end"))
+        if start_minute == end_minute:
+            raise ValueError(f"Timed entry override has empty range: {row!r}")
+        label = str(row.get("label") or f"{start_minute:04d}_{end_minute:04d}").strip()
+        min_tte = int(row.get("min_tte"))
+        max_tte = int(row.get("max_tte"))
+        parameters = {
+            "continuation": EntryParameters(
+                edge=float(row["continuation_edge"]),
+                min_tte=min_tte,
+                max_tte=max_tte,
+            ),
+            "mean_reversion": EntryParameters(
+                edge=float(row["mean_reversion_edge"]),
+                min_tte=min_tte,
+                max_tte=max_tte,
+            ),
+        }
+        return TimedEntryOverride(
+            day_type=day_type,
+            start_minute=start_minute,
+            end_minute=end_minute,
+            label=label,
+            parameters=parameters,
+        )
+
+    @staticmethod
+    def _time_in_minutes(timestamp_london: Any) -> int | None:
+        hour = getattr(timestamp_london, "hour", None)
+        minute = getattr(timestamp_london, "minute", None)
+        if hour is None or minute is None:
+            return None
+        return int(hour) * 60 + int(minute)
+
+    def _timed_entry_override(
+        self,
+        day_type: str,
+        timestamp_london: Any,
+    ) -> TimedEntryOverride | None:
+        minute = self._time_in_minutes(timestamp_london)
+        if minute is None:
+            return None
+        normalized_day_type = str(day_type or "").strip().lower()
+        for override in self.timed_entry_overrides:
+            if override.day_type != normalized_day_type:
+                continue
+            if override.start_minute < override.end_minute:
+                if override.start_minute <= minute < override.end_minute:
+                    return override
+            elif minute >= override.start_minute or minute < override.end_minute:
+                return override
+        return None
+
+    def _entry_parameters_for_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        trade_style: str,
+    ) -> EntryParameters:
+        day_type = str(snapshot.get("day_type") or "weekday")
+        timed = self._timed_entry_override(day_type, snapshot.get("timestamp_london"))
+        if timed is not None and trade_style in timed.parameters:
+            return timed.parameters[trade_style]
+        _, session_label = self.macro_session(snapshot.get("timestamp_london"))
+        return self.entry_parameters(day_type, str(session_label or ""), trade_style)
+
     def entry_profile(self, snapshot: dict[str, Any]) -> tuple[
         str, str, EntryParameters, EntryParameters
     ]:
         day_type = str(snapshot.get("day_type") or "weekday")
         session_name, session_label = self.macro_session(snapshot.get("timestamp_london"))
         label = str(session_label or "NA")
+        timed = self._timed_entry_override(day_type, snapshot.get("timestamp_london"))
+        if timed is not None:
+            return (
+                day_type,
+                timed.label,
+                timed.parameters["continuation"],
+                timed.parameters["mean_reversion"],
+            )
         return (
             day_type,
             str(session_name or "NA"),
@@ -494,13 +605,8 @@ class MacroLocalPolicy:
             match = self._side_match(snapshot, side)
             if match is None:
                 continue
-            _, session_label = self.macro_session(snapshot.get("timestamp_london"))
             parameters = (
-                self.entry_parameters(
-                    str(snapshot.get("day_type") or "weekday"),
-                    str(session_label or ""),
-                    match.trade_style,
-                )
+                self._entry_parameters_for_snapshot(snapshot, match.trade_style)
                 if match.trade_style != "neutral"
                 else EntryParameters(math.inf, int(self.entry["min_tte"]), int(self.entry["max_tte"]))
             )
@@ -577,12 +683,7 @@ class MacroLocalPolicy:
                 threshold_bps=0.0,
             )
 
-        _, session_label = self.macro_session(snapshot.get("timestamp_london"))
-        threshold = self.entry_parameters(
-            str(snapshot.get("day_type") or "weekday"),
-            str(session_label or ""),
-            selected.trade_style,
-        ).edge
+        threshold = self._entry_parameters_for_snapshot(snapshot, selected.trade_style).edge
         snapshot.update({
             "macro_session": self.macro_session(snapshot.get("timestamp_london"))[0],
             "policy_signal_name": selected.signal_name,

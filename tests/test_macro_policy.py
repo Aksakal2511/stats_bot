@@ -59,7 +59,7 @@ def _snapshot(
 def test_production_policy_uses_polymarket_settlement_labels() -> None:
     policy = MacroLocalPolicy(POLICY)
     manifest = json.loads(POLICY.read_text(encoding="utf-8"))
-    assert policy.strategy_id == "btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1"
+    assert policy.strategy_id == "btc_linear_z_pb_asym_hl120_excl_apr29_may18_dynamic_edges_jul25_v1"
     assert policy.policy_type == "continuous_surface"
     assert policy.signal_source == "coinbase_btc_usd"
     assert policy.signal_feature == "move_dz"
@@ -153,6 +153,29 @@ def test_entry_profiles_match_fixed_full_raw_oos_spec() -> None:
             assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.06, 45, 265)
 
 
+def test_timed_entry_profiles_match_conservative_daytype_table() -> None:
+    policy = MacroLocalPolicy(POLICY)
+    cases = [
+        ("weekday", datetime(2026, 7, 1, 7, 59, tzinfo=LONDON), "ASIA_00_08", 0.07, 0.04),
+        ("weekday", datetime(2026, 7, 1, 8, 0, tzinfo=LONDON), "EUROPE_US_PREOPEN_08_1430", 0.04, 0.06),
+        ("weekday", datetime(2026, 7, 1, 14, 29, tzinfo=LONDON), "EUROPE_US_PREOPEN_08_1430", 0.04, 0.06),
+        ("weekday", datetime(2026, 7, 1, 14, 30, tzinfo=LONDON), "US_OPEN_1430_17", 0.04, 0.05),
+        ("weekday", datetime(2026, 7, 1, 17, 0, tzinfo=LONDON), "US_AFTERNOON_17_22", 0.05, 0.06),
+        ("weekday", datetime(2026, 7, 1, 22, 0, tzinfo=LONDON), "US_LATE_22_24", 0.05, 0.05),
+        ("weekend", datetime(2026, 7, 4, 7, 59, tzinfo=LONDON), "WEEKEND_00_08", 0.03, 0.04),
+        ("weekend", datetime(2026, 7, 4, 8, 0, tzinfo=LONDON), "WEEKEND_08_1430", 0.03, 0.08),
+        ("weekend", datetime(2026, 7, 4, 14, 30, tzinfo=LONDON), "WEEKEND_1430_17", 0.03, 0.08),
+        ("weekend", datetime(2026, 7, 4, 17, 0, tzinfo=LONDON), "WEEKEND_17_22", 0.10, 0.06),
+        ("weekend", datetime(2026, 7, 4, 22, 0, tzinfo=LONDON), "WEEKEND_22_24", 0.07, 0.06),
+    ]
+    for day_type, ts, expected_label, expected_c, expected_mr in cases:
+        snapshot = {"day_type": day_type, "timestamp_london": ts}
+        _, label, continuation, mean_reversion = policy.entry_profile(snapshot)
+        assert label == expected_label
+        assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (expected_c, 45, 265)
+        assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (expected_mr, 45, 265)
+
+
 def test_continuation_tte_blocks_only_outside_fixed_profile() -> None:
     policy = MacroLocalPolicy(POLICY)
     profile = policy.entry_parameters("weekday", "h04_08", "continuation")
@@ -233,7 +256,7 @@ def test_policy_match_fields_are_populated_when_edge_fails() -> None:
     assert decision.policy_record is not None
     assert decision.selected_trade_value is not None
     assert decision.selected_policy_edge is not None
-    assert decision.entry_edge_threshold in {0.04, 0.06}
+    assert decision.entry_edge_threshold in {0.04, 0.07}
     assert snapshot["policy_signal_name"] == "move_dz"
     assert snapshot["policy_support"] > 0
     assert snapshot["policy_level"] == "surface"
