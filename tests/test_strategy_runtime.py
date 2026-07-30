@@ -789,6 +789,209 @@ def test_fast_presigned_quote_bumps_required_edge_by_execution_health() -> None:
     assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, degraded_only) is None
 
 
+def test_surplus_adaptive_fast_quote_spends_one_tick_only_with_spare_edge() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        min_entry_price=0.15,
+        max_entry_price=0.80,
+        weekend_min_entry_price=0.15,
+        weekend_max_entry_price=0.80,
+        stake_mode="min_order_size",
+        stake_usd=5.0,
+        min_order_size_fallback=5.0,
+        dust_share_threshold=0.01,
+        surplus_adaptive_entry_enabled=True,
+        surplus_adaptive_min_edge_surplus=0.015,
+        surplus_adaptive_step_edge_surplus=0.010,
+        surplus_adaptive_extra_ticks=2,
+    )
+    market_start = datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc)
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=market_start,
+        market_end_utc=market_start + timedelta(seconds=300),
+        tick_size=0.01,
+        min_order_size=5.0,
+    )
+    bot.recent_clob_ack_ms = deque([350.0] * 10, maxlen=10)
+    bot._side_book = lambda side: BookSnapshot(
+        bid=0.69,
+        ask=0.70,
+        mid=0.695,
+        spread=0.01,
+        bid_depth_total=10,
+        ask_depth_total=10,
+        best_bid_depth=5,
+        best_ask_depth=5,
+        captured_at_utc=market_start,
+    )
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("weekday", "US", "180-209", "z_00", "p70_to_p80", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.69,
+        selected_ask=0.70,
+        selected_mid=0.695,
+        selected_spread=0.01,
+        selected_trade_value=0.77,
+        selected_policy_edge=0.07,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+
+    quote = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
+
+    assert quote is not None
+    assert quote.price == 0.72
+    assert quote.tolerance_ticks == 2
+    assert round(quote.edge_at_limit, 6) == 0.05
+    assert round(quote.required_edge, 6) == 0.04
+
+
+def test_surplus_adaptive_fast_quote_leaves_low_surplus_at_base_tick() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        min_entry_price=0.15,
+        max_entry_price=0.80,
+        weekend_min_entry_price=0.15,
+        weekend_max_entry_price=0.80,
+        stake_mode="min_order_size",
+        stake_usd=5.0,
+        min_order_size_fallback=5.0,
+        dust_share_threshold=0.01,
+        surplus_adaptive_entry_enabled=True,
+        surplus_adaptive_min_edge_surplus=0.015,
+        surplus_adaptive_step_edge_surplus=0.010,
+        surplus_adaptive_extra_ticks=2,
+    )
+    market_start = datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc)
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=market_start,
+        market_end_utc=market_start + timedelta(seconds=300),
+        tick_size=0.01,
+        min_order_size=5.0,
+    )
+    bot.recent_clob_ack_ms = deque([350.0] * 10, maxlen=10)
+    bot._side_book = lambda side: BookSnapshot(
+        bid=0.69,
+        ask=0.70,
+        mid=0.695,
+        spread=0.01,
+        bid_depth_total=10,
+        ask_depth_total=10,
+        best_bid_depth=5,
+        best_ask_depth=5,
+        captured_at_utc=market_start,
+    )
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("weekday", "US", "180-209", "z_00", "p70_to_p80", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.69,
+        selected_ask=0.70,
+        selected_mid=0.695,
+        selected_spread=0.01,
+        selected_trade_value=0.76,
+        selected_policy_edge=0.06,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+
+    quote = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
+
+    assert quote is not None
+    assert quote.price == 0.71
+    assert quote.tolerance_ticks == 1
+    assert round(quote.edge_at_limit, 6) == 0.05
+
+
+def test_surplus_adaptive_fast_quote_caps_high_surplus_at_two_extra_ticks() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        min_entry_price=0.15,
+        max_entry_price=0.80,
+        weekend_min_entry_price=0.15,
+        weekend_max_entry_price=0.80,
+        stake_mode="min_order_size",
+        stake_usd=5.0,
+        min_order_size_fallback=5.0,
+        dust_share_threshold=0.01,
+        surplus_adaptive_entry_enabled=True,
+        surplus_adaptive_min_edge_surplus=0.015,
+        surplus_adaptive_step_edge_surplus=0.010,
+        surplus_adaptive_extra_ticks=2,
+    )
+    market_start = datetime(2026, 6, 8, 12, 0, tzinfo=timezone.utc)
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=market_start,
+        market_end_utc=market_start + timedelta(seconds=300),
+        tick_size=0.01,
+        min_order_size=5.0,
+    )
+    bot.recent_clob_ack_ms = deque([350.0] * 10, maxlen=10)
+    bot._side_book = lambda side: BookSnapshot(
+        bid=0.69,
+        ask=0.70,
+        mid=0.695,
+        spread=0.01,
+        bid_depth_total=10,
+        ask_depth_total=10,
+        best_bid_depth=5,
+        best_ask_depth=5,
+        captured_at_utc=market_start,
+    )
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("weekday", "US", "180-209", "z_00", "p70_to_p80", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.69,
+        selected_ask=0.70,
+        selected_mid=0.695,
+        selected_spread=0.01,
+        selected_trade_value=0.79,
+        selected_policy_edge=0.09,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+
+    quote = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
+
+    assert quote is not None
+    assert quote.price == 0.73
+    assert quote.tolerance_ticks == 3
+    assert round(quote.edge_at_limit, 6) == 0.06
+    assert round(quote.required_edge, 6) == 0.04
+
+
 def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False, order_progress: list[object | None] | None = None):
     bot = object.__new__(StatsBot)
     market_start = datetime(2026, 7, 15, 18, 5, tzinfo=timezone.utc)

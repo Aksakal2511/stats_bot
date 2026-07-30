@@ -103,6 +103,10 @@ class BotConfig:
     entry_resting_max_age_seconds: float
     entry_stale_quote_max_ticks: int
     entry_stale_quote_grace_seconds: float
+    surplus_adaptive_entry_enabled: bool
+    surplus_adaptive_min_edge_surplus: float
+    surplus_adaptive_step_edge_surplus: float
+    surplus_adaptive_extra_ticks: int
     policy_no_longer_viable_latch_seconds: float
     live_entry_retry_cooldown_seconds: float
     live_max_entry_attempts_per_window: int
@@ -315,6 +319,10 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         entry_resting_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_RESTING_MAX_AGE_SECONDS", 3.0)),
         entry_stale_quote_max_ticks=max(0, _int_env("STATS_ENTRY_STALE_QUOTE_MAX_TICKS", 2)),
         entry_stale_quote_grace_seconds=max(0.0, _float_env("STATS_ENTRY_STALE_QUOTE_GRACE_SECONDS", 0.4)),
+        surplus_adaptive_entry_enabled=_bool_env("STATS_SURPLUS_ADAPTIVE_ENTRY_ENABLED", False),
+        surplus_adaptive_min_edge_surplus=max(0.0, _float_env("STATS_SURPLUS_ADAPTIVE_MIN_EDGE_SURPLUS", 0.015)),
+        surplus_adaptive_step_edge_surplus=max(0.0001, _float_env("STATS_SURPLUS_ADAPTIVE_STEP_EDGE_SURPLUS", 0.010)),
+        surplus_adaptive_extra_ticks=max(0, _int_env("STATS_SURPLUS_ADAPTIVE_EXTRA_TICKS", 1)),
         policy_no_longer_viable_latch_seconds=max(
             0.0,
             _float_env("STATS_POLICY_NO_LONGER_VIABLE_LATCH_SECONDS", 1.5),

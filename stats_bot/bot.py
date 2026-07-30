@@ -1808,8 +1808,8 @@ class StatsBot:
         health_status = _execution_health_status(
             getattr(self, "recent_clob_ack_ms", collections.deque(maxlen=EXECUTION_HEALTH_WINDOW))
         )
-        tolerance_ticks = _entry_tolerance_ticks_for_execution_health(health_status)
-        tolerated = ask + (tolerance_ticks * tick)
+        base_tolerance_ticks = _entry_tolerance_ticks_for_execution_health(health_status)
+        tolerated = ask + (base_tolerance_ticks * tick)
         price = round_price(min(tolerated, active_max_entry), tick)
         if price + 1e-12 < ask:
             return None
@@ -1824,6 +1824,27 @@ class StatsBot:
         edge_at_limit = trade_value - price
         if edge_at_limit + 1e-12 < required_edge_at_limit:
             return None
+        tolerance_ticks = base_tolerance_ticks
+        if bool(getattr(self.config, "surplus_adaptive_entry_enabled", False)):
+            min_surplus = finite_float(getattr(self.config, "surplus_adaptive_min_edge_surplus", 0.015))
+            if min_surplus is None:
+                min_surplus = 0.015
+            step_surplus = finite_float(getattr(self.config, "surplus_adaptive_step_edge_surplus", 0.010))
+            if step_surplus is None or step_surplus <= 0:
+                step_surplus = 0.010
+            max_extra_ticks = max(0, int(getattr(self.config, "surplus_adaptive_extra_ticks", 1) or 0))
+            surplus_at_base_limit = edge_at_limit - required_edge_at_limit
+            if max_extra_ticks > 0 and surplus_at_base_limit + 1e-12 >= min_surplus:
+                surplus_steps = int(math.floor((surplus_at_base_limit - min_surplus + 1e-12) / step_surplus))
+                spend_ticks = min(max_extra_ticks, max(1, surplus_steps + 1))
+                adaptive_ticks = base_tolerance_ticks + spend_ticks
+                adaptive_tolerated = ask + (adaptive_ticks * tick)
+                adaptive_price = round_price(min(adaptive_tolerated, active_max_entry), tick)
+                adaptive_edge_at_limit = trade_value - adaptive_price
+                if adaptive_price > price + 1e-12 and adaptive_edge_at_limit + 1e-12 >= required_edge_at_limit:
+                    price = adaptive_price
+                    edge_at_limit = adaptive_edge_at_limit
+                    tolerance_ticks = adaptive_ticks
         shares, target_notional, min_order_size = self._entry_target_size(price=price, market=market)
         if shares <= self.config.dust_share_threshold or shares + 1e-9 < min_order_size:
             return None
