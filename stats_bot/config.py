@@ -312,7 +312,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         cooldown_seconds=max(0, _int_env("STATS_COOLDOWN_SECONDS", 10)),
         maker_min_spread_ticks=max(1, _int_env("STATS_MAKER_MIN_SPREAD_TICKS", 1)),
         entry_quote_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_QUOTE_MAX_AGE_SECONDS", 1.5)),
-        entry_resting_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_RESTING_MAX_AGE_SECONDS", 2.0)),
+        entry_resting_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_RESTING_MAX_AGE_SECONDS", 3.0)),
         entry_stale_quote_max_ticks=max(0, _int_env("STATS_ENTRY_STALE_QUOTE_MAX_TICKS", 2)),
         entry_stale_quote_grace_seconds=max(0.0, _float_env("STATS_ENTRY_STALE_QUOTE_GRACE_SECONDS", 0.4)),
         policy_no_longer_viable_latch_seconds=max(
