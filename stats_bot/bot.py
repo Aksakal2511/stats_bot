@@ -1756,6 +1756,38 @@ class StatsBot:
             return False
         return pending_edge + 1e-12 >= POLICY_NO_LONGER_VIABLE_LATCH_MIN_EDGE
 
+    def _pending_entry_stale_quote_state(
+        self,
+        pending: PendingEntryOrder,
+        now_utc: datetime,
+    ) -> tuple[bool, float | None, float | None, float | None, float | None]:
+        max_ticks = int(getattr(self.config, "entry_stale_quote_max_ticks", 0) or 0)
+        if max_ticks <= 0:
+            pending.stale_quote_started_at_utc = None
+            return False, None, None, None, None
+        book = self._side_book(pending.policy_side)
+        current_ask = finite_float(book.ask)
+        if current_ask is None:
+            pending.stale_quote_started_at_utc = None
+            return False, None, None, None, None
+        tick_size = finite_float(getattr(getattr(self, "current_market", None), "tick_size", None))
+        if tick_size is None or tick_size <= 0:
+            tick_size = 0.01
+        max_distance = max_ticks * tick_size
+        distance = current_ask - float(pending.price)
+        if distance <= max_distance + 1e-12:
+            pending.stale_quote_started_at_utc = None
+            return False, current_ask, distance, max_distance, 0.0
+        if pending.stale_quote_started_at_utc is None:
+            pending.stale_quote_started_at_utc = now_utc
+            away_seconds = 0.0
+        else:
+            away_seconds = max(0.0, (now_utc - pending.stale_quote_started_at_utc).total_seconds())
+        grace_seconds = finite_float(getattr(self.config, "entry_stale_quote_grace_seconds", 0.4))
+        if grace_seconds is None:
+            grace_seconds = 0.4
+        return away_seconds >= grace_seconds, current_ask, distance, max_distance, away_seconds
+
     def _fast_entry_quote(
         self,
         now_utc: datetime,
@@ -1980,7 +2012,14 @@ class StatsBot:
             {"submission_id": submission.submission_id, "market_slug": submission.market_slug, "age_seconds": round(age, 3)},
         )
 
-    def _place_entry_event_driven(self, now_utc: datetime, snapshot: dict[str, Any], decision: EntryDecision) -> None:
+    def _place_entry_event_driven(
+        self,
+        now_utc: datetime,
+        snapshot: dict[str, Any],
+        decision: EntryDecision,
+        *,
+        ignore_retry_cooldown: bool = False,
+    ) -> None:
         """Atomically reserve one market attempt and queue it for submission."""
         market = self.current_market
         if market is None or not decision.viable or not decision.selected_side:
@@ -2013,7 +2052,7 @@ class StatsBot:
                 {"market_slug": market.slug, "attempts": attempts, "attempt_limit": attempt_limit},
             )
             return
-        if not self.config.paper_trading and self._live_retry_cooldown_remaining(market.slug, now_utc) > 0:
+        if not self.config.paper_trading and not ignore_retry_cooldown and self._live_retry_cooldown_remaining(market.slug, now_utc) > 0:
             return
         quote = self._fast_entry_quote(now_utc, snapshot, decision) if self.config.paper_trading or self._presigned_entries_available() else None
         signed_order = None
@@ -2382,11 +2421,24 @@ class StatsBot:
         if reconcile_pending and self.pending_entry is not None:
             self._open_new_live_fill_if_any(self.pending_entry, now_utc, "USER_WS_TRIGGER")
 
-    def _request_entry(self, now_utc: datetime, snapshot: dict[str, Any], decision: EntryDecision) -> None:
+    def _request_entry(
+        self,
+        now_utc: datetime,
+        snapshot: dict[str, Any],
+        decision: EntryDecision,
+        *,
+        ignore_retry_cooldown: bool = False,
+    ) -> None:
         if getattr(self.config, "execution_mode", "legacy_polling") == "event_driven_ws":
-            self._place_entry_event_driven(now_utc, snapshot, decision)
+            if ignore_retry_cooldown:
+                self._place_entry_event_driven(now_utc, snapshot, decision, ignore_retry_cooldown=True)
+            else:
+                self._place_entry_event_driven(now_utc, snapshot, decision)
         else:
-            self._place_entry(now_utc, snapshot, decision)
+            if ignore_retry_cooldown:
+                self._place_entry(now_utc, snapshot, decision, ignore_retry_cooldown=True)
+            else:
+                self._place_entry(now_utc, snapshot, decision)
 
     def _log_viable_decision(self, now_utc: datetime, decision: EntryDecision) -> None:
         if not decision.viable or not decision.selected_side or self.current_market is None:
@@ -2449,7 +2501,14 @@ class StatsBot:
             thread.join(timeout=2.0)
         self.pm.stop_streams()
 
-    def _place_entry(self, now_utc: datetime, snapshot: dict[str, Any], decision: EntryDecision) -> None:
+    def _place_entry(
+        self,
+        now_utc: datetime,
+        snapshot: dict[str, Any],
+        decision: EntryDecision,
+        *,
+        ignore_retry_cooldown: bool = False,
+    ) -> None:
         entry_path_started = time.perf_counter()
         market = self.current_market
         if market is None or not decision.viable or not decision.selected_side:
@@ -2486,7 +2545,7 @@ class StatsBot:
                     {"market_slug": market.slug, "attempts": attempts, "attempt_limit": attempt_limit},
                 )
                 return
-            remaining = self._live_retry_cooldown_remaining(market.slug, now_utc)
+            remaining = 0.0 if ignore_retry_cooldown else self._live_retry_cooldown_remaining(market.slug, now_utc)
             if remaining > 0:
                 self._log_event(
                     "entry_skipped",
@@ -3165,6 +3224,35 @@ class StatsBot:
                 if self.pending_entry is None and self.active_position is None:
                     self._request_entry(now_utc, snapshot, decision)
                 return
+        stale_quote, current_ask, quote_distance, max_quote_distance, away_seconds = self._pending_entry_stale_quote_state(
+            pending,
+            now_utc,
+        )
+        if stale_quote:
+            self._log_latency(
+                "pending_entry_stale_quote",
+                market_slug=pending.market_slug,
+                source="entry_manager",
+                order_id=pending.order_id,
+                side=pending.policy_side,
+                observed_ask=current_ask,
+                limit_price=pending.price,
+                detail=(
+                    f"ask_distance={quote_distance:.6f};"
+                    f"max_distance={max_quote_distance:.6f};"
+                    f"away_seconds={away_seconds:.3f};"
+                    f"resting_edge={pending_edge:.6f};"
+                    f"required={pending_required_edge:.6f}"
+                ),
+            )
+            self._cancel_pending_entry("ENTRY_STALE_QUOTE_DISTANCE")
+            if (
+                self.pending_entry is None
+                and self.active_position is None
+                and self.entry_fills_by_window.get(pending.market_slug, 0) == 0
+            ):
+                self._request_entry(now_utc, snapshot, decision, ignore_retry_cooldown=True)
+            return
         execution_mode = str(pending.snapshot.get("entry_execution_mode") or "maker_post_only")
         if execution_mode.startswith("presigned_fast_limit"):
             fast_quote = (
@@ -3203,9 +3291,20 @@ class StatsBot:
                 self._cancel_pending_entry("MAKER_SPREAD_NO_LONGER_VALID")
                 return
             if not math.isclose(desired_price, pending.price, abs_tol=1e-9):
-                self._cancel_pending_entry("MAKER_PRICE_CHANGED")
-                self._request_entry(now_utc, snapshot, decision)
-                return
+                self._log_latency(
+                    "pending_entry_kept",
+                    market_slug=pending.market_slug,
+                    source="entry_manager",
+                    order_id=pending.order_id,
+                    side=pending.policy_side,
+                    limit_price=pending.price,
+                    detail=(
+                        "maker_price_changed_kept;"
+                        f"resting_edge={pending_edge:.6f};"
+                        f"required={pending_required_edge:.6f};"
+                        f"fresh_price={desired_price:.6f}"
+                    ),
+                )
         if age >= self.config.entry_quote_max_age_seconds:
             self._log_event(
                 "maker_entry_revalidated",

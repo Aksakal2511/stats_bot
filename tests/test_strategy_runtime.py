@@ -2817,6 +2817,372 @@ def test_pending_fast_limit_keeps_same_side_policy_key_change_when_resting_edge_
     assert any(kwargs.get("detail", "").startswith("policy_key_changed_kept") for _, kwargs in kept)
 
 
+def test_pending_maker_order_keeps_price_change_when_resting_edge_survives() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "paper_trading": True,
+            "paper_fill_model": "fast_limit",
+            "stake_mode": "min_order_size",
+            "entry_quote_max_age_seconds": 999.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
+        },
+    )()
+    bot.pending_entry = PendingEntryOrder(
+        order_id="0xmakerkeep",
+        token_id="up",
+        side="BUY",
+        price=0.41,
+        target_shares=5.0,
+        created_at_utc=datetime(2026, 7, 15, 16, 11, 21, tzinfo=timezone.utc),
+        market_slug="btc-updown-5m-test",
+        policy_key_text="weekday|p40_to_p45|UP",
+        policy_side="UP",
+        snapshot={"entry_execution_mode": "maker_post_only", "entry_required_edge_at_limit": 0.04},
+        target_notional=2.05,
+    )
+    kept: list[tuple] = []
+    bot._maker_quote = lambda _side: (0.42, 1, None)
+    bot._cancel_pending_entry = lambda reason: (_ for _ in ()).throw(AssertionError(f"unexpected cancel: {reason}"))
+    bot._request_entry = lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected re-request"))
+    bot._log_latency = lambda *args, **kwargs: kept.append((args, kwargs))
+    bot._log_event = lambda *args, **kwargs: None
+
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("weekday", "p40_to_p45", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.41,
+        selected_ask=0.42,
+        selected_mid=0.415,
+        selected_spread=0.01,
+        selected_trade_value=0.465,
+        selected_policy_edge=0.045,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=2.0,
+    )
+
+    bot._manage_pending_entry(datetime(2026, 7, 15, 16, 11, 21, 750_000, tzinfo=timezone.utc), {}, decision)
+
+    assert bot.pending_entry is not None
+    assert bot.pending_entry.order_id == "0xmakerkeep"
+    assert any(kwargs.get("detail", "").startswith("maker_price_changed_kept") for _, kwargs in kept)
+
+
+def test_pending_fast_limit_cancels_and_retries_when_ask_stale_for_grace_period() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "paper_trading": True,
+            "paper_fill_model": "fast_limit",
+            "stake_mode": "min_order_size",
+            "entry_quote_max_age_seconds": 999.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
+            "entry_stale_quote_max_ticks": 2,
+            "entry_stale_quote_grace_seconds": 0.4,
+        },
+    )()
+    started = datetime(2026, 7, 15, 16, 11, 21, tzinfo=timezone.utc)
+    bot.pending_entry = PendingEntryOrder(
+        order_id="0xstaleask",
+        token_id="up",
+        side="BUY",
+        price=0.21,
+        target_shares=5.0,
+        created_at_utc=started,
+        market_slug="btc-updown-5m-test",
+        policy_key_text="policy|UP",
+        policy_side="UP",
+        snapshot={"entry_execution_mode": "presigned_fast_limit", "entry_required_edge_at_limit": 0.04},
+        target_notional=1.05,
+        stale_quote_started_at_utc=started + timedelta(milliseconds=100),
+    )
+    bot.active_position = None
+    bot.entry_fills_by_window = {}
+    bot._side_book = lambda _side: BookSnapshot(
+        bid=0.23,
+        ask=0.24,
+        mid=0.235,
+        spread=0.01,
+        bid_depth_total=None,
+        ask_depth_total=None,
+        best_bid_depth=None,
+        best_ask_depth=None,
+        captured_at_utc=started,
+    )
+    bot._fast_entry_quote = lambda *_args: None
+    bot._log_latency = lambda *args, **kwargs: None
+    cancelled: list[str] = []
+    requested: list[bool] = []
+
+    def cancel(reason: str) -> None:
+        cancelled.append(reason)
+        bot.pending_entry = None
+
+    def request(*_args, ignore_retry_cooldown: bool = False) -> None:
+        requested.append(ignore_retry_cooldown)
+
+    bot._cancel_pending_entry = cancel
+    bot._request_entry = request
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("policy", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.20,
+        selected_ask=0.21,
+        selected_mid=0.205,
+        selected_spread=0.01,
+        selected_trade_value=0.28,
+        selected_policy_edge=0.07,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+
+    bot._manage_pending_entry(started + timedelta(milliseconds=501), {}, decision)
+
+    assert cancelled == ["ENTRY_STALE_QUOTE_DISTANCE"]
+    assert requested == [True]
+
+
+def test_pending_maker_order_uses_same_stale_ask_retry_mechanics() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "paper_trading": True,
+            "paper_fill_model": "fast_limit",
+            "stake_mode": "min_order_size",
+            "entry_quote_max_age_seconds": 999.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
+            "entry_stale_quote_max_ticks": 2,
+            "entry_stale_quote_grace_seconds": 0.4,
+        },
+    )()
+    started = datetime(2026, 7, 15, 16, 11, 21, tzinfo=timezone.utc)
+    bot.pending_entry = PendingEntryOrder(
+        order_id="0xmakerstaleask",
+        token_id="up",
+        side="BUY",
+        price=0.21,
+        target_shares=5.0,
+        created_at_utc=started,
+        market_slug="btc-updown-5m-test",
+        policy_key_text="policy|UP",
+        policy_side="UP",
+        snapshot={"entry_execution_mode": "maker_post_only", "entry_required_edge_at_limit": 0.04},
+        target_notional=1.05,
+        stale_quote_started_at_utc=started,
+    )
+    bot.active_position = None
+    bot.entry_fills_by_window = {}
+    bot._side_book = lambda _side: BookSnapshot(
+        bid=0.23,
+        ask=0.24,
+        mid=0.235,
+        spread=0.01,
+        bid_depth_total=None,
+        ask_depth_total=None,
+        best_bid_depth=None,
+        best_ask_depth=None,
+        captured_at_utc=started,
+    )
+    bot._log_latency = lambda *args, **kwargs: None
+    cancelled: list[str] = []
+    requested: list[bool] = []
+
+    def cancel(reason: str) -> None:
+        cancelled.append(reason)
+        bot.pending_entry = None
+
+    bot._cancel_pending_entry = cancel
+    bot._request_entry = lambda *_args, ignore_retry_cooldown=False: requested.append(ignore_retry_cooldown)
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("policy", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.20,
+        selected_ask=0.21,
+        selected_mid=0.205,
+        selected_spread=0.01,
+        selected_trade_value=0.28,
+        selected_policy_edge=0.07,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+
+    bot._manage_pending_entry(started + timedelta(milliseconds=450), {}, decision)
+
+    assert cancelled == ["ENTRY_STALE_QUOTE_DISTANCE"]
+    assert requested == [True]
+
+
+def test_pending_entry_keeps_ask_within_two_ticks_and_resets_stale_timer() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "paper_trading": True,
+            "paper_fill_model": "fast_limit",
+            "stake_mode": "min_order_size",
+            "entry_quote_max_age_seconds": 999.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
+            "entry_stale_quote_max_ticks": 2,
+            "entry_stale_quote_grace_seconds": 0.4,
+        },
+    )()
+    started = datetime(2026, 7, 15, 16, 11, 21, tzinfo=timezone.utc)
+    bot.pending_entry = PendingEntryOrder(
+        order_id="0xnearask",
+        token_id="up",
+        side="BUY",
+        price=0.21,
+        target_shares=5.0,
+        created_at_utc=started,
+        market_slug="btc-updown-5m-test",
+        policy_key_text="policy|UP",
+        policy_side="UP",
+        snapshot={"entry_execution_mode": "presigned_fast_limit", "entry_required_edge_at_limit": 0.04},
+        target_notional=1.05,
+        stale_quote_started_at_utc=started,
+    )
+    bot.entry_fills_by_window = {}
+    bot._side_book = lambda _side: BookSnapshot(
+        bid=0.22,
+        ask=0.23,
+        mid=0.225,
+        spread=0.01,
+        bid_depth_total=None,
+        ask_depth_total=None,
+        best_bid_depth=None,
+        best_ask_depth=None,
+        captured_at_utc=started,
+    )
+    bot._fast_entry_quote = lambda *_args: None
+    bot._cancel_pending_entry = lambda reason: (_ for _ in ()).throw(AssertionError(f"unexpected cancel: {reason}"))
+    bot._request_entry = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unexpected re-request"))
+    bot._log_latency = lambda *args, **kwargs: None
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("policy", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.20,
+        selected_ask=0.21,
+        selected_mid=0.205,
+        selected_spread=0.01,
+        selected_trade_value=0.28,
+        selected_policy_edge=0.07,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+
+    bot._manage_pending_entry(started + timedelta(milliseconds=750), {}, decision)
+
+    assert bot.pending_entry is not None
+    assert bot.pending_entry.stale_quote_started_at_utc is None
+
+
+def test_pending_stale_ask_cancel_does_not_retry_when_cancel_finds_fill() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = type(
+        "Config",
+        (),
+        {
+            "paper_trading": True,
+            "paper_fill_model": "fast_limit",
+            "stake_mode": "min_order_size",
+            "entry_quote_max_age_seconds": 999.0,
+            "entry_resting_max_age_seconds": 2.0,
+            "policy_no_longer_viable_latch_seconds": 1.5,
+            "entry_stale_quote_max_ticks": 2,
+            "entry_stale_quote_grace_seconds": 0.4,
+        },
+    )()
+    started = datetime(2026, 7, 15, 16, 11, 21, tzinfo=timezone.utc)
+    bot.pending_entry = PendingEntryOrder(
+        order_id="0xfillduringcancel",
+        token_id="up",
+        side="BUY",
+        price=0.21,
+        target_shares=5.0,
+        created_at_utc=started,
+        market_slug="btc-updown-5m-test",
+        policy_key_text="policy|UP",
+        policy_side="UP",
+        snapshot={"entry_execution_mode": "presigned_fast_limit", "entry_required_edge_at_limit": 0.04},
+        target_notional=1.05,
+        stale_quote_started_at_utc=started,
+    )
+    bot.active_position = None
+    bot.entry_fills_by_window = {}
+    bot._side_book = lambda _side: BookSnapshot(
+        bid=0.23,
+        ask=0.24,
+        mid=0.235,
+        spread=0.01,
+        bid_depth_total=None,
+        ask_depth_total=None,
+        best_bid_depth=None,
+        best_ask_depth=None,
+        captured_at_utc=started,
+    )
+    bot._log_latency = lambda *args, **kwargs: None
+    requested: list[bool] = []
+
+    def cancel(_reason: str) -> None:
+        bot.pending_entry = None
+        bot.entry_fills_by_window["btc-updown-5m-test"] = 1
+
+    bot._cancel_pending_entry = cancel
+    bot._request_entry = lambda *_args, ignore_retry_cooldown=False: requested.append(ignore_retry_cooldown)
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("policy", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.20,
+        selected_ask=0.21,
+        selected_mid=0.205,
+        selected_spread=0.01,
+        selected_trade_value=0.28,
+        selected_policy_edge=0.07,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+
+    bot._manage_pending_entry(started + timedelta(milliseconds=450), {}, decision)
+
+    assert requested == []
+
+
 def test_pending_fast_limit_latches_short_no_longer_viable_same_side() -> None:
     bot = object.__new__(StatsBot)
     bot.config = type(

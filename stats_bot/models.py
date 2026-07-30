@@ -22,6 +22,7 @@ class PendingEntryOrder:
     wallet_reconciled: bool = False
     matched_shares_seen: float = 0.0
     cancel_requested: bool = False
+    stale_quote_started_at_utc: datetime | None = None
 
 
 @dataclass
