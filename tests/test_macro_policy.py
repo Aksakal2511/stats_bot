@@ -59,7 +59,7 @@ def _snapshot(
 def test_production_policy_uses_polymarket_settlement_labels() -> None:
     policy = MacroLocalPolicy(POLICY)
     manifest = json.loads(POLICY.read_text(encoding="utf-8"))
-    assert policy.strategy_id == "btc_linear_z_pb_asym_hl120_excl_apr29_may18_child118_support50_dynamic_edges_jul25_v1"
+    assert policy.strategy_id == "btc_linear_z_pb_asym_hl120_excl_apr29_may18_direct_child118_support50_c04_m06_floor_dynamic_edges_jul25_v1"
     assert policy.policy_type == "continuous_surface"
     assert policy.signal_source == "coinbase_btc_usd"
     assert policy.signal_feature == "move_dz"
@@ -207,12 +207,13 @@ def test_dynamic_edge_selector_overrides_price_bucket_edges() -> None:
     p60_decision = policy.evaluate(p60_snapshot, start_block_seconds=45)
     assert p60_decision.viable
     assert p60_decision.selected_trade_style == "continuation"
-    assert p60_decision.entry_edge_threshold == 0.05
+    assert p60_decision.entry_edge_threshold == 0.04
     assert p60_snapshot["selected_price_bucket"] == "p60_70"
     assert p60_snapshot["entry_rule_name"] == "dynamic_edges"
     assert p60_snapshot["entry_rule_source_family"] == "day_group_time_contradiction_vol_q4"
     assert p60_snapshot["entry_rule_source_segment"] == "mon_wed|08_1430|normal|v2_midhigh"
-    assert p60_snapshot["entry_rule_support"] == 588
+    assert p60_snapshot["entry_rule_support"] == 995
+    assert p60_snapshot["entry_rule_edge_pair"] == "C04_M10"
 
     p30_snapshot = _snapshot(
         ts=datetime(2026, 7, 1, 10, 0, tzinfo=LONDON),
@@ -254,7 +255,7 @@ def test_dynamic_edge_selector_handles_mean_reversion_edges() -> None:
     p20_decision = policy.evaluate(p20_snapshot, start_block_seconds=45)
     assert not p20_decision.viable
     assert p20_decision.selected_trade_style == "mean_reversion"
-    assert p20_decision.entry_edge_threshold == 0.08
+    assert p20_decision.entry_edge_threshold == 0.10
     assert p20_snapshot["selected_price_bucket"] == "p20_30"
     assert p20_snapshot["entry_rule_source_family"] == "day_group_time_contradiction_vol_q4"
     assert p20_snapshot["entry_rule_source_segment"] == "mon_wed|08_1430|normal|v2_midhigh"
@@ -269,7 +270,7 @@ def test_dynamic_edge_selector_handles_mean_reversion_edges() -> None:
     p30_decision = policy.evaluate(p30_snapshot, start_block_seconds=45)
     assert not p30_decision.viable
     assert p30_decision.selected_trade_style == "mean_reversion"
-    assert p30_decision.entry_edge_threshold == 0.08
+    assert p30_decision.entry_edge_threshold == 0.10
     assert p30_snapshot["selected_price_bucket"] == "p30_40"
 
 

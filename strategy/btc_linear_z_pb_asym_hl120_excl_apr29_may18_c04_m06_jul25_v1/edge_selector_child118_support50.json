@@ -1,1320 +1,1484 @@
 {
   "c_floor": 4,
   "entry_rule_label": "dynamic_edges",
+  "mr_floor": 6,
   "route": "child118_support50_then_day_group_time_contradiction_then_day_group_time",
   "schema_version": 1,
-  "selection_route": "shrink_parent_k1000",
-  "source": "large_edge_shrinkage_full_train_pm_event_cb_tick_jul25_20260725",
+  "selection_route": "direct_lookup",
+  "source": "nested_edge_selector_from_large_replay_jul25_20260725__primary_recommended_direct_c04_m06_support50",
   "support_threshold": 50,
   "tables": {
     "day_group_time": {
       "mon_wed|00_08": {
-        "adjusted_score": 3.345122344,
         "continuation_edge": 0.05,
         "edge_pair": "C05_M06",
         "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 2.777029478,
         "score_min_pnl_day": 2.062857143,
+        "score_pnl_trade": 0.256582862,
         "support": 4773
       },
       "mon_wed|08_1430": {
-        "adjusted_score": 4.758763169,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 3.91244898,
-        "support": 6232
-      },
-      "mon_wed|1430_17": {
-        "adjusted_score": 5.173054626,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M07",
-        "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 1.424761905,
-        "support": 1062
-      },
-      "mon_wed|17_22": {
-        "adjusted_score": 4.691906869,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M07",
-        "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 2.225442177,
-        "support": 1809
-      },
-      "mon_wed|22_24": {
-        "adjusted_score": 5.091929915,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M07",
-        "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 0.59877551,
-        "support": 904
-      },
-      "thu_fri|00_08": {
-        "adjusted_score": 3.668433587,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 3.083401361,
-        "support": 6612
-      },
-      "thu_fri|08_1430": {
-        "adjusted_score": 3.572272302,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 2.765544218,
-        "support": 5453
-      },
-      "thu_fri|1430_17": {
-        "adjusted_score": 3.753659973,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.937142857,
-        "support": 749
-      },
-      "thu_fri|17_22": {
-        "adjusted_score": 2.997935713,
         "continuation_edge": 0.04,
         "edge_pair": "C04_M06",
         "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 3.883628118,
+        "score_min_pnl_day": 3.381632653,
+        "score_pnl_trade": 0.343773585,
+        "support": 4982
+      },
+      "mon_wed|1430_17": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 1.892993197,
+        "score_min_pnl_day": 1.731564626,
+        "score_pnl_trade": 0.518837787,
+        "support": 1609
+      },
+      "mon_wed|17_22": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 2.573378685,
+        "score_min_pnl_day": 2.225442177,
+        "score_pnl_trade": 0.627341072,
+        "support": 1809
+      },
+      "mon_wed|22_24": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.060362812,
+        "score_min_pnl_day": 0.908639456,
+        "score_pnl_trade": 0.420143756,
+        "support": 1113
+      },
+      "thu_fri|00_08": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 2.462176871,
+        "score_min_pnl_day": 2.173945578,
+        "score_pnl_trade": 0.333278085,
+        "support": 3258
+      },
+      "thu_fri|08_1430": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 2.761882086,
+        "score_min_pnl_day": 2.333571429,
+        "score_pnl_trade": 0.370547612,
+        "support": 3287
+      },
+      "thu_fri|1430_17": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.379251701,
+        "score_min_pnl_day": 1.232993197,
+        "score_pnl_trade": 0.565813953,
+        "support": 1075
+      },
+      "thu_fri|17_22": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.917709751,
         "score_min_pnl_day": 1.433537415,
+        "score_pnl_trade": 0.395376344,
         "support": 2139
       },
       "thu_fri|22_24": {
-        "adjusted_score": 3.2483334,
         "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.515170068,
-        "support": 1569
+        "edge_pair": "C05_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.256417234,
+        "score_min_pnl_day": 0.157891156,
+        "score_pnl_trade": 0.136735187,
+        "support": 827
       },
       "weekend|00_08": {
-        "adjusted_score": 2.39439292,
         "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 2.343231293,
-        "support": 7430
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 2.297256236,
+        "score_min_pnl_day": 1.886020408,
+        "score_pnl_trade": 0.152826972,
+        "support": 6629
       },
       "weekend|08_1430": {
-        "adjusted_score": 1.146450171,
         "continuation_edge": 0.1,
         "edge_pair": "C10_M08",
         "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.558072562,
         "score_min_pnl_day": 0.478911565,
+        "score_pnl_trade": 0.157864015,
         "support": 1559
       },
       "weekend|1430_17": {
-        "adjusted_score": 1.692070856,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.320680272,
-        "support": 361
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.891519274,
+        "score_min_pnl_day": 0.71,
+        "score_pnl_trade": 0.230052662,
+        "support": 1709
       },
       "weekend|17_22": {
-        "adjusted_score": 1.233124954,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.225714286,
-        "support": 947
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.929569161,
+        "score_min_pnl_day": 0.668367347,
+        "score_pnl_trade": 0.116592719,
+        "support": 3516
       },
       "weekend|22_24": {
-        "adjusted_score": 1.634811379,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": -0.09122449,
-        "support": 320
+        "continuation_edge": 0.08,
+        "edge_pair": "C08_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": -0.021405896,
+        "score_min_pnl_day": -0.055646259,
+        "score_pnl_trade": -0.021024499,
+        "support": 449
       }
     },
     "day_group_time_contradiction": {
       "mon_wed|00_08|cheap_continuation": {
-        "adjusted_score": 1.832590311,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.695238095,
-        "support": 431
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 1.192018141,
+        "score_min_pnl_day": 1.033537415,
+        "score_pnl_trade": 0.59600907,
+        "support": 882
       },
       "mon_wed|00_08|normal": {
-        "adjusted_score": 1.701974182,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 1.639115646,
-        "support": 10332
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.610340136,
+        "score_min_pnl_day": 1.17877551,
+        "score_pnl_trade": 0.217907334,
+        "support": 3259
       },
       "mon_wed|08_1430|cheap_continuation": {
-        "adjusted_score": 2.780489896,
         "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.992244898,
-        "support": 633
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 1.608639456,
+        "score_min_pnl_day": 1.279659864,
+        "score_pnl_trade": 0.797986502,
+        "support": 889
       },
       "mon_wed|08_1430|normal": {
-        "adjusted_score": 3.070567,
         "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 2.920204082,
-        "support": 5599
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 2.425600907,
+        "score_min_pnl_day": 2.226802721,
+        "score_pnl_trade": 0.254324774,
+        "support": 4206
       },
       "mon_wed|1430_17|cheap_continuation": {
-        "adjusted_score": 1.89246974,
         "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.241836735,
-        "support": 101
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.670907029,
+        "score_min_pnl_day": 0.600204082,
+        "score_pnl_trade": 0.930408805,
+        "support": 318
       },
       "mon_wed|1430_17|normal": {
-        "adjusted_score": 1.873916935,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 1.817346939,
-        "support": 3275
-      },
-      "mon_wed|17_22|cheap_continuation": {
-        "adjusted_score": 1.836322313,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.49,
-        "support": 258
-      },
-      "mon_wed|17_22|normal": {
-        "adjusted_score": 1.827500254,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M07",
-        "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 1.531632653,
-        "support": 1345
-      },
-      "mon_wed|22_24|cheap_continuation": {
-        "adjusted_score": 0.778456829,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.089659864,
-        "support": 189
-      },
-      "mon_wed|22_24|normal": {
-        "adjusted_score": 0.865580353,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.818979592,
-        "support": 924
-      },
-      "thu_fri|00_08|cheap_continuation": {
-        "adjusted_score": 2.398968272,
-        "continuation_edge": 0.07,
-        "edge_pair": "C07_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.233197279,
-        "support": 238
-      },
-      "thu_fri|00_08|normal": {
-        "adjusted_score": 2.849763078,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 2.812380952,
-        "support": 6250
-      },
-      "thu_fri|08_1430|cheap_continuation": {
-        "adjusted_score": 2.25590032,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.288163265,
-        "support": 259
-      },
-      "thu_fri|08_1430|normal": {
-        "adjusted_score": 2.523903921,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 2.477380952,
-        "support": 5194
-      },
-      "thu_fri|1430_17|cheap_continuation": {
-        "adjusted_score": 1.145641364,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.365714286,
-        "support": 112
-      },
-      "thu_fri|1430_17|normal": {
-        "adjusted_score": 1.053582674,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.867278912,
-        "support": 963
-      },
-      "thu_fri|17_22|cheap_continuation": {
-        "adjusted_score": 1.150925905,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.191088435,
-        "support": 259
-      },
-      "thu_fri|17_22|normal": {
-        "adjusted_score": 1.324873288,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 1.265102041,
-        "support": 1818
-      },
-      "thu_fri|22_24|cheap_continuation": {
-        "adjusted_score": 0.518591609,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": -0.017619048,
-        "support": 45
-      },
-      "thu_fri|22_24|normal": {
-        "adjusted_score": 0.551946116,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.560340136,
-        "support": 1099
-      },
-      "weekend|00_08|cheap_continuation": {
-        "adjusted_score": 1.390671494,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.519659864,
-        "support": 550
-      },
-      "weekend|00_08|normal": {
-        "adjusted_score": 2.008149389,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 1.955612245,
-        "support": 6378
-      },
-      "weekend|08_1430|cheap_continuation": {
-        "adjusted_score": 0.389753602,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.233061224,
-        "support": 569
-      },
-      "weekend|08_1430|normal": {
-        "adjusted_score": 0.362966533,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.24585034,
-        "support": 990
-      },
-      "weekend|1430_17|cheap_continuation": {
-        "adjusted_score": 0.740626755,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.444965986,
-        "support": 294
-      },
-      "weekend|1430_17|normal": {
-        "adjusted_score": 0.542875375,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.382585034,
-        "support": 1776
-      },
-      "weekend|17_22|cheap_continuation": {
-        "adjusted_score": 0.653775222,
         "continuation_edge": 0.04,
         "edge_pair": "C04_M07",
         "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 0.634897959,
-        "support": 773
+        "score_mean_pnl_day": 1.368843537,
+        "score_min_pnl_day": 1.243061224,
+        "score_pnl_trade": 0.447487027,
+        "support": 1349
+      },
+      "mon_wed|17_22|cheap_continuation": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 1.411995465,
+        "score_min_pnl_day": 1.228979592,
+        "score_pnl_trade": 1.01913257,
+        "support": 611
+      },
+      "mon_wed|17_22|normal": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 1.70430839,
+        "score_min_pnl_day": 1.531632653,
+        "score_pnl_trade": 0.558810409,
+        "support": 1345
+      },
+      "mon_wed|22_24|cheap_continuation": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.349229025,
+        "score_min_pnl_day": 0.186394558,
+        "score_pnl_trade": 0.594633205,
+        "support": 259
+      },
+      "mon_wed|22_24|normal": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.87893424,
+        "score_min_pnl_day": 0.818979592,
+        "score_pnl_trade": 0.419491342,
+        "support": 924
+      },
+      "thu_fri|00_08|cheap_continuation": {
+        "continuation_edge": 0.07,
+        "edge_pair": "C07_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.815079365,
+        "score_min_pnl_day": 0.768027211,
+        "score_pnl_trade": 0.764787234,
+        "support": 470
+      },
+      "thu_fri|00_08|normal": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 1.895668934,
+        "score_min_pnl_day": 1.677959184,
+        "score_pnl_trade": 0.321410996,
+        "support": 2601
+      },
+      "thu_fri|08_1430|cheap_continuation": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.879569161,
+        "score_min_pnl_day": 0.625578231,
+        "score_pnl_trade": 0.716987061,
+        "support": 541
+      },
+      "thu_fri|08_1430|normal": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 2.026281179,
+        "score_min_pnl_day": 1.809829932,
+        "score_pnl_trade": 0.317213348,
+        "support": 2817
+      },
+      "thu_fri|1430_17|cheap_continuation": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.439433107,
+        "score_min_pnl_day": 0.377619048,
+        "score_pnl_trade": 1.479312977,
+        "support": 131
+      },
+      "thu_fri|1430_17|normal": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.960589569,
+        "score_min_pnl_day": 0.867278912,
+        "score_pnl_trade": 0.439896158,
+        "support": 963
+      },
+      "thu_fri|17_22|cheap_continuation": {
+        "continuation_edge": 0.09,
+        "edge_pair": "C09_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.231519274,
+        "score_min_pnl_day": 0.209931973,
+        "score_pnl_trade": 0.8168,
+        "support": 125
+      },
+      "thu_fri|17_22|normal": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.613197279,
+        "score_min_pnl_day": 1.265102041,
+        "score_pnl_trade": 0.391320132,
+        "support": 1818
+      },
+      "thu_fri|22_24|cheap_continuation": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.264535147,
+        "score_min_pnl_day": 0.198911565,
+        "score_pnl_trade": 0.757532468,
+        "support": 154
+      },
+      "thu_fri|22_24|normal": {
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.15244898,
+        "score_min_pnl_day": 0.136530612,
+        "score_pnl_trade": 0.161223022,
+        "support": 417
+      },
+      "weekend|00_08|cheap_continuation": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.812222222,
+        "score_min_pnl_day": 0.619387755,
+        "score_pnl_trade": 0.295536304,
+        "support": 1212
+      },
+      "weekend|00_08|normal": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.649909297,
+        "score_min_pnl_day": 1.402414966,
+        "score_pnl_trade": 0.132969664,
+        "support": 5472
+      },
+      "weekend|08_1430|cheap_continuation": {
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.258866213,
+        "score_min_pnl_day": 0.233061224,
+        "score_pnl_trade": 0.200632689,
+        "support": 569
+      },
+      "weekend|08_1430|normal": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.426303855,
+        "score_min_pnl_day": 0.295170068,
+        "score_pnl_trade": 0.05578635,
+        "support": 3370
+      },
+      "weekend|1430_17|cheap_continuation": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.621247166,
+        "score_min_pnl_day": 0.55,
+        "score_pnl_trade": 0.76527933,
+        "support": 358
+      },
+      "weekend|1430_17|normal": {
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.458027211,
+        "score_min_pnl_day": 0.363673469,
+        "score_pnl_trade": 0.290215517,
+        "support": 696
+      },
+      "weekend|17_22|cheap_continuation": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.733537415,
+        "score_min_pnl_day": 0.672653061,
+        "score_pnl_trade": 0.386949761,
+        "support": 836
       },
       "weekend|17_22|normal": {
-        "adjusted_score": 0.312197322,
         "continuation_edge": 0.1,
         "edge_pair": "C10_M07",
         "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.243628118,
         "score_min_pnl_day": 0.205986395,
+        "score_pnl_trade": 0.122648402,
         "support": 876
       },
       "weekend|22_24|cheap_continuation": {
-        "adjusted_score": -0.042313043,
-        "continuation_edge": 0.08,
-        "edge_pair": "C08_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.045986395,
-        "support": 151
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.266031746,
+        "score_min_pnl_day": 0.260340136,
+        "score_pnl_trade": 0.577931034,
+        "support": 203
       },
       "weekend|22_24|normal": {
-        "adjusted_score": -0.06748467,
         "continuation_edge": 0.08,
         "edge_pair": "C08_M09",
         "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": -0.099387755,
         "score_min_pnl_day": -0.107210884,
+        "score_pnl_trade": -0.147080537,
         "support": 298
       }
     },
     "day_group_time_contradiction_vol_q4": {
       "mon_wed|00_08|cheap_continuation|v0_low": {
-        "adjusted_score": 0.962823761,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.032380952,
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.129569161,
+        "score_min_pnl_day": 0.109115646,
+        "score_pnl_trade": 0.751842105,
         "support": 76
       },
       "mon_wed|00_08|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.89605748,
         "continuation_edge": 0.04,
         "edge_pair": "C04_M06",
         "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.347029478,
         "score_min_pnl_day": 0.301088435,
+        "score_pnl_trade": 0.761393035,
         "support": 201
       },
       "mon_wed|00_08|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.852110103,
         "continuation_edge": 0.05,
         "edge_pair": "C05_M06",
         "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.358253968,
         "score_min_pnl_day": 0.336394558,
+        "score_pnl_trade": 0.53375,
         "support": 296
       },
       "mon_wed|00_08|cheap_continuation|v3_high": {
-        "adjusted_score": 0.944904643,
         "continuation_edge": 0.04,
         "edge_pair": "C04_M08",
         "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.614036281,
         "score_min_pnl_day": 0.503945578,
+        "score_pnl_trade": 1.34721393,
         "support": 201
       },
       "mon_wed|00_08|normal|v0_low": {
-        "adjusted_score": 1.221037722,
         "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.29292517,
-        "support": 438
+        "edge_pair": "C05_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.195170068,
+        "score_min_pnl_day": 0.153469388,
+        "score_pnl_trade": 0.361638655,
+        "support": 238
       },
       "mon_wed|00_08|normal|v1_midlow": {
-        "adjusted_score": 0.990119649,
         "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.683809524,
-        "support": 2081
+        "edge_pair": "C05_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.140680272,
+        "score_min_pnl_day": 0.073809524,
+        "score_pnl_trade": 0.066282051,
+        "support": 936
       },
       "mon_wed|00_08|normal|v2_midhigh": {
-        "adjusted_score": 0.938091957,
         "continuation_edge": 0.04,
         "edge_pair": "C04_M06",
         "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.069024943,
         "score_min_pnl_day": 0.958231293,
+        "score_pnl_trade": 0.237381672,
         "support": 1986
       },
       "mon_wed|00_08|normal|v3_high": {
-        "adjusted_score": 0.876678159,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.703945578,
-        "support": 1936
-      },
-      "mon_wed|08_1430|cheap_continuation|v0_low": {
-        "adjusted_score": 1.182538437,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.126870748,
-        "support": 92
-      },
-      "mon_wed|08_1430|cheap_continuation|v1_midlow": {
-        "adjusted_score": 1.106018522,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.443265306,
-        "support": 262
-      },
-      "mon_wed|08_1430|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 1.091072737,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.46244898,
-        "support": 300
-      },
-      "mon_wed|08_1430|cheap_continuation|v3_high": {
-        "adjusted_score": 1.083176072,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.24707483,
-        "support": 235
-      },
-      "mon_wed|08_1430|normal|v0_low": {
-        "adjusted_score": 2.029783576,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.106802721,
-        "support": 389
-      },
-      "mon_wed|08_1430|normal|v1_midlow": {
-        "adjusted_score": 1.97807588,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 1.338911565,
-        "support": 1474
-      },
-      "mon_wed|08_1430|normal|v2_midhigh": {
-        "adjusted_score": 1.558517966,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.57585034,
-        "support": 588
-      },
-      "mon_wed|08_1430|normal|v3_high": {
-        "adjusted_score": 1.703458677,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 1.041496599,
-        "support": 1623
-      },
-      "mon_wed|1430_17|cheap_continuation|v0_low": {
-        "adjusted_score": 0.423061903,
-        "continuation_edge": 0.08,
-        "edge_pair": "C08_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": -0.00755102,
-        "support": 3
-      },
-      "mon_wed|1430_17|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.470313685,
-        "continuation_edge": 0.07,
-        "edge_pair": "C07_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": -0.014693878,
-        "support": 3
-      },
-      "mon_wed|1430_17|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.578233977,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.014897959,
-        "support": 39
-      },
-      "mon_wed|1430_17|cheap_continuation|v3_high": {
-        "adjusted_score": 0.596963368,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.585306122,
-        "support": 278
-      },
-      "mon_wed|1430_17|normal|v0_low": {
-        "adjusted_score": 1.783870735,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": -0.075918367,
-        "support": 18
-      },
-      "mon_wed|1430_17|normal|v1_midlow": {
-        "adjusted_score": 1.730515035,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": -0.041564626,
-        "support": 49
-      },
-      "mon_wed|1430_17|normal|v2_midhigh": {
-        "adjusted_score": 1.470299217,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.418639456,
-        "support": 330
-      },
-      "mon_wed|1430_17|normal|v3_high": {
-        "adjusted_score": 1.621306799,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 1.563333333,
-        "support": 2620
-      },
-      "mon_wed|17_22|cheap_continuation|v0_low": {
-        "adjusted_score": 1.192946305,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": -0.008163265,
-        "support": 30
-      },
-      "mon_wed|17_22|cheap_continuation|v1_midlow": {
-        "adjusted_score": 1.150602164,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.076938776,
-        "support": 73
-      },
-      "mon_wed|17_22|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 1.087152544,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.486190476,
-        "support": 236
-      },
-      "mon_wed|17_22|cheap_continuation|v3_high": {
-        "adjusted_score": 1.110234886,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.673673469,
-        "support": 272
-      },
-      "mon_wed|17_22|normal|v0_low": {
-        "adjusted_score": 1.529176636,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": -0.083537415,
-        "support": 102
-      },
-      "mon_wed|17_22|normal|v1_midlow": {
-        "adjusted_score": 1.358762258,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M07",
-        "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 0.243469388,
-        "support": 155
-      },
-      "mon_wed|17_22|normal|v2_midhigh": {
-        "adjusted_score": 1.287569737,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M07",
-        "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 0.810884354,
-        "support": 512
-      },
-      "mon_wed|17_22|normal|v3_high": {
-        "adjusted_score": 1.165118126,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M07",
-        "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 0.577755102,
-        "support": 624
-      },
-      "mon_wed|22_24|cheap_continuation|v0_low": {
-        "adjusted_score": 0.178152555,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": -0.106054422,
-        "support": 29
-      },
-      "mon_wed|22_24|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.181899894,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.143809524,
-        "support": 118
-      },
-      "mon_wed|22_24|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.175317341,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": -0.050748299,
-        "support": 49
-      },
-      "mon_wed|22_24|cheap_continuation|v3_high": {
-        "adjusted_score": 0.187164616,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.199387755,
-        "support": 63
-      },
-      "mon_wed|22_24|normal|v0_low": {
-        "adjusted_score": 0.762075366,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.041768707,
-        "support": 79
-      },
-      "mon_wed|22_24|normal|v1_midlow": {
-        "adjusted_score": 0.675427505,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.178707483,
-        "support": 289
-      },
-      "mon_wed|22_24|normal|v2_midhigh": {
-        "adjusted_score": 0.664058604,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.12047619,
-        "support": 285
-      },
-      "mon_wed|22_24|normal|v3_high": {
-        "adjusted_score": 0.740321028,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.450068027,
-        "support": 271
-      },
-      "thu_fri|00_08|cheap_continuation|v0_low": {
-        "adjusted_score": 0.723216183,
-        "continuation_edge": 0.07,
-        "edge_pair": "C07_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": -0.049387755,
-        "support": 58
-      },
-      "thu_fri|00_08|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.687347641,
-        "continuation_edge": 0.07,
-        "edge_pair": "C07_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.192380952,
-        "support": 163
-      },
-      "thu_fri|00_08|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.695939503,
-        "continuation_edge": 0.07,
-        "edge_pair": "C07_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.290952381,
-        "support": 178
-      },
-      "thu_fri|00_08|cheap_continuation|v3_high": {
-        "adjusted_score": 0.737866067,
-        "continuation_edge": 0.07,
-        "edge_pair": "C07_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.313061224,
-        "support": 71
-      },
-      "thu_fri|00_08|normal|v0_low": {
-        "adjusted_score": 2.197151762,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.237823129,
-        "support": 314
-      },
-      "thu_fri|00_08|normal|v1_midlow": {
-        "adjusted_score": 1.676789924,
-        "continuation_edge": 0.07,
-        "edge_pair": "C07_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.971428571,
-        "support": 1424
-      },
-      "thu_fri|00_08|normal|v2_midhigh": {
-        "adjusted_score": 1.230296427,
-        "continuation_edge": 0.08,
-        "edge_pair": "C08_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.542993197,
-        "support": 2038
-      },
-      "thu_fri|00_08|normal|v3_high": {
-        "adjusted_score": 1.742408776,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 1.108163265,
-        "support": 1687
-      },
-      "thu_fri|08_1430|cheap_continuation|v0_low": {
-        "adjusted_score": 0.603619349,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.010136054,
-        "support": 37
-      },
-      "thu_fri|08_1430|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.542914162,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.156598639,
-        "support": 205
-      },
-      "thu_fri|08_1430|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.558067199,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.153809524,
-        "support": 167
-      },
-      "thu_fri|08_1430|cheap_continuation|v3_high": {
-        "adjusted_score": 0.591475212,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.320816327,
-        "support": 126
-      },
-      "thu_fri|08_1430|normal|v0_low": {
-        "adjusted_score": 1.916435845,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.109489796,
-        "support": 272
-      },
-      "thu_fri|08_1430|normal|v1_midlow": {
-        "adjusted_score": 1.545269216,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.878095238,
-        "support": 1293
-      },
-      "thu_fri|08_1430|normal|v2_midhigh": {
-        "adjusted_score": 1.439377306,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.847585034,
-        "support": 1754
-      },
-      "thu_fri|08_1430|normal|v3_high": {
-        "adjusted_score": 1.456569954,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.661122449,
-        "support": 1196
-      },
-      "thu_fri|1430_17|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.223006626,
         "continuation_edge": 0.06,
         "edge_pair": "C06_M06",
         "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.023401361,
-        "support": 3
+        "score_mean_pnl_day": 0.731995465,
+        "score_min_pnl_day": 0.570136054,
+        "score_pnl_trade": 0.316790972,
+        "support": 1019
       },
-      "thu_fri|1430_17|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.372222936,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.034965986,
-        "support": 16
-      },
-      "thu_fri|1430_17|cheap_continuation|v3_high": {
-        "adjusted_score": 0.372953235,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.332380952,
-        "support": 115
-      },
-      "thu_fri|1430_17|normal|v1_midlow": {
-        "adjusted_score": 0.821252581,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": -0.08122449,
-        "support": 51
-      },
-      "thu_fri|1430_17|normal|v2_midhigh": {
-        "adjusted_score": 0.716735809,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.03244898,
-        "support": 220
-      },
-      "thu_fri|1430_17|normal|v3_high": {
-        "adjusted_score": 0.874596098,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.885170068,
-        "support": 692
-      },
-      "thu_fri|17_22|cheap_continuation|v0_low": {
-        "adjusted_score": 0.248321056,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": -0.046530612,
-        "support": 14
-      },
-      "thu_fri|17_22|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.237695086,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": -0.040680272,
-        "support": 53
-      },
-      "thu_fri|17_22|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.250255617,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.211088435,
-        "support": 56
-      },
-      "thu_fri|17_22|cheap_continuation|v3_high": {
-        "adjusted_score": 0.24480534,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.127210884,
-        "support": 65
-      },
-      "thu_fri|17_22|normal|v0_low": {
-        "adjusted_score": 1.105425246,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": -0.214217687,
-        "support": 121
-      },
-      "thu_fri|17_22|normal|v1_midlow": {
-        "adjusted_score": 1.05303453,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.434761905,
-        "support": 343
-      },
-      "thu_fri|17_22|normal|v2_midhigh": {
-        "adjusted_score": 0.927151316,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.305918367,
-        "support": 544
-      },
-      "thu_fri|17_22|normal|v3_high": {
-        "adjusted_score": 1.029502762,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.738639456,
-        "support": 810
-      },
-      "thu_fri|22_24|cheap_continuation|v0_low": {
-        "adjusted_score": 0.188358182,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": -0.00707483,
-        "support": 54
-      },
-      "thu_fri|22_24|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.187934302,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.028843537,
-        "support": 69
-      },
-      "thu_fri|22_24|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.196905361,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.105714286,
-        "support": 22
-      },
-      "thu_fri|22_24|cheap_continuation|v3_high": {
-        "adjusted_score": 0.197554796,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.046802721,
-        "support": 9
-      },
-      "thu_fri|22_24|normal|v0_low": {
-        "adjusted_score": 0.460764387,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": -0.080408163,
-        "support": 184
-      },
-      "thu_fri|22_24|normal|v1_midlow": {
-        "adjusted_score": 0.517809231,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.410136054,
-        "support": 395
-      },
-      "thu_fri|22_24|normal|v2_midhigh": {
-        "adjusted_score": 0.432544873,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.04292517,
-        "support": 328
-      },
-      "thu_fri|22_24|normal|v3_high": {
-        "adjusted_score": 0.489741588,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.122040816,
-        "support": 192
-      },
-      "weekend|00_08|cheap_continuation|v0_low": {
-        "adjusted_score": 0.542974651,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.440544218,
-        "support": 746
-      },
-      "weekend|00_08|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.516527826,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M07",
-        "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 0.135442177,
-        "support": 123
-      },
-      "weekend|00_08|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.566393471,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": 0.149115646,
-        "support": 127
-      },
-      "weekend|00_08|cheap_continuation|v3_high": {
-        "adjusted_score": 0.608619121,
-        "continuation_edge": 0.05,
-        "edge_pair": "C05_M10",
-        "mean_reversion_edge": 0.1,
-        "score_min_pnl_day": -0.024829932,
-        "support": 17
-      },
-      "weekend|00_08|normal|v0_low": {
-        "adjusted_score": 1.657512177,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 1.563027211,
-        "support": 3155
-      },
-      "weekend|00_08|normal|v1_midlow": {
-        "adjusted_score": 0.761303646,
-        "continuation_edge": 0.09,
-        "edge_pair": "C09_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.12462585,
-        "support": 626
-      },
-      "weekend|00_08|normal|v2_midhigh": {
-        "adjusted_score": 1.111123694,
-        "continuation_edge": 0.08,
-        "edge_pair": "C08_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.379863946,
-        "support": 557
-      },
-      "weekend|00_08|normal|v3_high": {
-        "adjusted_score": 1.506205789,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.240272109,
-        "support": 355
-      },
-      "weekend|08_1430|cheap_continuation|v0_low": {
-        "adjusted_score": 0.224116313,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.205442177,
-        "support": 479
-      },
-      "weekend|08_1430|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.217307474,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": -0.017823129,
-        "support": 67
-      },
-      "weekend|08_1430|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.229289049,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.040680272,
-        "support": 20
-      },
-      "weekend|08_1430|cheap_continuation|v3_high": {
-        "adjusted_score": 0.232339512,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": -0.008231293,
-        "support": 3
-      },
-      "weekend|08_1430|normal|v0_low": {
-        "adjusted_score": 0.624730228,
+      "mon_wed|08_1430|cheap_continuation|v0_low": {
         "continuation_edge": 0.04,
         "edge_pair": "C04_M08",
         "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.769591837,
-        "support": 2275
+        "score_mean_pnl_day": 0.153265306,
+        "score_min_pnl_day": 0.148435374,
+        "score_pnl_trade": 0.785930233,
+        "support": 86
       },
-      "weekend|08_1430|normal|v1_midlow": {
-        "adjusted_score": 0.215352243,
+      "mon_wed|08_1430|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.589977324,
+        "score_min_pnl_day": 0.443265306,
+        "score_pnl_trade": 0.993053435,
+        "support": 262
+      },
+      "mon_wed|08_1430|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.595578231,
+        "score_min_pnl_day": 0.518639456,
+        "score_pnl_trade": 0.938035714,
+        "support": 280
+      },
+      "mon_wed|08_1430|cheap_continuation|v3_high": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.453900227,
+        "score_min_pnl_day": 0.438027211,
+        "score_pnl_trade": 1.3525,
+        "support": 148
+      },
+      "mon_wed|08_1430|normal|v0_low": {
+        "continuation_edge": 0.07,
+        "edge_pair": "C07_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.215646259,
+        "score_min_pnl_day": 0.195170068,
+        "score_pnl_trade": 0.731538462,
+        "support": 130
+      },
+      "mon_wed|08_1430|normal|v1_midlow": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.195578231,
+        "score_min_pnl_day": 1.124081633,
+        "score_pnl_trade": 0.448723404,
+        "support": 1175
+      },
+      "mon_wed|08_1430|normal|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.711111111,
+        "score_min_pnl_day": 0.636190476,
+        "score_pnl_trade": 0.315175879,
+        "support": 995
+      },
+      "mon_wed|08_1430|normal|v3_high": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.064852608,
+        "score_min_pnl_day": 1.021768707,
+        "score_pnl_trade": 0.605935484,
+        "support": 775
+      },
+      "mon_wed|1430_17|cheap_continuation|v0_low": {
+        "continuation_edge": 0.08,
+        "edge_pair": "C08_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": -0.00755102,
+        "score_min_pnl_day": -0.00755102,
+        "score_pnl_trade": -1.11,
+        "support": 3
+      },
+      "mon_wed|1430_17|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": -0.009818594,
+        "score_min_pnl_day": -0.010272109,
+        "score_pnl_trade": -1.443333333,
+        "support": 3
+      },
+      "mon_wed|1430_17|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.048004535,
+        "score_min_pnl_day": 0.033401361,
+        "score_pnl_trade": 0.641515152,
+        "support": 33
+      },
+      "mon_wed|1430_17|cheap_continuation|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.644603175,
+        "score_min_pnl_day": 0.585306122,
+        "score_pnl_trade": 1.022553957,
+        "support": 278
+      },
+      "mon_wed|1430_17|normal|v0_low": {
+        "continuation_edge": 0.08,
+        "edge_pair": "C08_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": -0.010453515,
+        "score_min_pnl_day": -0.010680272,
+        "score_pnl_trade": -0.768333333,
+        "support": 6
+      },
+      "mon_wed|1430_17|normal|v1_midlow": {
+        "continuation_edge": 0.08,
+        "edge_pair": "C08_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.042902494,
+        "score_min_pnl_day": 0.034557823,
+        "score_pnl_trade": 0.822608696,
+        "support": 23
+      },
+      "mon_wed|1430_17|normal|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.289977324,
+        "score_min_pnl_day": 0.236122449,
+        "score_pnl_trade": 0.507460317,
+        "support": 252
+      },
+      "mon_wed|1430_17|normal|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 1.25814059,
+        "score_min_pnl_day": 1.168027211,
+        "score_pnl_trade": 0.530439771,
+        "support": 1046
+      },
+      "mon_wed|17_22|cheap_continuation|v0_low": {
+        "continuation_edge": 0.09,
+        "edge_pair": "C09_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.043174603,
+        "score_min_pnl_day": 0.042721088,
+        "score_pnl_trade": 3.173333333,
+        "support": 6
+      },
+      "mon_wed|17_22|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.096417234,
+        "score_min_pnl_day": 0.076938776,
+        "score_pnl_trade": 0.582465753,
+        "support": 73
+      },
+      "mon_wed|17_22|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.558367347,
+        "score_min_pnl_day": 0.486190476,
+        "score_pnl_trade": 1.043389831,
+        "support": 236
+      },
+      "mon_wed|17_22|cheap_continuation|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.765034014,
+        "score_min_pnl_day": 0.673673469,
+        "score_pnl_trade": 1.240367647,
+        "support": 272
+      },
+      "mon_wed|17_22|normal|v0_low": {
+        "continuation_edge": 0.07,
+        "edge_pair": "C07_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.002970522,
+        "score_min_pnl_day": 0.002857143,
+        "score_pnl_trade": 0.054583333,
+        "support": 24
+      },
+      "mon_wed|17_22|normal|v1_midlow": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.245804989,
+        "score_min_pnl_day": 0.243469388,
+        "score_pnl_trade": 0.699354839,
+        "support": 155
+      },
+      "mon_wed|17_22|normal|v2_midhigh": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.854943311,
+        "score_min_pnl_day": 0.810884354,
+        "score_pnl_trade": 0.736386719,
+        "support": 512
+      },
+      "mon_wed|17_22|normal|v3_high": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.828526077,
+        "score_min_pnl_day": 0.693129252,
+        "score_pnl_trade": 0.389946638,
+        "support": 937
+      },
+      "mon_wed|22_24|cheap_continuation|v0_low": {
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": -0.061201814,
+        "score_min_pnl_day": -0.065782313,
+        "score_pnl_trade": -1.420526316,
+        "support": 19
+      },
+      "mon_wed|22_24|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.257709751,
+        "score_min_pnl_day": 0.217346939,
+        "score_pnl_trade": 1.1365,
+        "support": 100
+      },
+      "mon_wed|22_24|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.09,
+        "edge_pair": "C09_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.030725624,
+        "score_min_pnl_day": 0.018911565,
+        "score_pnl_trade": 1.355,
+        "support": 10
+      },
+      "mon_wed|22_24|cheap_continuation|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.235079365,
+        "score_min_pnl_day": 0.199387755,
+        "score_pnl_trade": 1.645555556,
+        "support": 63
+      },
+      "mon_wed|22_24|normal|v0_low": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.077006803,
+        "score_min_pnl_day": 0.063061224,
+        "score_pnl_trade": 0.492173913,
+        "support": 69
+      },
+      "mon_wed|22_24|normal|v1_midlow": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.225918367,
+        "score_min_pnl_day": 0.203265306,
+        "score_pnl_trade": 0.438898678,
+        "support": 227
+      },
+      "mon_wed|22_24|normal|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.238548753,
+        "score_min_pnl_day": 0.227687075,
+        "score_pnl_trade": 0.323692308,
+        "support": 325
+      },
+      "mon_wed|22_24|normal|v3_high": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.495442177,
+        "score_min_pnl_day": 0.450068027,
+        "score_pnl_trade": 0.806236162,
+        "support": 271
+      },
+      "thu_fri|00_08|cheap_continuation|v0_low": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.151836735,
+        "score_min_pnl_day": 0.145102041,
+        "score_pnl_trade": 0.797142857,
+        "support": 84
+      },
+      "thu_fri|00_08|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.09,
+        "edge_pair": "C09_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.266213152,
+        "score_min_pnl_day": 0.264557823,
+        "score_pnl_trade": 0.9392,
+        "support": 125
+      },
+      "thu_fri|00_08|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.07,
+        "edge_pair": "C07_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.331746032,
+        "score_min_pnl_day": 0.302244898,
+        "score_pnl_trade": 0.836,
+        "support": 175
+      },
+      "thu_fri|00_08|cheap_continuation|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.328956916,
+        "score_min_pnl_day": 0.319931973,
+        "score_pnl_trade": 1.014475524,
+        "support": 143
+      },
+      "thu_fri|00_08|normal|v0_low": {
+        "continuation_edge": 0.07,
+        "edge_pair": "C07_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.101269841,
+        "score_min_pnl_day": 0.08414966,
+        "score_pnl_trade": 0.391754386,
+        "support": 114
+      },
+      "thu_fri|00_08|normal|v1_midlow": {
+        "continuation_edge": 0.08,
+        "edge_pair": "C08_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.569501134,
+        "score_min_pnl_day": 0.551428571,
+        "score_pnl_trade": 0.456636364,
+        "support": 550
+      },
+      "thu_fri|00_08|normal|v2_midhigh": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.522131519,
+        "score_min_pnl_day": 0.406394558,
+        "score_pnl_trade": 0.221616939,
+        "support": 1039
+      },
+      "thu_fri|00_08|normal|v3_high": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.838752834,
+        "score_min_pnl_day": 0.786734694,
+        "score_pnl_trade": 0.811162281,
+        "support": 456
+      },
+      "thu_fri|08_1430|cheap_continuation|v0_low": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.053310658,
+        "score_min_pnl_day": 0.034217687,
+        "score_pnl_trade": 0.979583333,
+        "support": 24
+      },
+      "thu_fri|08_1430|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.228276644,
+        "score_min_pnl_day": 0.157755102,
+        "score_pnl_trade": 0.565561798,
+        "support": 178
+      },
+      "thu_fri|08_1430|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.217823129,
+        "score_min_pnl_day": 0.171632653,
+        "score_pnl_trade": 0.604150943,
+        "support": 159
+      },
+      "thu_fri|08_1430|cheap_continuation|v3_high": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.479546485,
+        "score_min_pnl_day": 0.374217687,
+        "score_pnl_trade": 1.807521368,
+        "support": 117
+      },
+      "thu_fri|08_1430|normal|v0_low": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.17244898,
+        "score_min_pnl_day": 0.155816327,
+        "score_pnl_trade": 0.432102273,
+        "support": 176
+      },
+      "thu_fri|08_1430|normal|v1_midlow": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.714716553,
+        "score_min_pnl_day": 0.646666667,
+        "score_pnl_trade": 0.30870715,
+        "support": 1021
+      },
+      "thu_fri|08_1430|normal|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.736190476,
+        "score_min_pnl_day": 0.668639456,
+        "score_pnl_trade": 0.40380597,
+        "support": 804
+      },
+      "thu_fri|08_1430|normal|v3_high": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.591360544,
+        "score_min_pnl_day": 0.519795918,
+        "score_pnl_trade": 0.642339901,
+        "support": 406
+      },
+      "thu_fri|1430_17|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.023628118,
+        "score_min_pnl_day": 0.023401361,
+        "score_pnl_trade": 3.473333333,
+        "support": 3
+      },
+      "thu_fri|1430_17|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.070657596,
+        "score_min_pnl_day": 0.069183673,
+        "score_pnl_trade": 3.462222222,
+        "support": 9
+      },
+      "thu_fri|1430_17|cheap_continuation|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.397505669,
+        "score_min_pnl_day": 0.332380952,
+        "score_pnl_trade": 1.524347826,
+        "support": 115
+      },
+      "thu_fri|1430_17|normal|v1_midlow": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": -0.020816327,
+        "score_min_pnl_day": -0.028707483,
+        "score_pnl_trade": -0.241578947,
+        "support": 38
+      },
+      "thu_fri|1430_17|normal|v2_midhigh": {
+        "continuation_edge": 0.07,
+        "edge_pair": "C07_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.125804989,
+        "score_min_pnl_day": 0.102108844,
+        "score_pnl_trade": 0.828059701,
+        "support": 67
+      },
+      "thu_fri|1430_17|normal|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.926825397,
+        "score_min_pnl_day": 0.885170068,
+        "score_pnl_trade": 0.590650289,
+        "support": 692
+      },
+      "thu_fri|17_22|cheap_continuation|v0_low": {
+        "continuation_edge": 0.09,
+        "edge_pair": "C09_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.015873016,
+        "score_min_pnl_day": 0.015306122,
+        "score_pnl_trade": 0.466666667,
+        "support": 15
+      },
+      "thu_fri|17_22|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.09,
+        "edge_pair": "C09_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.041655329,
+        "score_min_pnl_day": 0.041428571,
+        "score_pnl_trade": 1.020555556,
+        "support": 18
+      },
+      "thu_fri|17_22|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.224807256,
+        "score_min_pnl_day": 0.182585034,
+        "score_pnl_trade": 1.304473684,
+        "support": 76
+      },
+      "thu_fri|17_22|cheap_continuation|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.307891156,
+        "score_min_pnl_day": 0.221768707,
+        "score_pnl_trade": 0.956197183,
+        "support": 142
+      },
+      "thu_fri|17_22|normal|v0_low": {
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": -0.016122449,
+        "score_min_pnl_day": -0.028639456,
+        "score_pnl_trade": -0.444375,
+        "support": 16
+      },
+      "thu_fri|17_22|normal|v1_midlow": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.473877551,
+        "score_min_pnl_day": 0.453945578,
+        "score_pnl_trade": 0.754440433,
+        "support": 277
+      },
+      "thu_fri|17_22|normal|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.463469388,
+        "score_min_pnl_day": 0.34170068,
+        "score_pnl_trade": 0.49729927,
+        "support": 411
+      },
+      "thu_fri|17_22|normal|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.913945578,
+        "score_min_pnl_day": 0.738639456,
+        "score_pnl_trade": 0.497592593,
+        "support": 810
+      },
+      "thu_fri|22_24|cheap_continuation|v0_low": {
+        "continuation_edge": 0.09,
+        "edge_pair": "C09_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.065827664,
+        "score_min_pnl_day": 0.057823129,
+        "score_pnl_trade": 0.691190476,
+        "support": 42
+      },
+      "thu_fri|22_24|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.05047619,
+        "score_min_pnl_day": 0.028843537,
+        "score_pnl_trade": 0.322608696,
+        "support": 69
+      },
+      "thu_fri|22_24|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.146938776,
+        "score_min_pnl_day": 0.11170068,
+        "score_pnl_trade": 1.08,
+        "support": 60
+      },
+      "thu_fri|22_24|cheap_continuation|v3_high": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.071564626,
+        "score_min_pnl_day": 0.046802721,
+        "score_pnl_trade": 3.506666667,
+        "support": 9
+      },
+      "thu_fri|22_24|normal|v0_low": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.011655329,
+        "score_min_pnl_day": -0.035102041,
+        "score_pnl_trade": 0.02839779,
+        "support": 181
+      },
+      "thu_fri|22_24|normal|v1_midlow": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.197823129,
+        "score_min_pnl_day": 0.17462585,
+        "score_pnl_trade": 0.235148248,
+        "support": 371
+      },
+      "thu_fri|22_24|normal|v2_midhigh": {
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.136439909,
+        "score_min_pnl_day": 0.121972789,
+        "score_pnl_trade": 0.509915254,
+        "support": 118
+      },
+      "thu_fri|22_24|normal|v3_high": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.065555556,
+        "score_min_pnl_day": 0.059727891,
+        "score_pnl_trade": 0.45171875,
+        "support": 64
+      },
+      "weekend|00_08|cheap_continuation|v0_low": {
+        "continuation_edge": 0.08,
+        "edge_pair": "C08_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.48521542,
+        "score_min_pnl_day": 0.474693878,
+        "score_pnl_trade": 0.409923372,
+        "support": 522
+      },
+      "weekend|00_08|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.07,
+        "edge_pair": "C07_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.272199546,
+        "score_min_pnl_day": 0.21877551,
+        "score_pnl_trade": 0.628481675,
+        "support": 191
+      },
+      "weekend|00_08|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.247414966,
+        "score_min_pnl_day": 0.226258503,
+        "score_pnl_trade": 0.784964029,
+        "support": 139
+      },
+      "weekend|00_08|cheap_continuation|v3_high": {
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.023287982,
+        "score_min_pnl_day": 0.023061224,
+        "score_pnl_trade": 3.423333333,
+        "support": 3
+      },
+      "weekend|00_08|normal|v0_low": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 1.196995465,
+        "score_min_pnl_day": 1.138265306,
+        "score_pnl_trade": 0.190019798,
+        "support": 2778
+      },
+      "weekend|00_08|normal|v1_midlow": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.299909297,
+        "score_min_pnl_day": 0.226054422,
+        "score_pnl_trade": 0.153969732,
+        "support": 859
+      },
+      "weekend|00_08|normal|v2_midhigh": {
+        "continuation_edge": 0.08,
+        "edge_pair": "C08_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.524716553,
+        "score_min_pnl_day": 0.461632653,
+        "score_pnl_trade": 0.625405405,
+        "support": 370
+      },
+      "weekend|00_08|normal|v3_high": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.112380952,
+        "score_min_pnl_day": 0.109591837,
+        "score_pnl_trade": 0.33261745,
+        "support": 149
+      },
+      "weekend|08_1430|cheap_continuation|v0_low": {
         "continuation_edge": 0.1,
         "edge_pair": "C10_M08",
         "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": 0.045918367,
-        "support": 180
+        "score_mean_pnl_day": 0.23154195,
+        "score_min_pnl_day": 0.205442177,
+        "score_pnl_trade": 0.213173278,
+        "support": 479
+      },
+      "weekend|08_1430|cheap_continuation|v1_midlow": {
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.099092971,
+        "score_min_pnl_day": 0.062993197,
+        "score_pnl_trade": 0.257058824,
+        "support": 170
+      },
+      "weekend|08_1430|cheap_continuation|v2_midhigh": {
+        "continuation_edge": 0.07,
+        "edge_pair": "C07_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.148594104,
+        "score_min_pnl_day": 0.133129252,
+        "score_pnl_trade": 1.394255319,
+        "support": 47
+      },
+      "weekend|08_1430|cheap_continuation|v3_high": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.078480726,
+        "score_min_pnl_day": 0.075306122,
+        "score_pnl_trade": 1.193448276,
+        "support": 29
+      },
+      "weekend|08_1430|normal|v0_low": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.786643991,
+        "score_min_pnl_day": 0.778027211,
+        "score_pnl_trade": 0.159940065,
+        "support": 2169
+      },
+      "weekend|08_1430|normal|v1_midlow": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.132539683,
+        "score_min_pnl_day": 0.12707483,
+        "score_pnl_trade": 0.132840909,
+        "support": 440
       },
       "weekend|08_1430|normal|v2_midhigh": {
-        "adjusted_score": 0.237142439,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": -0.022244898,
-        "support": 139
-      },
-      "weekend|08_1430|normal|v3_high": {
-        "adjusted_score": 0.256973878,
-        "continuation_edge": 0.06,
-        "edge_pair": "C06_M08",
-        "mean_reversion_edge": 0.08,
-        "score_min_pnl_day": -0.004693878,
-        "support": 62
-      },
-      "weekend|1430_17|cheap_continuation|v0_low": {
-        "adjusted_score": 0.499068213,
         "continuation_edge": 0.04,
         "edge_pair": "C04_M06",
         "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.129138322,
+        "score_min_pnl_day": 0.087210884,
+        "score_pnl_trade": 0.144177215,
+        "support": 395
+      },
+      "weekend|08_1430|normal|v3_high": {
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M09",
+        "mean_reversion_edge": 0.09,
+        "score_mean_pnl_day": 0.013560091,
+        "score_min_pnl_day": 0.001156463,
+        "score_pnl_trade": 0.142380952,
+        "support": 42
+      },
+      "weekend|1430_17|cheap_continuation|v0_low": {
+        "continuation_edge": 0.04,
+        "edge_pair": "C04_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.133265306,
         "score_min_pnl_day": 0.116122449,
+        "score_pnl_trade": 0.441879699,
         "support": 133
       },
       "weekend|1430_17|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.520805567,
         "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.309251701,
-        "support": 138
+        "edge_pair": "C04_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.366417234,
+        "score_min_pnl_day": 0.350680272,
+        "score_pnl_trade": 1.035833333,
+        "support": 156
       },
       "weekend|1430_17|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.522850423,
         "continuation_edge": 0.04,
         "edge_pair": "C04_M06",
         "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.115011338,
         "score_min_pnl_day": 0.091904762,
+        "score_pnl_trade": 0.805079365,
         "support": 63
       },
       "weekend|1430_17|cheap_continuation|v3_high": {
-        "adjusted_score": 0.537351722,
         "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.010340136,
-        "support": 24
+        "edge_pair": "C04_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.05399093,
+        "score_min_pnl_day": 0.035442177,
+        "score_pnl_trade": 0.821034483,
+        "support": 29
       },
       "weekend|1430_17|normal|v0_low": {
-        "adjusted_score": 0.406721983,
         "continuation_edge": 0.06,
-        "edge_pair": "C06_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.396394558,
-        "support": 627
+        "edge_pair": "C06_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.179773243,
+        "score_min_pnl_day": 0.177142857,
+        "score_pnl_trade": 0.21311828,
+        "support": 372
       },
       "weekend|1430_17|normal|v1_midlow": {
-        "adjusted_score": 0.331287039,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M06",
+        "continuation_edge": 0.09,
+        "edge_pair": "C09_M06",
         "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.182040816,
-        "support": 217
+        "score_mean_pnl_day": 0.280362812,
+        "score_min_pnl_day": 0.232857143,
+        "score_pnl_trade": 0.547079646,
+        "support": 226
       },
       "weekend|1430_17|normal|v2_midhigh": {
-        "adjusted_score": 0.325273101,
         "continuation_edge": 0.1,
         "edge_pair": "C10_M06",
         "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.1261678,
         "score_min_pnl_day": 0.093945578,
+        "score_pnl_trade": 0.335180723,
         "support": 166
       },
       "weekend|1430_17|normal|v3_high": {
-        "adjusted_score": 0.351402719,
         "continuation_edge": 0.1,
-        "edge_pair": "C10_M05",
-        "mean_reversion_edge": 0.05,
-        "score_min_pnl_day": 0.023061224,
-        "support": 142
+        "edge_pair": "C10_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.021972789,
+        "score_min_pnl_day": 0.021972789,
+        "score_pnl_trade": 1.615,
+        "support": 6
       },
       "weekend|17_22|cheap_continuation|v0_low": {
-        "adjusted_score": 0.616359346,
         "continuation_edge": 0.04,
         "edge_pair": "C04_M10",
         "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": 0.52968254,
         "score_min_pnl_day": 0.498095238,
+        "score_pnl_trade": 0.490735294,
         "support": 476
       },
       "weekend|17_22|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.557552632,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
+        "continuation_edge": 0.08,
+        "edge_pair": "C08_M06",
         "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": -0.044217687,
-        "support": 182
+        "score_mean_pnl_day": 0.03893424,
+        "score_min_pnl_day": 0.034285714,
+        "score_pnl_trade": 0.12442029,
+        "support": 138
       },
       "weekend|17_22|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.629732545,
         "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
+        "edge_pair": "C04_M08",
+        "mean_reversion_edge": 0.08,
+        "score_mean_pnl_day": 0.261088435,
         "score_min_pnl_day": 0.243061224,
+        "score_pnl_trade": 1.037297297,
         "support": 111
       },
       "weekend|17_22|cheap_continuation|v3_high": {
-        "adjusted_score": 0.642662594,
         "continuation_edge": 0.04,
-        "edge_pair": "C04_M10",
-        "mean_reversion_edge": 0.1,
+        "edge_pair": "C04_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.041292517,
         "score_min_pnl_day": 0.030612245,
+        "score_pnl_trade": 0.371632653,
         "support": 49
       },
       "weekend|17_22|normal|v0_low": {
-        "adjusted_score": 0.311949664,
-        "continuation_edge": 0.08,
-        "edge_pair": "C08_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.347619048,
-        "support": 1424
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.503786848,
+        "score_min_pnl_day": 0.451088435,
+        "score_pnl_trade": 0.188599321,
+        "support": 1178
       },
       "weekend|17_22|normal|v1_midlow": {
-        "adjusted_score": 0.153927617,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M07",
+        "continuation_edge": 0.09,
+        "edge_pair": "C09_M07",
         "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": -0.091632653,
-        "support": 212
+        "score_mean_pnl_day": -0.059705215,
+        "score_min_pnl_day": -0.080884354,
+        "score_pnl_trade": -0.110630252,
+        "support": 238
       },
       "weekend|17_22|normal|v2_midhigh": {
-        "adjusted_score": 0.207171385,
-        "continuation_edge": 0.08,
-        "edge_pair": "C08_M04",
-        "mean_reversion_edge": 0.04,
-        "score_min_pnl_day": 0.12707483,
-        "support": 674
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.112154195,
+        "score_min_pnl_day": 0.106394558,
+        "score_pnl_trade": 0.254948454,
+        "support": 194
       },
       "weekend|17_22|normal|v3_high": {
-        "adjusted_score": 0.197288012,
-        "continuation_edge": 0.1,
-        "edge_pair": "C10_M07",
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M07",
         "mean_reversion_edge": 0.07,
-        "score_min_pnl_day": 0.07122449,
-        "support": 69
+        "score_mean_pnl_day": 0.103424036,
+        "score_min_pnl_day": 0.087278912,
+        "score_pnl_trade": 0.286855346,
+        "support": 159
       },
       "weekend|22_24|cheap_continuation|v0_low": {
-        "adjusted_score": 0.248084004,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
+        "continuation_edge": 0.05,
+        "edge_pair": "C05_M06",
         "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.111904762,
-        "support": 90
+        "score_mean_pnl_day": 0.170770975,
+        "score_min_pnl_day": 0.161020408,
+        "score_pnl_trade": 0.760707071,
+        "support": 99
       },
       "weekend|22_24|cheap_continuation|v1_midlow": {
-        "adjusted_score": 0.247470036,
-        "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
+        "continuation_edge": 0.06,
+        "edge_pair": "C06_M06",
         "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": -0.009931973,
-        "support": 50
+        "score_mean_pnl_day": 0.085804989,
+        "score_min_pnl_day": 0.082857143,
+        "score_pnl_trade": 0.741960784,
+        "support": 51
       },
       "weekend|22_24|cheap_continuation|v2_midhigh": {
-        "adjusted_score": 0.254213724,
         "continuation_edge": 0.04,
         "edge_pair": "C04_M06",
         "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.051360544,
         "score_min_pnl_day": 0.05,
+        "score_pnl_trade": 0.755,
         "support": 30
       },
       "weekend|22_24|cheap_continuation|v3_high": {
-        "adjusted_score": 0.254077023,
         "continuation_edge": 0.04,
-        "edge_pair": "C04_M06",
-        "mean_reversion_edge": 0.06,
-        "score_min_pnl_day": 0.064285714,
-        "support": 33
+        "edge_pair": "C04_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.104875283,
+        "score_min_pnl_day": 0.076734694,
+        "score_pnl_trade": 1.15625,
+        "support": 40
       },
       "weekend|22_24|normal|v0_low": {
-        "adjusted_score": -0.132553619,
-        "continuation_edge": 0.08,
-        "edge_pair": "C08_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": -0.265238095,
-        "support": 191
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M10",
+        "mean_reversion_edge": 0.1,
+        "score_mean_pnl_day": -0.185192744,
+        "score_min_pnl_day": -0.193265306,
+        "score_pnl_trade": -0.887717391,
+        "support": 92
       },
       "weekend|22_24|normal|v1_midlow": {
-        "adjusted_score": -0.100731698,
-        "continuation_edge": 0.08,
-        "edge_pair": "C08_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.031496599,
-        "support": 49
+        "continuation_edge": 0.1,
+        "edge_pair": "C10_M07",
+        "mean_reversion_edge": 0.07,
+        "score_mean_pnl_day": 0.04755102,
+        "score_min_pnl_day": 0.044761905,
+        "score_pnl_trade": 0.332857143,
+        "support": 63
       },
       "weekend|22_24|normal|v2_midhigh": {
-        "adjusted_score": -0.103059251,
         "continuation_edge": 0.08,
-        "edge_pair": "C08_M09",
-        "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.019047619,
-        "support": 34
+        "edge_pair": "C08_M06",
+        "mean_reversion_edge": 0.06,
+        "score_mean_pnl_day": 0.059138322,
+        "score_min_pnl_day": 0.041428571,
+        "score_pnl_trade": 0.205354331,
+        "support": 127
       },
       "weekend|22_24|normal|v3_high": {
-        "adjusted_score": -0.102821535,
-        "continuation_edge": 0.08,
-        "edge_pair": "C08_M09",
+        "continuation_edge": 0.07,
+        "edge_pair": "C07_M09",
         "mean_reversion_edge": 0.09,
-        "score_min_pnl_day": 0.080068027,
-        "support": 24
+        "score_mean_pnl_day": 0.101360544,
+        "score_min_pnl_day": 0.100680272,
+        "score_pnl_trade": 1.49,
+        "support": 30
       }
     }
   },

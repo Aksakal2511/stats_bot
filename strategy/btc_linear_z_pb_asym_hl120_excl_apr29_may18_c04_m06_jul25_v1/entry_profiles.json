@@ -2,7 +2,7 @@
   "schema_version": 1,
   "timezone": "Europe/London",
   "source": "continuous_surface_export",
-  "selected_spec": "BTC_LINEAR_DZ_PBASYMMETRIC_C0.05_HL120_NO_SESSION_CHILD118_SUPPORT50_DYNAMIC_EDGES_T45_265",
+  "selected_spec": "BTC_LINEAR_DZ_PBASYMMETRIC_C0.05_HL120_NO_SESSION_DIRECT_CHILD118_SUPPORT50_C04_M06_FLOOR_DYNAMIC_EDGES_T45_265",
   "default": {
     "edge": 0.04,
     "min_tte": 45,
@@ -324,14 +324,15 @@
   "dynamic_edge_selector": {
     "enabled": true,
     "artifact": "edge_selector_child118_support50.json",
-    "rule": "day_group_time_contradiction_vol_q4_support50_then_day_group_time_contradiction_then_day_group_time",
+    "rule": "day_group_time_contradiction_vol_q4_direct_support50_mr_floor6_then_day_group_time_contradiction_then_day_group_time",
     "support_threshold": 50,
-    "selection_route": "shrink_parent_k1000",
+    "selection_route": "direct_lookup",
     "c_floor": 4,
     "fallback_order": [
       "day_group_time_contradiction_vol_q4",
       "day_group_time_contradiction",
       "day_group_time"
-    ]
+    ],
+    "mr_floor": 6
   }
 }
