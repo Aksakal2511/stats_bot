@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "policy_type": "continuous_surface",
-  "strategy_id": "btc_linear_z_pb_asym_hl120_excl_apr29_may18_direct_child118_support50_c04_m06_floor_dynamic_edges_jul25_v1",
+  "strategy_id": "btc_linear_z_pb_asym_hl120_excl_apr29_may18_dgt_volq4_support100_obs_smooth_c04_m06_floor_dynamic_edges_jul25_v1",
   "training_start": "2026-02-14",
   "training_end": "2026-07-25",
   "training_segments": [
@@ -37,7 +37,7 @@
     "h20_00": "US_LATE_20_00"
   },
   "entry": {
-    "edge_profile": "direct_child118_support50_c04_m06_floor_dynamic_edges",
+    "edge_profile": "dgt_volq4_support100_obs_smooth_c04_m06_floor_dynamic_edges",
     "continuation_edge": 0.04,
     "mean_reversion_edge": 0.06,
     "min_price": 0.2,
@@ -46,10 +46,9 @@
     "max_tte": 265,
     "shares": 5,
     "unique_markets": 39987,
-    "edge_selector": "edge_selector_child118_support50.json",
+    "edge_selector": "edge_selector_day_group_time_vol_q4_support100_obs_smooth_c04_m06.json",
     "fallback_order": [
-      "day_group_time_contradiction_vol_q4_direct_support_ge_50",
-      "day_group_time_contradiction",
+      "day_group_time_vol_q4_obs_weighted_smooth_support_ge_100",
       "day_group_time"
     ]
   },

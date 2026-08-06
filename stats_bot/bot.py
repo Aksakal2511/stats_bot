@@ -4394,6 +4394,7 @@ class StatsBot:
                 source = str(snapshot.get("entry_rule_source_family") or "")
                 segment = str(snapshot.get("entry_rule_source_segment") or "")
                 source_label = {
+                    "day_group_time_vol_q4": "vol",
                     "day_group_time_contradiction_vol_q4": "118",
                     "day_group_time_contradiction": "30",
                     "day_group_time": "15",
@@ -4668,7 +4669,7 @@ class StatsBot:
         timed_edges = getattr(self.macro_policy, "timed_entry_overrides", [])
         if dynamic_selector is not None:
             log.info(
-                "  entry edges : child118 support>=%d dynamic selector, fallback contradiction -> day/time",
+                "  entry edges : support>=%d dynamic selector, vol/time fallback -> day/time",
                 int(getattr(dynamic_selector, "support_threshold", 0)),
             )
         elif timed_edges:

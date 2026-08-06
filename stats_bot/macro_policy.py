@@ -80,7 +80,9 @@ class DynamicEdgeSelector:
         self.vol_q50 = float(vol["q50"])
         self.vol_q75 = float(vol["q75"])
         tables = dict(payload.get("tables") or {})
-        self.child_table = self._parse_table(tables.get("day_group_time_contradiction_vol_q4") or {})
+        self.vol_time_table = self._parse_table(tables.get("day_group_time_vol_q4") or {})
+        self.contradiction_vol_table = self._parse_table(tables.get("day_group_time_contradiction_vol_q4") or {})
+        self.child_table = self.vol_time_table or self.contradiction_vol_table
         self.contradiction_table = self._parse_table(tables.get("day_group_time_contradiction") or {})
         self.day_time_table = self._parse_table(tables.get("day_group_time") or {})
 
@@ -156,12 +158,19 @@ class DynamicEdgeSelector:
         if time_segment is None or vol_bucket is None:
             return None
         contradiction = self._contradiction_state(trade_style, selected_ask)
-        child_segment = f"{day_group}|{time_segment}|{contradiction}|{vol_bucket}"
-        fallback_segments = (
-            ("day_group_time_contradiction_vol_q4", child_segment, self.child_table, True),
-            ("day_group_time_contradiction", f"{day_group}|{time_segment}|{contradiction}", self.contradiction_table, False),
-            ("day_group_time", f"{day_group}|{time_segment}", self.day_time_table, False),
-        )
+        if self.vol_time_table:
+            child_segment = f"{day_group}|{time_segment}|{vol_bucket}"
+            fallback_segments = (
+                ("day_group_time_vol_q4", child_segment, self.vol_time_table, True),
+                ("day_group_time", f"{day_group}|{time_segment}", self.day_time_table, False),
+            )
+        else:
+            child_segment = f"{day_group}|{time_segment}|{contradiction}|{vol_bucket}"
+            fallback_segments = (
+                ("day_group_time_contradiction_vol_q4", child_segment, self.contradiction_vol_table, True),
+                ("day_group_time_contradiction", f"{day_group}|{time_segment}|{contradiction}", self.contradiction_table, False),
+                ("day_group_time", f"{day_group}|{time_segment}", self.day_time_table, False),
+            )
         for depth, (family, segment, table, require_support) in enumerate(fallback_segments):
             row = table.get(segment)
             if row is None:
