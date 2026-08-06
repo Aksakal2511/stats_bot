@@ -1145,6 +1145,47 @@ def test_pressure_defence_live_immediate_fill_does_not_repeat() -> None:
     assert bot.active_position.pressure_defence_status == "filled"
 
 
+def test_pressure_defence_limit_echo_accounts_at_trigger_ask() -> None:
+    result = OrderResult(True, "hedge-1", "MATCHED", matched_shares=5.0, price=0.99, price_source="price")
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+
+    bot._maybe_execute_pressure_defence(now, snapshot)
+
+    assert bot.pressure_hedges_submitted == 1
+    assert bot.pressure_hedges_filled == 1
+    assert bot.active_position is not None
+    assert bot.active_position.hedge_leg is not None
+    assert bot.active_position.hedge_leg.avg_price == 0.30
+    assert bot.active_position.hedge_leg.cost == 1.50
+    assert bot.last_pressure_defence["hedge_price"] == 0.30
+    assert bot.last_pressure_defence["hedge_price_source"] == "hedge_ask_at_trigger_limit_echo"
+    submitted = [fields for event, _message, fields in bot.recent_events if event == "pressure_hedge_submitted"][-1]
+    filled = [fields for event, _message, fields in bot.recent_events if event == "pressure_hedge_fill_reconciled"][-1]
+    assert submitted["fill_price"] == 0.30
+    assert submitted["fill_price_source"] == "hedge_ask_at_trigger_limit_echo"
+    assert filled["fill_price"] == 0.30
+    assert filled["fill_price_source"] == "hedge_ask_at_trigger_limit_echo"
+
+
+def test_pressure_defence_reconcile_prefers_avg_price_over_limit_echo() -> None:
+    result = OrderResult(True, "hedge-1", "LIVE", matched_shares=0.0, price=0.99, price_source="price")
+    bot, now, snapshot = _pressure_defence_bot(
+        result=result,
+        order_progress=[{"status": "filled", "size_matched": 5.0, "price": 0.99, "avgPrice": 0.37}],
+    )
+
+    bot._maybe_execute_pressure_defence(now, snapshot)
+    bot._maybe_execute_pressure_defence(now + timedelta(seconds=1), snapshot)
+
+    assert bot.pressure_hedges_submitted == 1
+    assert bot.pressure_hedges_filled == 1
+    assert bot.active_position is not None
+    assert bot.active_position.hedge_leg is not None
+    assert bot.active_position.hedge_leg.avg_price == 0.37
+    assert bot.last_pressure_defence["hedge_price"] == 0.37
+    assert bot.last_pressure_defence["hedge_price_source"] == "avgPrice"
+
+
 def test_pressure_defence_partial_fill_keeps_reconciling_without_second_order() -> None:
     result = OrderResult(True, "hedge-1", "LIVE", matched_shares=0.0, price=0.30)
     bot, now, snapshot = _pressure_defence_bot(

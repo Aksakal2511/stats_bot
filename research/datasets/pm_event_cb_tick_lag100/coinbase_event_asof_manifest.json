@@ -1,0 +1,14 @@
+{
+  "built_at_utc": "2026-08-05T08:09:07.929071+00:00",
+  "distance_root": "/Volumes/Kate_DATA/policy_finder/data/artifacts/distance_to_beat_offset250_20260214_20260725",
+  "end_date": "2026-07-25",
+  "event_clock": "pm_and_coinbase_price_changes",
+  "feed_lag_ms": 100,
+  "note": "PM prices are Telonex event-level; Coinbase price/move_dz are raw-trade asof on the configured event clock; side_win uses Polymarket resolution labels.",
+  "output_dir": "/Volumes/Kate_DATA/policy_finder/data/combined_new/session_splits/statsbot_12_bucket_2h_london/combined_asof_offset250_pm_events_cb_tick_lag100_pm_and_coinbase_price_changes",
+  "raw_coinbase_dir": "/Volumes/Kate_DATA/policy_finder/data/raw/coinbase_spot_btc_usd/trades",
+  "resolution_labels": "/Volumes/Kate_DATA/policy_finder/data/artifacts/polymarket_resolution_labels_20260214_20260725.parquet",
+  "settlement_label": "polymarket_UP_outcome",
+  "source_pm_events_dir": "/Volumes/Kate_DATA/policy_finder/data/combined_new/session_splits/statsbot_12_bucket_2h_london/combined_asof_offset250_pm_events/intermediate/daily",
+  "start_date": "2026-02-14"
+}

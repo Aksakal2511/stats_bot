@@ -1,4 +1,4 @@
-# btc_linear_z_pb_asym_hl120_excl_apr29_may18_dynamic_edges_jul25_v1
+# btc_linear_z_pb_asym_hl120_excl_apr29_may18_child118_support50_dynamic_edges_jul25_v1
 
 `strategy_manifest.json` points Stats Bot at a continuous move_dz x price
 surface. This is not a policy cube; the live value is calculated from the fitted
@@ -15,24 +15,18 @@ model artifact at runtime.
 | Recency | HL120 |
 | Day type | excluded |
 | Side | pooled |
-| Entry | conservative day-type/time dynamic edge table; C04/M06 fallback |
+| Entry | child118 support>=50 dynamic edge selector with contradiction/day-time fallbacks |
 | TTE | 45-265s |
 | Price range | 0.20-0.80 |
 | Training rows | 11,388,613 |
 | Unique markets | 39,987 |
 
-Runtime keeps the model no-session; the London time band is used only to choose
-the entry edge thresholds and to label the dashboard profile.
+Runtime keeps the value model no-session. Required entry edges come from
+`edge_selector_child118_support50.json`:
 
-| Day type | London time | Continuation | Mean reversion |
-|---|---:|---:|---:|
-| weekday | 00:00-08:00 | 7c | 4c |
-| weekday | 08:00-14:30 | 4c | 6c |
-| weekday | 14:30-17:00 | 4c | 5c |
-| weekday | 17:00-22:00 | 5c | 6c |
-| weekday | 22:00-24:00 | 5c | 5c |
-| weekend | 00:00-08:00 | 3c | 4c |
-| weekend | 08:00-14:30 | 3c | 8c |
-| weekend | 14:30-17:00 | 3c | 8c |
-| weekend | 17:00-22:00 | 10c | 6c |
-| weekend | 22:00-24:00 | 7c | 6c |
+1. `day_group_time_contradiction_vol_q4` when selected-edge support is at least 50.
+2. `day_group_time_contradiction` fallback.
+3. `day_group_time` fallback.
+
+The older price-bucket and timed profiles remain configured only as rollback
+fallbacks if the dynamic selector cannot resolve a segment.

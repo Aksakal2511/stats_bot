@@ -40,6 +40,7 @@ class HedgeLeg:
     fill_time_utc: datetime
     limit_price: float
     ask_at_trigger: float
+    fill_price_source: str = ""
     status: str = "filled"
 
 

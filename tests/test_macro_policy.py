@@ -59,7 +59,7 @@ def _snapshot(
 def test_production_policy_uses_polymarket_settlement_labels() -> None:
     policy = MacroLocalPolicy(POLICY)
     manifest = json.loads(POLICY.read_text(encoding="utf-8"))
-    assert policy.strategy_id == "btc_linear_z_pb_asym_hl120_excl_apr29_may18_dynamic_edges_jul25_v1"
+    assert policy.strategy_id == "btc_linear_z_pb_asym_hl120_excl_apr29_may18_child118_support50_dynamic_edges_jul25_v1"
     assert policy.policy_type == "continuous_surface"
     assert policy.signal_source == "coinbase_btc_usd"
     assert policy.signal_feature == "move_dz"
@@ -153,27 +153,159 @@ def test_entry_profiles_match_fixed_full_raw_oos_spec() -> None:
             assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.06, 45, 265)
 
 
-def test_timed_entry_profiles_match_conservative_daytype_table() -> None:
+def test_timed_entry_profiles_match_conservative_daygroup_table() -> None:
     policy = MacroLocalPolicy(POLICY)
     cases = [
-        ("weekday", datetime(2026, 7, 1, 7, 59, tzinfo=LONDON), "ASIA_00_08", 0.07, 0.04),
-        ("weekday", datetime(2026, 7, 1, 8, 0, tzinfo=LONDON), "EUROPE_US_PREOPEN_08_1430", 0.04, 0.06),
-        ("weekday", datetime(2026, 7, 1, 14, 29, tzinfo=LONDON), "EUROPE_US_PREOPEN_08_1430", 0.04, 0.06),
-        ("weekday", datetime(2026, 7, 1, 14, 30, tzinfo=LONDON), "US_OPEN_1430_17", 0.04, 0.05),
-        ("weekday", datetime(2026, 7, 1, 17, 0, tzinfo=LONDON), "US_AFTERNOON_17_22", 0.05, 0.06),
-        ("weekday", datetime(2026, 7, 1, 22, 0, tzinfo=LONDON), "US_LATE_22_24", 0.05, 0.05),
-        ("weekend", datetime(2026, 7, 4, 7, 59, tzinfo=LONDON), "WEEKEND_00_08", 0.03, 0.04),
-        ("weekend", datetime(2026, 7, 4, 8, 0, tzinfo=LONDON), "WEEKEND_08_1430", 0.03, 0.08),
-        ("weekend", datetime(2026, 7, 4, 14, 30, tzinfo=LONDON), "WEEKEND_1430_17", 0.03, 0.08),
-        ("weekend", datetime(2026, 7, 4, 17, 0, tzinfo=LONDON), "WEEKEND_17_22", 0.10, 0.06),
-        ("weekend", datetime(2026, 7, 4, 22, 0, tzinfo=LONDON), "WEEKEND_22_24", 0.07, 0.06),
+        ("weekday", datetime(2026, 7, 1, 7, 59, tzinfo=LONDON), "MON_WED_00_08"),
+        ("weekday", datetime(2026, 7, 1, 8, 0, tzinfo=LONDON), "MON_WED_08_1430"),
+        ("weekday", datetime(2026, 7, 1, 14, 29, tzinfo=LONDON), "MON_WED_08_1430"),
+        ("weekday", datetime(2026, 7, 1, 14, 30, tzinfo=LONDON), "MON_WED_1430_17"),
+        ("weekday", datetime(2026, 7, 1, 17, 0, tzinfo=LONDON), "MON_WED_17_22"),
+        ("weekday", datetime(2026, 7, 1, 22, 0, tzinfo=LONDON), "MON_WED_22_24"),
+        ("weekday", datetime(2026, 7, 2, 7, 59, tzinfo=LONDON), "THU_FRI_00_08"),
+        ("weekday", datetime(2026, 7, 2, 8, 0, tzinfo=LONDON), "THU_FRI_08_1430"),
+        ("weekday", datetime(2026, 7, 2, 14, 30, tzinfo=LONDON), "THU_FRI_1430_17"),
+        ("weekday", datetime(2026, 7, 2, 17, 0, tzinfo=LONDON), "THU_FRI_17_22"),
+        ("weekday", datetime(2026, 7, 2, 22, 0, tzinfo=LONDON), "THU_FRI_22_24"),
+        ("weekend", datetime(2026, 7, 4, 7, 59, tzinfo=LONDON), "WEEKEND_00_08"),
+        ("weekend", datetime(2026, 7, 4, 8, 0, tzinfo=LONDON), "WEEKEND_08_1430"),
+        ("weekend", datetime(2026, 7, 4, 14, 30, tzinfo=LONDON), "WEEKEND_1430_17"),
+        ("weekend", datetime(2026, 7, 4, 17, 0, tzinfo=LONDON), "WEEKEND_17_22"),
+        ("weekend", datetime(2026, 7, 4, 22, 0, tzinfo=LONDON), "WEEKEND_22_24"),
     ]
-    for day_type, ts, expected_label, expected_c, expected_mr in cases:
+    for day_type, ts, expected_label in cases:
         snapshot = {"day_type": day_type, "timestamp_london": ts}
         _, label, continuation, mean_reversion = policy.entry_profile(snapshot)
         assert label == expected_label
-        assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (expected_c, 45, 265)
-        assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (expected_mr, 45, 265)
+        assert (continuation.edge, continuation.min_tte, continuation.max_tte) == (0.04, 45, 265)
+        assert (mean_reversion.edge, mean_reversion.min_tte, mean_reversion.max_tte) == (0.06, 45, 265)
+
+
+def test_dynamic_edge_selector_overrides_price_bucket_edges() -> None:
+    class EdgeTableModel:
+        rows = 1
+        momentum_feature = ""
+
+        @staticmethod
+        def bucket_label(selected_ask: float) -> str | None:
+            return price_bucket_label(selected_ask)
+
+        @staticmethod
+        def predict_one(*, selected_ask: float, **_: object) -> float:
+            return selected_ask + 0.09
+
+    policy = MacroLocalPolicy(POLICY)
+    policy.surface_model = EdgeTableModel()  # type: ignore[assignment]
+
+    p60_snapshot = _snapshot(
+        ts=datetime(2026, 7, 1, 10, 0, tzinfo=LONDON),
+        day_type="weekday",
+        tte=130.0,
+        distance_bps=8.0,
+        up_ask=0.61,
+    )
+    p60_decision = policy.evaluate(p60_snapshot, start_block_seconds=45)
+    assert p60_decision.viable
+    assert p60_decision.selected_trade_style == "continuation"
+    assert p60_decision.entry_edge_threshold == 0.05
+    assert p60_snapshot["selected_price_bucket"] == "p60_70"
+    assert p60_snapshot["entry_rule_name"] == "dynamic_edges"
+    assert p60_snapshot["entry_rule_source_family"] == "day_group_time_contradiction_vol_q4"
+    assert p60_snapshot["entry_rule_source_segment"] == "mon_wed|08_1430|normal|v2_midhigh"
+    assert p60_snapshot["entry_rule_support"] == 588
+
+    p30_snapshot = _snapshot(
+        ts=datetime(2026, 7, 1, 10, 0, tzinfo=LONDON),
+        day_type="weekday",
+        tte=130.0,
+        distance_bps=8.0,
+        up_ask=0.31,
+    )
+    p30_decision = policy.evaluate(p30_snapshot, start_block_seconds=45)
+    assert p30_decision.viable
+    assert p30_decision.selected_trade_style == "continuation"
+    assert p30_decision.entry_edge_threshold == 0.04
+    assert p30_snapshot["selected_price_bucket"] == "p30_40"
+
+
+def test_dynamic_edge_selector_handles_mean_reversion_edges() -> None:
+    class SideBiasedModel:
+        rows = 1
+        momentum_feature = ""
+
+        @staticmethod
+        def bucket_label(selected_ask: float) -> str | None:
+            return price_bucket_label(selected_ask)
+
+        @staticmethod
+        def predict_one(*, selected_ask: float, side: str, **_: object) -> float:
+            return selected_ask + (0.07 if side == "UP" else 0.01)
+
+    policy = MacroLocalPolicy(POLICY)
+    policy.surface_model = SideBiasedModel()  # type: ignore[assignment]
+
+    p20_snapshot = _snapshot(
+        ts=datetime(2026, 7, 1, 10, 0, tzinfo=LONDON),
+        day_type="weekday",
+        tte=130.0,
+        distance_bps=-8.0,
+        up_ask=0.21,
+    )
+    p20_decision = policy.evaluate(p20_snapshot, start_block_seconds=45)
+    assert not p20_decision.viable
+    assert p20_decision.selected_trade_style == "mean_reversion"
+    assert p20_decision.entry_edge_threshold == 0.08
+    assert p20_snapshot["selected_price_bucket"] == "p20_30"
+    assert p20_snapshot["entry_rule_source_family"] == "day_group_time_contradiction_vol_q4"
+    assert p20_snapshot["entry_rule_source_segment"] == "mon_wed|08_1430|normal|v2_midhigh"
+
+    p30_snapshot = _snapshot(
+        ts=datetime(2026, 7, 1, 10, 0, tzinfo=LONDON),
+        day_type="weekday",
+        tte=130.0,
+        distance_bps=-8.0,
+        up_ask=0.31,
+    )
+    p30_decision = policy.evaluate(p30_snapshot, start_block_seconds=45)
+    assert not p30_decision.viable
+    assert p30_decision.selected_trade_style == "mean_reversion"
+    assert p30_decision.entry_edge_threshold == 0.08
+    assert p30_snapshot["selected_price_bucket"] == "p30_40"
+
+
+def test_sparse_dynamic_child_segment_falls_back_to_contradiction_table() -> None:
+    class StrongContinuationModel:
+        rows = 1
+        momentum_feature = ""
+
+        @staticmethod
+        def bucket_label(selected_ask: float) -> str | None:
+            return price_bucket_label(selected_ask)
+
+        @staticmethod
+        def predict_one(*, selected_ask: float, **_: object) -> float:
+            return selected_ask + 0.12
+
+    policy = MacroLocalPolicy(POLICY)
+    policy.surface_model = StrongContinuationModel()  # type: ignore[assignment]
+    snapshot = _snapshot(
+        ts=datetime(2026, 7, 4, 10, 0, tzinfo=LONDON),
+        day_type="weekend",
+        tte=130.0,
+        distance_bps=8.0,
+        up_ask=0.45,
+    )
+    snapshot["local_volatility_1h_bps"] = 50.0
+
+    decision = policy.evaluate(snapshot, start_block_seconds=45)
+
+    assert decision.viable
+    assert decision.selected_trade_style == "continuation"
+    assert decision.entry_edge_threshold == 0.10
+    assert snapshot["entry_rule_source_family"] == "day_group_time_contradiction"
+    assert snapshot["entry_rule_child_segment"] == "weekend|08_1430|cheap_continuation|v3_high"
+    assert snapshot["entry_rule_source_segment"] == "weekend|08_1430|cheap_continuation"
+    assert snapshot["entry_rule_support"] == 569
 
 
 def test_continuation_tte_blocks_only_outside_fixed_profile() -> None:
@@ -256,7 +388,7 @@ def test_policy_match_fields_are_populated_when_edge_fails() -> None:
     assert decision.policy_record is not None
     assert decision.selected_trade_value is not None
     assert decision.selected_policy_edge is not None
-    assert decision.entry_edge_threshold in {0.04, 0.07}
+    assert decision.entry_edge_threshold in {0.04, 0.06}
     assert snapshot["policy_signal_name"] == "move_dz"
     assert snapshot["policy_support"] > 0
     assert snapshot["policy_level"] == "surface"
@@ -306,3 +438,22 @@ def test_surface_policy_does_not_require_momentum_feature() -> None:
     decision = policy.evaluate(snapshot, start_block_seconds=45)
     assert decision.policy_record is not None
     assert decision.selected_trade_value is not None
+
+
+def test_dynamic_edge_selector_does_not_format_infinite_neutral_edge() -> None:
+    policy = MacroLocalPolicy(POLICY)
+    snapshot = _snapshot(
+        ts=datetime(2026, 7, 1, 10, 0, tzinfo=LONDON),
+        day_type="weekday",
+        tte=130.0,
+        distance_bps=0.0,
+        up_ask=0.45,
+    )
+
+    decision = policy.evaluate(snapshot, start_block_seconds=45)
+
+    assert not decision.viable
+    assert decision.selected_trade_style == "neutral"
+    assert decision.entry_edge_threshold is None
+    assert snapshot["entry_rule_name"] == "dynamic_edges"
+    assert snapshot["active_edge_cents"] == ""

@@ -1147,6 +1147,7 @@ class StatsBot:
         if self.config.paper_trading:
             matched = hedge_shares
             fill_price = hedge_ask
+            fill_price_source = "paper_hedge_ask"
             order_id = f"paper-pressure-{uuid.uuid4().hex[:10]}"
             status = "PAPER_MATCHED"
             ok = True
@@ -1162,7 +1163,12 @@ class StatsBot:
             except Exception as exc:
                 result = OrderResult(False, None, "ERROR", str(exc), matched_shares=0.0, price=None)
             matched = float(result.matched_shares or 0.0)
-            fill_price = finite_float(result.price) or hedge_ask
+            fill_price, fill_price_source = self._pressure_hedge_accounting_price(
+                finite_float(result.price),
+                price_source=getattr(result, "price_source", ""),
+                hedge_ask=hedge_ask,
+                limit_price=limit_price,
+            )
             order_id = result.order_id
             status = result.status
             ok = result.ok
@@ -1182,6 +1188,7 @@ class StatsBot:
                 "shares": hedge_shares,
                 "matched_shares": matched,
                 "fill_price": fill_price,
+                "fill_price_source": fill_price_source,
                 "trigger_tte": tte,
                 **pressure,
             },
@@ -1215,6 +1222,7 @@ class StatsBot:
             hedge_side=hedge_side,
             matched_total=matched,
             fill_price=fill_price,
+            fill_price_source=fill_price_source,
             now_utc=now_utc,
             order_id=order_id,
             limit_price=limit_price,
@@ -1222,6 +1230,78 @@ class StatsBot:
             held_mid=held_mid,
             tte=tte,
             pressure=pressure,
+        )
+
+    def _pressure_hedge_accounting_price(
+        self,
+        price: float | None,
+        *,
+        price_source: str | None,
+        hedge_ask: float,
+        limit_price: float,
+    ) -> tuple[float, str]:
+        source = str(price_source or "").strip() or "unknown"
+        fallback_price = hedge_ask if finite_float(hedge_ask) is not None else limit_price
+        raw_price = finite_float(price)
+        if raw_price is None:
+            return fallback_price, "hedge_ask_at_trigger_no_api_price"
+
+        tick_size = finite_float(getattr(getattr(self, "current_market", None), "tick_size", None)) or 0.01
+        limit_echo = abs(raw_price - limit_price) <= max(tick_size * 0.5, 1e-9)
+        ask_is_materially_lower = hedge_ask < limit_price - max(tick_size * 0.5, 1e-9)
+        if source in {"unknown", "fallback", "price"} and limit_echo and ask_is_materially_lower:
+            return fallback_price, "hedge_ask_at_trigger_limit_echo"
+        return raw_price, source
+
+    def _raw_pressure_hedge_fill_price(
+        self,
+        raw: object,
+        *,
+        hedge_ask: float,
+        limit_price: float,
+    ) -> tuple[float, str]:
+        avg_keys = (
+            "avgPrice",
+            "avg_price",
+            "averagePrice",
+            "average_price",
+            "filledAvgPrice",
+            "filled_avg_price",
+            "fillPrice",
+            "fill_price",
+        )
+        if isinstance(raw, dict):
+            for key in avg_keys:
+                value = finite_float(raw.get(key))
+                if value is not None:
+                    return self._pressure_hedge_accounting_price(
+                        value,
+                        price_source=key,
+                        hedge_ask=hedge_ask,
+                        limit_price=limit_price,
+                    )
+            value = finite_float(raw.get("price"))
+            return self._pressure_hedge_accounting_price(
+                value,
+                price_source="price" if value is not None else "fallback",
+                hedge_ask=hedge_ask,
+                limit_price=limit_price,
+            )
+        for key in avg_keys:
+            value = finite_float(getattr(raw, key, None))
+            if value is not None:
+                return self._pressure_hedge_accounting_price(
+                    value,
+                    price_source=key,
+                    hedge_ask=hedge_ask,
+                    limit_price=limit_price,
+                )
+        value = finite_float(getattr(raw, "price", None))
+        return self._pressure_hedge_accounting_price(
+            value,
+            price_source="price" if value is not None else "fallback",
+            hedge_ask=hedge_ask,
+            limit_price=limit_price,
         )
 
     def _record_pressure_hedge_fill(
@@ -1232,6 +1312,7 @@ class StatsBot:
         hedge_side: str,
         matched_total: float,
         fill_price: float,
+        fill_price_source: str,
         now_utc: datetime,
         order_id: str | None,
         limit_price: float,
@@ -1266,6 +1347,7 @@ class StatsBot:
                 fill_time_utc=datetime.now(tz=timezone.utc),
                 limit_price=limit_price,
                 ask_at_trigger=hedge_ask,
+                fill_price_source=fill_price_source,
                 status="partial",
             )
         else:
@@ -1276,6 +1358,7 @@ class StatsBot:
             leg.shares = total_shares
             leg.avg_price = leg.cost / total_shares if total_shares > 0 else fill_price
             leg.fill_time_utc = datetime.now(tz=timezone.utc)
+            leg.fill_price_source = fill_price_source
             leg.status = "partial"
         position.extra["pressure_defence_matched_shares_seen"] = matched_total
         filled = matched_total >= target_shares - self.config.dust_share_threshold
@@ -1296,6 +1379,9 @@ class StatsBot:
                 "matched_total": matched_total,
                 "delta": delta,
                 "fill_price": fill_price,
+                "fill_price_source": fill_price_source,
+                "limit_price": limit_price,
+                "hedge_ask": hedge_ask,
                 "hedge_cost_delta": cost,
                 "hedge_fee_delta": fee,
                 **pressure,
@@ -1307,6 +1393,8 @@ class StatsBot:
             "hedge_side": hedge_side,
             "hedge_ask": hedge_ask,
             "hedge_price": fill_price,
+            "hedge_price_source": fill_price_source,
+            "limit_price": limit_price,
             "hedge_shares": matched_total,
             "hedge_fee": (position.hedge_leg.fee if position.hedge_leg is not None else fee),
             "tte": tte,
@@ -1336,13 +1424,6 @@ class StatsBot:
                 or raw.get("matched")
                 or 0.0
             )
-            price = float(
-                raw.get("price")
-                or raw.get("avg_price")
-                or raw.get("avgPrice")
-                or position.extra.get("pressure_defence_limit_price")
-                or 0.0
-            )
         else:
             status = str(getattr(raw, "status", "")).lower()
             matched = float(
@@ -1355,21 +1436,15 @@ class StatsBot:
                 or getattr(raw, "matched", None)
                 or 0.0
             )
-            price = float(
-                getattr(raw, "price", None)
-                or getattr(raw, "avg_price", None)
-                or getattr(raw, "avgPrice", None)
-                or position.extra.get("pressure_defence_limit_price")
-                or 0.0
-            )
         target_shares = finite_float(position.extra.get("pressure_defence_target_shares")) or position.shares
         seen = finite_float(position.extra.get("pressure_defence_matched_shares_seen")) or 0.0
         if _order_status_is_fill_like(status) and matched <= seen + 1e-9:
             matched = max(target_shares, matched)
         position.extra["pressure_defence_order_status"] = status
         hedge_side = str(position.extra.get("pressure_defence_hedge_side") or ("DOWN" if position.held_side == "UP" else "UP"))
-        limit_price = finite_float(position.extra.get("pressure_defence_limit_price")) or price
+        limit_price = finite_float(position.extra.get("pressure_defence_limit_price")) or 0.99
         hedge_ask = finite_float(position.extra.get("pressure_defence_hedge_ask")) or limit_price
+        price, fill_price_source = self._raw_pressure_hedge_fill_price(raw, hedge_ask=hedge_ask, limit_price=limit_price)
         pressure = {
             "pressure_source": str(position.extra.get("pressure_defence_trigger_source") or "binance_spot_signed_volume"),
             "pressure_adverse_volume_btc": finite_float(position.extra.get("pressure_defence_trigger_adverse_volume_btc")),
@@ -1383,7 +1458,8 @@ class StatsBot:
                 hedge_token=self._selected_token_id(hedge_side),
                 hedge_side=hedge_side,
                 matched_total=matched,
-                fill_price=price or limit_price,
+                fill_price=price,
+                fill_price_source=fill_price_source,
                 now_utc=now_utc,
                 order_id=order_id,
                 limit_price=limit_price,
@@ -3442,6 +3518,9 @@ class StatsBot:
                         "hedge_side",
                         "hedge_shares",
                         "hedge_price",
+                        "hedge_price_source",
+                        "hedge_limit_price",
+                        "hedge_ask_at_trigger",
                         "hedge_cost",
                         "hedge_fee",
                         "hedge_trigger_source",
@@ -3473,6 +3552,9 @@ class StatsBot:
                     position.hedge_leg.side if position.hedge_leg else "",
                     f"{position.hedge_leg.shares:.6f}" if position.hedge_leg else "",
                     f"{position.hedge_leg.avg_price:.6f}" if position.hedge_leg else "",
+                    position.hedge_leg.fill_price_source if position.hedge_leg else "",
+                    f"{position.hedge_leg.limit_price:.6f}" if position.hedge_leg else "",
+                    f"{position.hedge_leg.ask_at_trigger:.6f}" if position.hedge_leg else "",
                     f"{position.hedge_leg.cost:.6f}" if position.hedge_leg else "",
                     f"{position.hedge_leg.fee:.6f}" if position.hedge_leg else "",
                     position.hedge_leg.trigger_source if position.hedge_leg else "",
@@ -4302,12 +4384,56 @@ class StatsBot:
         else:
             lines.append("")
             lines.append("  SIGNAL")
-            day_type, session_name, cont_profile, mr_profile = self.macro_policy.entry_profile(snapshot)
-            lines.append(
-                f"    entry_profile     : {day_type}/{session_name} | "
-                f"C={cont_profile.edge * 100:.0f}c@{cont_profile.min_tte}-{cont_profile.max_tte}s | "
-                f"MR={mr_profile.edge * 100:.0f}c@{mr_profile.min_tte}-{mr_profile.max_tte}s"
+            _, _, cont_profile, mr_profile = self.macro_policy.entry_profile(snapshot)
+            def _active_edge_text() -> str:
+                style = str(snapshot.get("selected_trade_style") or "")
+                edge = finite_float(decision.entry_edge_threshold) if decision is not None else None
+                if not style or edge is None:
+                    return "NA"
+                style_label = "MR" if style == "mean_reversion" else "C"
+                source = str(snapshot.get("entry_rule_source_family") or "")
+                segment = str(snapshot.get("entry_rule_source_segment") or "")
+                source_label = {
+                    "day_group_time_contradiction_vol_q4": "118",
+                    "day_group_time_contradiction": "30",
+                    "day_group_time": "15",
+                }.get(source, "")
+                if not source_label or not segment:
+                    return f"{style_label}={edge * 100:.0f}c"
+                parts = [
+                    part.replace("_", "-")
+                    .replace("cheap-continuation", "cheapC")
+                    .replace("normal", "norm")
+                    .replace("midhigh", "hi")
+                    .replace("midlow", "lo")
+                    for part in segment.split("|")
+                    if part
+                ]
+                cleaned = "/".join(parts)
+                return f"{style_label}={edge * 100:.0f}c | {source_label} {cleaned}"
+
+            selected_profile = (
+                mr_profile
+                if str(snapshot.get("selected_trade_style") or "") == "mean_reversion"
+                else cont_profile
             )
+            default_entry_rule = (
+                getattr(self.macro_policy.dynamic_edge_selector, "rule_label", "price_bucket_edges")
+                if getattr(self.macro_policy, "dynamic_edge_selector", None) is not None
+                else "price_bucket_edges"
+            )
+            entry_rule = str(snapshot.get("entry_rule_name") or default_entry_rule)
+            min_tte = finite_float(snapshot.get("entry_rule_min_tte"))
+            max_tte = finite_float(snapshot.get("entry_rule_max_tte"))
+            if min_tte is None:
+                min_tte = float(selected_profile.min_tte)
+            if max_tte is None:
+                max_tte = float(selected_profile.max_tte)
+            lines.append(
+                f"    entry_rule        : {entry_rule} | "
+                f"{int(min_tte)}-{int(max_tte)}s"
+            )
+            lines.append(f"    active_edge       : {_active_edge_text()}")
             if bool(snapshot.get("session_style_guard_active")):
                 session = str(snapshot.get("session_style_guard_session") or "session")
                 style = str(snapshot.get("session_style_guard_style") or "style")
@@ -4416,10 +4542,11 @@ class StatsBot:
             lines.append(
                 f"    support / level   : {policy_support} / {policy_level}"
             )
-            label = "strategy_key" if (
+            is_continuous_strategy = (
                 snapshot is not None and str(snapshot.get("selected_move_dz_bucket") or "") == "continuous"
-            ) else "policy_key"
-            lines.append(f"    {label:<18}: {decision.policy_key_text or 'NA'}")
+            )
+            if not is_continuous_strategy:
+                lines.append(f"    {'policy_key':<18}: {decision.policy_key_text or 'NA'}")
             if decision.blockers:
                 lines.append(f"    blockers          : {self._format_entry_blockers(decision.blockers, snapshot, now_utc, decision)}")
         if self.pending_entry:
@@ -4453,7 +4580,8 @@ class StatsBot:
             lines.append(f"    entry_bps         : {self.active_position.entry_bps:+.2f}")
             lines.append(f"    entry_edge_thresh : {self.active_position.entry_edge_threshold:.2f}")
             lines.append(f"    exit_policy_mode  : {self.config.exit_policy_mode}")
-            lines.append(f"    policy_key        : {self.active_position.entry_policy_key_text}")
+            if not str(self.active_position.entry_policy_key_text or "").startswith(f"{self.macro_policy.strategy_id}|"):
+                lines.append(f"    policy_key        : {self.active_position.entry_policy_key_text}")
             if self.active_position.hedge_leg is not None:
                 hedge = self.active_position.hedge_leg
                 lines.append(f"    hedge             : {hedge.side} {hedge.shares:.4f} @ {hedge.avg_price:.4f}")
@@ -4536,8 +4664,14 @@ class StatsBot:
             )
         else:
             log.info(f"  policy      : {self.config.macro_policy_bundle} ({len(self.macro_policy):,} hierarchical rows)")
+        dynamic_selector = getattr(self.macro_policy, "dynamic_edge_selector", None)
         timed_edges = getattr(self.macro_policy, "timed_entry_overrides", [])
-        if timed_edges:
+        if dynamic_selector is not None:
+            log.info(
+                "  entry edges : child118 support>=%d dynamic selector, fallback contradiction -> day/time",
+                int(getattr(dynamic_selector, "support_threshold", 0)),
+            )
+        elif timed_edges:
             log.info(
                 "  entry edges : conservative dynamic day-type/time table (%d bands, %s fallback)",
                 len(timed_edges),

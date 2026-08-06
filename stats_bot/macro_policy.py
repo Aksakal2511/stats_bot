@@ -46,10 +46,151 @@ class EntryParameters:
 @dataclass(frozen=True)
 class TimedEntryOverride:
     day_type: str
+    day_group: str
     start_minute: int
     end_minute: int
     label: str
     parameters: dict[str, EntryParameters]
+
+
+@dataclass(frozen=True)
+class DynamicEdgeSelection:
+    parameters: EntryParameters
+    rule_label: str
+    source_family: str
+    source_segment: str
+    child_segment: str
+    fallback_depth: int
+    support: int
+    edge_pair: str
+    contradiction_state: str
+    vol_bucket: str
+    time_segment: str
+    day_group: str
+
+
+class DynamicEdgeSelector:
+    def __init__(self, payload: dict[str, Any], *, default_min_tte: int, default_max_tte: int):
+        self.rule_label = str(payload.get("entry_rule_label") or "dynamic_edges")
+        self.support_threshold = int(payload.get("support_threshold") or 0)
+        self.default_min_tte = int(default_min_tte)
+        self.default_max_tte = int(default_max_tte)
+        vol = dict(payload.get("vol_q4") or {})
+        self.vol_q25 = float(vol["q25"])
+        self.vol_q50 = float(vol["q50"])
+        self.vol_q75 = float(vol["q75"])
+        tables = dict(payload.get("tables") or {})
+        self.child_table = self._parse_table(tables.get("day_group_time_contradiction_vol_q4") or {})
+        self.contradiction_table = self._parse_table(tables.get("day_group_time_contradiction") or {})
+        self.day_time_table = self._parse_table(tables.get("day_group_time") or {})
+
+    @staticmethod
+    def _parse_table(raw: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        parsed: dict[str, dict[str, Any]] = {}
+        for segment, row in raw.items():
+            if not isinstance(row, dict):
+                continue
+            parsed[str(segment)] = {
+                "edge_pair": str(row.get("edge_pair") or ""),
+                "continuation": EntryParameters(
+                    edge=float(row["continuation_edge"]),
+                    min_tte=45,
+                    max_tte=265,
+                ),
+                "mean_reversion": EntryParameters(
+                    edge=float(row["mean_reversion_edge"]),
+                    min_tte=45,
+                    max_tte=265,
+                ),
+                "support": int(row.get("support") or 0),
+            }
+        return parsed
+
+    @staticmethod
+    def _time_segment(timestamp_london: Any) -> str | None:
+        hour = getattr(timestamp_london, "hour", None)
+        minute = getattr(timestamp_london, "minute", None)
+        if hour is None or minute is None:
+            return None
+        total = int(hour) * 60 + int(minute)
+        if total < 8 * 60:
+            return "00_08"
+        if total < 14 * 60 + 30:
+            return "08_1430"
+        if total < 17 * 60:
+            return "1430_17"
+        if total < 22 * 60:
+            return "17_22"
+        return "22_24"
+
+    def _vol_bucket(self, local_vol_1h_bps: float | None) -> str | None:
+        if local_vol_1h_bps is None:
+            return None
+        if local_vol_1h_bps <= self.vol_q25:
+            return "v0_low"
+        if local_vol_1h_bps <= self.vol_q50:
+            return "v1_midlow"
+        if local_vol_1h_bps <= self.vol_q75:
+            return "v2_midhigh"
+        return "v3_high"
+
+    @staticmethod
+    def _contradiction_state(trade_style: str, selected_ask: float | None) -> str:
+        if trade_style == "continuation" and selected_ask is not None and selected_ask <= 0.48 + 1e-12:
+            return "cheap_continuation"
+        return "normal"
+
+    def select(
+        self,
+        *,
+        day_group: str,
+        timestamp_london: Any,
+        local_vol_1h_bps: float | None,
+        trade_style: str,
+        selected_ask: float | None,
+    ) -> DynamicEdgeSelection | None:
+        if trade_style not in {"continuation", "mean_reversion"}:
+            return None
+        time_segment = self._time_segment(timestamp_london)
+        vol_bucket = self._vol_bucket(local_vol_1h_bps)
+        if time_segment is None or vol_bucket is None:
+            return None
+        contradiction = self._contradiction_state(trade_style, selected_ask)
+        child_segment = f"{day_group}|{time_segment}|{contradiction}|{vol_bucket}"
+        fallback_segments = (
+            ("day_group_time_contradiction_vol_q4", child_segment, self.child_table, True),
+            ("day_group_time_contradiction", f"{day_group}|{time_segment}|{contradiction}", self.contradiction_table, False),
+            ("day_group_time", f"{day_group}|{time_segment}", self.day_time_table, False),
+        )
+        for depth, (family, segment, table, require_support) in enumerate(fallback_segments):
+            row = table.get(segment)
+            if row is None:
+                continue
+            support = int(row.get("support") or 0)
+            if require_support and support < self.support_threshold:
+                continue
+            parameters = row.get(trade_style)
+            if not isinstance(parameters, EntryParameters):
+                continue
+            return DynamicEdgeSelection(
+                parameters=EntryParameters(
+                    edge=parameters.edge,
+                    min_tte=self.default_min_tte,
+                    max_tte=self.default_max_tte,
+                ),
+                rule_label=self.rule_label,
+                source_family=family,
+                source_segment=segment,
+                child_segment=child_segment,
+                fallback_depth=depth,
+                support=support,
+                edge_pair=str(row.get("edge_pair") or ""),
+                contradiction_state=contradiction,
+                vol_bucket=vol_bucket,
+                time_segment=time_segment,
+                day_group=day_group,
+            )
+        return None
 
 
 class MacroLocalPolicy:
@@ -78,6 +219,8 @@ class MacroLocalPolicy:
             )
             for key, value in profile_payload.get("overrides", {}).items()
         }
+        self.price_bucket_entry_edges = self._parse_price_bucket_entry_edges(profile_payload)
+        self.dynamic_edge_selector = self._parse_dynamic_edge_selector(profile_payload, path)
         self.timed_entry_overrides = [
             self._parse_timed_entry_override(row)
             for row in profile_payload.get("timed_overrides", [])
@@ -234,14 +377,96 @@ class MacroLocalPolicy:
         session_label: str,
         trade_style: str,
     ) -> EntryParameters:
-        default = EntryParameters(
+        default = self._default_entry_parameters(trade_style)
+        return self.entry_overrides.get(
+            f"{day_type}|{session_label}|{trade_style}", default
+        )
+
+    def _default_entry_parameters(self, trade_style: str) -> EntryParameters:
+        return EntryParameters(
             edge=float(self.entry[f"{trade_style}_edge"]),
             min_tte=int(self.entry["min_tte"]),
             max_tte=int(self.entry["max_tte"]),
         )
-        return self.entry_overrides.get(
-            f"{day_type}|{session_label}|{trade_style}", default
+
+    def _parse_price_bucket_entry_edges(
+        self,
+        profile_payload: dict[str, Any],
+    ) -> dict[str, dict[str, EntryParameters]]:
+        raw = profile_payload.get("price_bucket_edges")
+        if not isinstance(raw, dict):
+            return {}
+        default_min_tte = int(profile_payload.get("default", {}).get("min_tte", self.entry["min_tte"]))
+        default_max_tte = int(profile_payload.get("default", {}).get("max_tte", self.entry["max_tte"]))
+        parsed: dict[str, dict[str, EntryParameters]] = {}
+        for style in ("continuation", "mean_reversion"):
+            style_raw = raw.get(style)
+            if not isinstance(style_raw, dict):
+                continue
+            parsed_style: dict[str, EntryParameters] = {}
+            for bucket, value in style_raw.items():
+                bucket_label = str(bucket)
+                min_tte = default_min_tte
+                max_tte = default_max_tte
+                edge_value: float
+                if value is None:
+                    edge_value = math.inf
+                elif isinstance(value, dict):
+                    edge = value.get("edge")
+                    edge_value = math.inf if edge is None else float(edge)
+                    min_tte = int(value.get("min_tte", min_tte))
+                    max_tte = int(value.get("max_tte", max_tte))
+                else:
+                    edge_value = float(value)
+                parsed_style[bucket_label] = EntryParameters(
+                    edge=edge_value,
+                    min_tte=min_tte,
+                    max_tte=max_tte,
+                )
+            parsed[style] = parsed_style
+        return parsed
+
+    def _parse_dynamic_edge_selector(
+        self,
+        profile_payload: dict[str, Any],
+        manifest_path: Path,
+    ) -> DynamicEdgeSelector | None:
+        raw = profile_payload.get("dynamic_edge_selector")
+        if not isinstance(raw, dict) or not bool(raw.get("enabled", True)):
+            return None
+        artifact = Path(str(raw.get("artifact") or ""))
+        if not artifact:
+            raise ValueError("dynamic_edge_selector requires an artifact path")
+        if not artifact.is_absolute():
+            artifact = manifest_path.parent / artifact
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        default_min_tte = int(profile_payload.get("default", {}).get("min_tte", self.entry["min_tte"]))
+        default_max_tte = int(profile_payload.get("default", {}).get("max_tte", self.entry["max_tte"]))
+        return DynamicEdgeSelector(
+            payload,
+            default_min_tte=default_min_tte,
+            default_max_tte=default_max_tte,
         )
+
+    def _price_bucket_entry_parameters(
+        self,
+        trade_style: str,
+        price_bucket: str | None,
+    ) -> EntryParameters | None:
+        if not price_bucket:
+            return None
+        style_edges = self.price_bucket_entry_edges.get(trade_style)
+        if not style_edges:
+            return None
+        return style_edges.get(str(price_bucket))
+
+    def _enabled_price_buckets(self, trade_style: str) -> list[str]:
+        style_edges = self.price_bucket_entry_edges.get(trade_style) or {}
+        return [
+            bucket
+            for bucket, parameters in style_edges.items()
+            if math.isfinite(parameters.edge)
+        ]
 
     @staticmethod
     def _parse_time_minutes(value: Any) -> int:
@@ -267,6 +492,14 @@ class MacroLocalPolicy:
         day_type = str(row.get("day_type") or "").strip().lower()
         if day_type not in {"weekday", "weekend"}:
             raise ValueError(f"Timed entry override has invalid day_type: {row.get('day_type')!r}")
+        day_group = str(row.get("day_group") or day_type).strip().lower()
+        valid_groups = {"weekday", "weekend", "mon_wed", "thu_fri"}
+        if day_group not in valid_groups:
+            raise ValueError(f"Timed entry override has invalid day_group: {row.get('day_group')!r}")
+        if day_group in {"mon_wed", "thu_fri"} and day_type != "weekday":
+            raise ValueError(f"Timed entry override day_group requires weekday day_type: {row!r}")
+        if day_group == "weekend" and day_type != "weekend":
+            raise ValueError(f"Timed entry override weekend day_group requires weekend day_type: {row!r}")
         start_minute = cls._parse_time_minutes(row.get("start"))
         end_minute = cls._parse_time_minutes(row.get("end"))
         if start_minute == end_minute:
@@ -288,6 +521,7 @@ class MacroLocalPolicy:
         }
         return TimedEntryOverride(
             day_type=day_type,
+            day_group=day_group,
             start_minute=start_minute,
             end_minute=end_minute,
             label=label,
@@ -302,6 +536,21 @@ class MacroLocalPolicy:
             return None
         return int(hour) * 60 + int(minute)
 
+    @staticmethod
+    def _entry_day_group(day_type: str, timestamp_london: Any) -> str:
+        normalized_day_type = str(day_type or "").strip().lower()
+        if normalized_day_type == "weekend":
+            return "weekend"
+        weekday = getattr(timestamp_london, "weekday", None)
+        if callable(weekday):
+            day_index = int(weekday())
+            if 0 <= day_index <= 2:
+                return "mon_wed"
+            if 3 <= day_index <= 4:
+                return "thu_fri"
+            return "weekend"
+        return normalized_day_type or "weekday"
+
     def _timed_entry_override(
         self,
         day_type: str,
@@ -311,8 +560,11 @@ class MacroLocalPolicy:
         if minute is None:
             return None
         normalized_day_type = str(day_type or "").strip().lower()
+        normalized_day_group = self._entry_day_group(normalized_day_type, timestamp_london)
         for override in self.timed_entry_overrides:
             if override.day_type != normalized_day_type:
+                continue
+            if override.day_group != normalized_day_group and override.day_group != normalized_day_type:
                 continue
             if override.start_minute < override.end_minute:
                 if override.start_minute <= minute < override.end_minute:
@@ -321,17 +573,126 @@ class MacroLocalPolicy:
                 return override
         return None
 
+    def _dynamic_edge_selection_for_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        trade_style: str,
+        selected_ask: float | None,
+    ) -> DynamicEdgeSelection | None:
+        selector = self.dynamic_edge_selector
+        if selector is None:
+            return None
+        day_type = str(snapshot.get("day_type") or "weekday")
+        day_group = self._entry_day_group(day_type, snapshot.get("timestamp_london"))
+        local_vol = finite_float(snapshot.get("local_volatility_1h_bps"))
+        return selector.select(
+            day_group=day_group,
+            timestamp_london=snapshot.get("timestamp_london"),
+            local_vol_1h_bps=local_vol,
+            trade_style=trade_style,
+            selected_ask=selected_ask,
+        )
+
+    def _entry_parameters_and_rule_for_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        trade_style: str,
+        price_bucket: str | None = None,
+        selected_ask: float | None = None,
+    ) -> tuple[EntryParameters, DynamicEdgeSelection | None]:
+        dynamic_selection = self._dynamic_edge_selection_for_snapshot(snapshot, trade_style, selected_ask)
+        if dynamic_selection is not None:
+            return dynamic_selection.parameters, dynamic_selection
+        bucket_parameters = self._price_bucket_entry_parameters(trade_style, price_bucket)
+        if bucket_parameters is not None:
+            return bucket_parameters, None
+        day_type = str(snapshot.get("day_type") or "weekday")
+        timed = self._timed_entry_override(day_type, snapshot.get("timestamp_london"))
+        if timed is not None and trade_style in timed.parameters:
+            return timed.parameters[trade_style], None
+        _, session_label = self.macro_session(snapshot.get("timestamp_london"))
+        return self.entry_parameters(day_type, str(session_label or ""), trade_style), None
+
     def _entry_parameters_for_snapshot(
         self,
         snapshot: dict[str, Any],
         trade_style: str,
+        price_bucket: str | None = None,
+        selected_ask: float | None = None,
     ) -> EntryParameters:
-        day_type = str(snapshot.get("day_type") or "weekday")
-        timed = self._timed_entry_override(day_type, snapshot.get("timestamp_london"))
-        if timed is not None and trade_style in timed.parameters:
-            return timed.parameters[trade_style]
-        _, session_label = self.macro_session(snapshot.get("timestamp_london"))
-        return self.entry_parameters(day_type, str(session_label or ""), trade_style)
+        parameters, _ = self._entry_parameters_and_rule_for_snapshot(
+            snapshot,
+            trade_style,
+            price_bucket,
+            selected_ask,
+        )
+        return parameters
+
+    def _store_active_entry_rule(
+        self,
+        snapshot: dict[str, Any],
+        match: MacroPolicyMatch,
+        parameters: EntryParameters,
+        dynamic_selection: DynamicEdgeSelection | None,
+    ) -> None:
+        if dynamic_selection is None:
+            snapshot["entry_rule_name"] = (
+                self.dynamic_edge_selector.rule_label
+                if self.dynamic_edge_selector is not None
+                else "price_bucket_edges"
+            )
+            snapshot["entry_rule_source_family"] = ""
+            snapshot["entry_rule_source_segment"] = ""
+            snapshot["entry_rule_child_segment"] = ""
+            snapshot["entry_rule_support"] = ""
+            snapshot["entry_rule_fallback_depth"] = ""
+            snapshot["entry_rule_edge_pair"] = ""
+            snapshot["entry_rule_contradiction_state"] = ""
+            snapshot["entry_rule_vol_bucket"] = ""
+            snapshot["entry_rule_time_segment"] = ""
+        else:
+            snapshot["entry_rule_name"] = dynamic_selection.rule_label
+            snapshot["entry_rule_source_family"] = dynamic_selection.source_family
+            snapshot["entry_rule_source_segment"] = dynamic_selection.source_segment
+            snapshot["entry_rule_child_segment"] = dynamic_selection.child_segment
+            snapshot["entry_rule_support"] = dynamic_selection.support
+            snapshot["entry_rule_fallback_depth"] = dynamic_selection.fallback_depth
+            snapshot["entry_rule_edge_pair"] = dynamic_selection.edge_pair
+            snapshot["entry_rule_contradiction_state"] = dynamic_selection.contradiction_state
+            snapshot["entry_rule_vol_bucket"] = dynamic_selection.vol_bucket
+            snapshot["entry_rule_time_segment"] = dynamic_selection.time_segment
+        snapshot["entry_rule_min_tte"] = parameters.min_tte
+        snapshot["entry_rule_max_tte"] = parameters.max_tte
+        snapshot["active_edge_trade_style"] = match.trade_style
+        snapshot["active_edge_price_bucket"] = match.price_bucket
+        snapshot["active_edge_cents"] = (
+            round(float(parameters.edge) * 100.0)
+            if math.isfinite(float(parameters.edge))
+            else ""
+        )
+
+    def _display_entry_parameters_for_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        trade_style: str,
+    ) -> EntryParameters:
+        selected_bucket = snapshot.get("selected_price_bucket")
+        selected_style = snapshot.get("selected_trade_style")
+        bucket: str | None = None
+        if selected_style == trade_style and selected_bucket:
+            bucket = str(selected_bucket)
+        elif self.price_bucket_entry_edges:
+            enabled = self._enabled_price_buckets(trade_style)
+            if len(enabled) == 1:
+                bucket = enabled[0]
+            elif selected_bucket and str(selected_bucket) in (self.price_bucket_entry_edges.get(trade_style) or {}):
+                bucket = str(selected_bucket)
+        bucket_parameters = self._price_bucket_entry_parameters(trade_style, bucket)
+        if bucket_parameters is not None:
+            return bucket_parameters
+        if self.price_bucket_entry_edges:
+            return self._default_entry_parameters(trade_style)
+        return self._entry_parameters_for_snapshot(snapshot, trade_style)
 
     def entry_profile(self, snapshot: dict[str, Any]) -> tuple[
         str, str, EntryParameters, EntryParameters
@@ -344,14 +705,14 @@ class MacroLocalPolicy:
             return (
                 day_type,
                 timed.label,
-                timed.parameters["continuation"],
-                timed.parameters["mean_reversion"],
+                self._display_entry_parameters_for_snapshot(snapshot, "continuation"),
+                self._display_entry_parameters_for_snapshot(snapshot, "mean_reversion"),
             )
         return (
             day_type,
             str(session_name or "NA"),
-            self.entry_parameters(day_type, label, "continuation"),
-            self.entry_parameters(day_type, label, "mean_reversion"),
+            self._display_entry_parameters_for_snapshot(snapshot, "continuation"),
+            self._display_entry_parameters_for_snapshot(snapshot, "mean_reversion"),
         )
 
     @staticmethod
@@ -605,12 +966,26 @@ class MacroLocalPolicy:
             match = self._side_match(snapshot, side)
             if match is None:
                 continue
-            parameters = (
-                self._entry_parameters_for_snapshot(snapshot, match.trade_style)
-                if match.trade_style != "neutral"
-                else EntryParameters(math.inf, int(self.entry["min_tte"]), int(self.entry["max_tte"]))
-            )
+            if match.trade_style != "neutral":
+                parameters, dynamic_selection = self._entry_parameters_and_rule_for_snapshot(
+                    snapshot,
+                    match.trade_style,
+                    match.price_bucket,
+                    match.ask,
+                )
+            else:
+                parameters = EntryParameters(math.inf, int(self.entry["min_tte"]), int(self.entry["max_tte"]))
+                dynamic_selection = None
             side_threshold = parameters.edge
+            snapshot[f"{side.lower()}_entry_rule_name"] = (
+                dynamic_selection.rule_label if dynamic_selection is not None else "price_bucket_edges"
+            )
+            snapshot[f"{side.lower()}_entry_rule_source_family"] = (
+                dynamic_selection.source_family if dynamic_selection is not None else ""
+            )
+            snapshot[f"{side.lower()}_entry_rule_source_segment"] = (
+                dynamic_selection.source_segment if dynamic_selection is not None else ""
+            )
             snapshot[f"{side.lower()}_policy_value"] = match.value
             snapshot[f"{side.lower()}_policy_edge"] = match.value - match.ask
             snapshot[f"{side.lower()}_policy_stressed_edge"] = match.stressed_edge
@@ -655,11 +1030,18 @@ class MacroLocalPolicy:
                 "selected_move_z": best_match.move_z,
                 "selected_move_z_bucket": best_match.move_z_bucket,
                 "selected_price_bucket": best_match.price_bucket,
+                "selected_trade_style": best_match.trade_style,
                 "policy_support": best_match.support,
                 "policy_unique_markets": best_match.unique_markets,
                 "policy_level": best_match.level,
                 "selected_policy_stressed_edge": best_match.stressed_edge,
             })
+            best_dynamic_selection = self._dynamic_edge_selection_for_snapshot(
+                snapshot,
+                best_match.trade_style,
+                best_match.ask,
+            )
+            self._store_active_entry_rule(snapshot, best_match, best_parameters, best_dynamic_selection)
             momentum_feature = str(getattr(self.surface_model, "momentum_feature", "") or "")
             if momentum_feature:
                 momentum_value = finite_float(snapshot.get(f"{best_match.side.lower()}_{momentum_feature}"))
@@ -683,7 +1065,13 @@ class MacroLocalPolicy:
                 threshold_bps=0.0,
             )
 
-        threshold = self._entry_parameters_for_snapshot(snapshot, selected.trade_style).edge
+        selected_parameters, selected_dynamic_selection = self._entry_parameters_and_rule_for_snapshot(
+            snapshot,
+            selected.trade_style,
+            selected.price_bucket,
+            selected.ask,
+        )
+        threshold = selected_parameters.edge
         snapshot.update({
             "macro_session": self.macro_session(snapshot.get("timestamp_london"))[0],
             "policy_signal_name": selected.signal_name,
@@ -692,11 +1080,13 @@ class MacroLocalPolicy:
             "selected_move_z": selected.move_z,
             "selected_move_z_bucket": selected.move_z_bucket,
             "selected_price_bucket": selected.price_bucket,
+            "selected_trade_style": selected.trade_style,
             "policy_support": selected.support,
             "policy_unique_markets": selected.unique_markets,
             "policy_level": selected.level,
             "selected_policy_stressed_edge": selected.stressed_edge,
         })
+        self._store_active_entry_rule(snapshot, selected, selected_parameters, selected_dynamic_selection)
         momentum_feature = str(getattr(self.surface_model, "momentum_feature", "") or "")
         if momentum_feature:
             momentum_value = finite_float(snapshot.get(f"{selected.side.lower()}_{momentum_feature}"))

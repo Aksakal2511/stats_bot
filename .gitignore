@@ -25,3 +25,8 @@ strategy/z6_local_v1/
 strategy/bucket_config/*
 !strategy/bucket_config/
 !strategy/bucket_config/volatility_bucket_edges_offset250_12bucket_2h_cb_sources.json
+
+# Research dataset manifests are tracked, but full parquet payloads stay local.
+research/datasets/**/*.parquet
+research/datasets/**/observations/
+research/datasets/**/intermediate/

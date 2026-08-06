@@ -2,11 +2,35 @@
   "schema_version": 1,
   "timezone": "Europe/London",
   "source": "continuous_surface_export",
-  "selected_spec": "BTC_LINEAR_DZ_PBASYMMETRIC_C0.05_HL120_NO_SESSION_CONSERVATIVE_DAYTYPE_MARKET_EDGES_T45_265",
+  "selected_spec": "BTC_LINEAR_DZ_PBASYMMETRIC_C0.05_HL120_NO_SESSION_CHILD118_SUPPORT50_DYNAMIC_EDGES_T45_265",
   "default": {
     "edge": 0.04,
     "min_tte": 45,
     "max_tte": 265
+  },
+  "price_bucket_edges": {
+    "continuation": {
+      "p20_30": 0.04,
+      "p30_40": null,
+      "p40_45": 0.06,
+      "p45_48": 0.06,
+      "p48_52": 0.05,
+      "p52_55": 0.06,
+      "p55_60": 0.07,
+      "p60_70": 0.08,
+      "p70_80": 0.04
+    },
+    "mean_reversion": {
+      "p20_30": 0.06,
+      "p30_40": null,
+      "p40_45": null,
+      "p45_48": null,
+      "p48_52": null,
+      "p52_55": null,
+      "p55_60": null,
+      "p60_70": null,
+      "p70_80": null
+    }
   },
   "overrides": {
     "weekday|h00_04|continuation": {
@@ -133,19 +157,21 @@
   "timed_overrides": [
     {
       "day_type": "weekday",
+      "day_group": "mon_wed",
       "start": "00:00",
       "end": "08:00",
-      "label": "ASIA_00_08",
-      "continuation_edge": 0.07,
+      "label": "MON_WED_00_08",
+      "continuation_edge": 0.06,
       "mean_reversion_edge": 0.04,
       "min_tte": 45,
       "max_tte": 265
     },
     {
       "day_type": "weekday",
+      "day_group": "mon_wed",
       "start": "08:00",
       "end": "14:30",
-      "label": "EUROPE_US_PREOPEN_08_1430",
+      "label": "MON_WED_08_1430",
       "continuation_edge": 0.04,
       "mean_reversion_edge": 0.06,
       "min_tte": 45,
@@ -153,9 +179,10 @@
     },
     {
       "day_type": "weekday",
+      "day_group": "mon_wed",
       "start": "14:30",
       "end": "17:00",
-      "label": "US_OPEN_1430_17",
+      "label": "MON_WED_1430_17",
       "continuation_edge": 0.04,
       "mean_reversion_edge": 0.05,
       "min_tte": 45,
@@ -163,9 +190,21 @@
     },
     {
       "day_type": "weekday",
+      "day_group": "mon_wed",
       "start": "17:00",
       "end": "22:00",
-      "label": "US_AFTERNOON_17_22",
+      "label": "MON_WED_17_22",
+      "continuation_edge": 0.06,
+      "mean_reversion_edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    {
+      "day_type": "weekday",
+      "day_group": "mon_wed",
+      "start": "22:00",
+      "end": "24:00",
+      "label": "MON_WED_22_24",
       "continuation_edge": 0.05,
       "mean_reversion_edge": 0.06,
       "min_tte": 45,
@@ -173,56 +212,106 @@
     },
     {
       "day_type": "weekday",
+      "day_group": "thu_fri",
+      "start": "00:00",
+      "end": "08:00",
+      "label": "THU_FRI_00_08",
+      "continuation_edge": 0.1,
+      "mean_reversion_edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    {
+      "day_type": "weekday",
+      "day_group": "thu_fri",
+      "start": "08:00",
+      "end": "14:30",
+      "label": "THU_FRI_08_1430",
+      "continuation_edge": 0.04,
+      "mean_reversion_edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    {
+      "day_type": "weekday",
+      "day_group": "thu_fri",
+      "start": "14:30",
+      "end": "17:00",
+      "label": "THU_FRI_1430_17",
+      "continuation_edge": 0.04,
+      "mean_reversion_edge": 0.09,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    {
+      "day_type": "weekday",
+      "day_group": "thu_fri",
+      "start": "17:00",
+      "end": "22:00",
+      "label": "THU_FRI_17_22",
+      "continuation_edge": 0.04,
+      "mean_reversion_edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    {
+      "day_type": "weekday",
+      "day_group": "thu_fri",
       "start": "22:00",
       "end": "24:00",
-      "label": "US_LATE_22_24",
+      "label": "THU_FRI_22_24",
       "continuation_edge": 0.05,
-      "mean_reversion_edge": 0.05,
+      "mean_reversion_edge": 0.04,
       "min_tte": 45,
       "max_tte": 265
     },
     {
       "day_type": "weekend",
+      "day_group": "weekend",
       "start": "00:00",
       "end": "08:00",
       "label": "WEEKEND_00_08",
-      "continuation_edge": 0.03,
-      "mean_reversion_edge": 0.04,
+      "continuation_edge": 0.09,
+      "mean_reversion_edge": 0.06,
       "min_tte": 45,
       "max_tte": 265
     },
     {
       "day_type": "weekend",
+      "day_group": "weekend",
       "start": "08:00",
       "end": "14:30",
       "label": "WEEKEND_08_1430",
       "continuation_edge": 0.03,
-      "mean_reversion_edge": 0.08,
+      "mean_reversion_edge": 0.1,
       "min_tte": 45,
       "max_tte": 265
     },
     {
       "day_type": "weekend",
+      "day_group": "weekend",
       "start": "14:30",
       "end": "17:00",
       "label": "WEEKEND_1430_17",
-      "continuation_edge": 0.03,
-      "mean_reversion_edge": 0.08,
+      "continuation_edge": 0.04,
+      "mean_reversion_edge": 0.04,
       "min_tte": 45,
       "max_tte": 265
     },
     {
       "day_type": "weekend",
+      "day_group": "weekend",
       "start": "17:00",
       "end": "22:00",
       "label": "WEEKEND_17_22",
-      "continuation_edge": 0.10,
-      "mean_reversion_edge": 0.06,
+      "continuation_edge": 0.06,
+      "mean_reversion_edge": 0.07,
       "min_tte": 45,
       "max_tte": 265
     },
     {
       "day_type": "weekend",
+      "day_group": "weekend",
       "start": "22:00",
       "end": "24:00",
       "label": "WEEKEND_22_24",
@@ -231,5 +320,18 @@
       "min_tte": 45,
       "max_tte": 265
     }
-  ]
+  ],
+  "dynamic_edge_selector": {
+    "enabled": true,
+    "artifact": "edge_selector_child118_support50.json",
+    "rule": "day_group_time_contradiction_vol_q4_support50_then_day_group_time_contradiction_then_day_group_time",
+    "support_threshold": 50,
+    "selection_route": "shrink_parent_k1000",
+    "c_floor": 4,
+    "fallback_order": [
+      "day_group_time_contradiction_vol_q4",
+      "day_group_time_contradiction",
+      "day_group_time"
+    ]
+  }
 }

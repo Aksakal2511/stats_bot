@@ -67,6 +67,7 @@ class OrderResult:
     message: str = ""
     matched_shares: float = 0.0
     price: float | None = None
+    price_source: str = ""
     transport_metrics: dict[str, Any] | None = None
 
 
@@ -289,19 +290,34 @@ def _extract_matched(resp: object) -> float:
     return 0.0
 
 
-def _extract_avg_price(resp: object, fallback: float) -> float:
-    keys = ("avgPrice", "avg_price", "price")
+def _extract_avg_price(resp: object, fallback: float | None) -> tuple[float | None, str]:
+    avg_keys = (
+        "avgPrice",
+        "avg_price",
+        "averagePrice",
+        "average_price",
+        "filledAvgPrice",
+        "filled_avg_price",
+        "fillPrice",
+        "fill_price",
+    )
     if isinstance(resp, dict):
-        for key in keys:
+        for key in avg_keys:
             value = finite_float(resp.get(key))
             if value is not None:
-                return value
-        return fallback
-    for key in keys:
+                return value, key
+        value = finite_float(resp.get("price"))
+        if value is not None:
+            return value, "price"
+        return fallback, "fallback"
+    for key in avg_keys:
         value = finite_float(getattr(resp, key, None))
         if value is not None:
-            return value
-    return fallback
+            return value, key
+    value = finite_float(getattr(resp, "price", None))
+    if value is not None:
+        return value, "price"
+    return fallback, "fallback"
 
 
 def _tick_text(tick_size: float) -> str:
@@ -970,7 +986,7 @@ class PolymarketClient:
             if not order_id:
                 return OrderResult(False, None, "NO_ORDER_ID", str(resp), price=signed_order.price, transport_metrics=transport_metrics)
             matched = _extract_matched(resp)
-            avg_price = _extract_avg_price(resp, signed_order.price)
+            avg_price, price_source = _extract_avg_price(resp, signed_order.price)
             return OrderResult(
                 True,
                 order_id,
@@ -978,6 +994,7 @@ class PolymarketClient:
                 str(resp),
                 matched_shares=matched,
                 price=avg_price,
+                price_source=price_source,
                 transport_metrics=transport_metrics,
             )
         except Exception as exc:
