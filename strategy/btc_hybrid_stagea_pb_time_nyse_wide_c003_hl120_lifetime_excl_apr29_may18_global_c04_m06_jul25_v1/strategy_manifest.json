@@ -34,6 +34,7 @@
     "max_tte": 265,
     "min_price": 0.2,
     "max_price": 0.8,
+    "shares": 5,
     "max_quote_spread": 0.03,
     "unique_markets": 0
   },
