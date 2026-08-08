@@ -107,6 +107,10 @@ class BotConfig:
     surplus_adaptive_min_edge_surplus: float
     surplus_adaptive_step_edge_surplus: float
     surplus_adaptive_extra_ticks: int
+    low_liquidity_no_signal_guard_enabled: bool
+    low_liquidity_no_signal_max_price: float
+    low_liquidity_no_signal_max_abs_move_dz: float
+    low_liquidity_no_signal_max_vol_bps: float
     policy_no_longer_viable_latch_seconds: float
     live_entry_retry_cooldown_seconds: float
     live_max_entry_attempts_per_window: int
@@ -323,6 +327,19 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         surplus_adaptive_min_edge_surplus=max(0.0, _float_env("STATS_SURPLUS_ADAPTIVE_MIN_EDGE_SURPLUS", 0.015)),
         surplus_adaptive_step_edge_surplus=max(0.0001, _float_env("STATS_SURPLUS_ADAPTIVE_STEP_EDGE_SURPLUS", 0.010)),
         surplus_adaptive_extra_ticks=max(0, _int_env("STATS_SURPLUS_ADAPTIVE_EXTRA_TICKS", 1)),
+        low_liquidity_no_signal_guard_enabled=_bool_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_GUARD_ENABLED", False),
+        low_liquidity_no_signal_max_price=max(
+            0.0,
+            min(1.0, _float_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_MAX_PRICE", 0.40)),
+        ),
+        low_liquidity_no_signal_max_abs_move_dz=max(
+            0.0,
+            _float_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_MAX_ABS_MOVE_DZ", 0.50),
+        ),
+        low_liquidity_no_signal_max_vol_bps=max(
+            0.0,
+            _float_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_MAX_VOL_BPS", 10.0),
+        ),
         policy_no_longer_viable_latch_seconds=max(
             0.0,
             _float_env("STATS_POLICY_NO_LONGER_VIABLE_LATCH_SECONDS", 1.5),

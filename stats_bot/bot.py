@@ -970,7 +970,7 @@ class StatsBot:
 
     def _dashboard_signed_bps_text(self, snapshot: dict[str, Any]) -> str:
         coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
-        return _fmt(coinbase_bps, 2)
+        return _fmt(coinbase_bps, 5)
 
     def _dashboard_net_signed_flow_text(self) -> str:
         lookback_seconds = getattr(self.config, "pressure_signed_volume_lookback_seconds", 30)
@@ -3915,6 +3915,37 @@ class StatsBot:
             return ("SESSION_STYLE_DRAWDOWN_EDGE_LADDER",), effective_edge
         return (), effective_edge
 
+    def _low_liquidity_no_signal_entry_blockers(
+        self,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision | None,
+    ) -> tuple[str, ...]:
+        if not bool(getattr(self.config, "low_liquidity_no_signal_guard_enabled", False)):
+            return ()
+        if snapshot is None or decision is None or not decision.viable:
+            return ()
+        selected_price = finite_float(decision.selected_ask)
+        selected_move_dz = finite_float(snapshot.get("selected_move_dz"))
+        local_vol = finite_float(snapshot.get("local_volatility_1h_bps"))
+        if selected_price is None or selected_move_dz is None or local_vol is None:
+            return ()
+        max_price = float(getattr(self.config, "low_liquidity_no_signal_max_price", 0.40))
+        max_abs_move_dz = float(getattr(self.config, "low_liquidity_no_signal_max_abs_move_dz", 0.50))
+        max_vol_bps = float(getattr(self.config, "low_liquidity_no_signal_max_vol_bps", 10.0))
+        if (
+            selected_price <= max_price + 1e-12
+            and abs(selected_move_dz) <= max_abs_move_dz + 1e-12
+            and local_vol <= max_vol_bps + 1e-12
+        ):
+            snapshot["low_liquidity_no_signal_selected_price"] = selected_price
+            snapshot["low_liquidity_no_signal_abs_move_dz"] = abs(selected_move_dz)
+            snapshot["low_liquidity_no_signal_local_vol_bps"] = local_vol
+            snapshot["low_liquidity_no_signal_max_price"] = max_price
+            snapshot["low_liquidity_no_signal_max_abs_move_dz"] = max_abs_move_dz
+            snapshot["low_liquidity_no_signal_max_vol_bps"] = max_vol_bps
+            return ("LOW_LIQUIDITY_NO_SIGNAL",)
+        return ()
+
     def _record_session_style_guard_closed_trade(
         self,
         position: OpenPosition,
@@ -3973,6 +4004,10 @@ class StatsBot:
             if active and reason:
                 self.last_guard_blocker = reason
                 decision = self._entry_decision_with_blockers(decision, (reason,))
+        low_liquidity_blockers = self._low_liquidity_no_signal_entry_blockers(snapshot, decision)
+        if low_liquidity_blockers:
+            self.last_guard_blocker = low_liquidity_blockers[0]
+            decision = self._entry_decision_with_blockers(decision, low_liquidity_blockers)
         session_style_blockers, effective_entry_edge = self._session_style_entry_blockers(now_utc, snapshot, decision)
         if decision is not None and effective_entry_edge is not None:
             decision = self._entry_decision_with_entry_threshold(decision, effective_entry_edge)
@@ -4057,6 +4092,23 @@ class StatsBot:
             if penalty is not None:
                 return f"SESSION_STYLE_EDGE_LADDER ({session} {style} {level} +{penalty * 100:.0f}c)"
             return f"SESSION_STYLE_EDGE_LADDER ({session} {style})"
+        if blocker == "LOW_LIQUIDITY_NO_SIGNAL":
+            if snapshot is None:
+                return "LOW_LIQUIDITY_NO_SIGNAL"
+            price = finite_float(snapshot.get("low_liquidity_no_signal_selected_price"))
+            abs_dz = finite_float(snapshot.get("low_liquidity_no_signal_abs_move_dz"))
+            vol = finite_float(snapshot.get("low_liquidity_no_signal_local_vol_bps"))
+            max_price = finite_float(snapshot.get("low_liquidity_no_signal_max_price"))
+            max_abs_dz = finite_float(snapshot.get("low_liquidity_no_signal_max_abs_move_dz"))
+            max_vol = finite_float(snapshot.get("low_liquidity_no_signal_max_vol_bps"))
+            if None not in (price, abs_dz, vol, max_price, max_abs_dz, max_vol):
+                return (
+                    "LOW_LIQUIDITY_NO_SIGNAL "
+                    f"(price {price:.2f}<={max_price:.2f}, "
+                    f"|dz| {abs_dz:.2f}<={max_abs_dz:.2f}, "
+                    f"vol {vol:.1f}<={max_vol:.1f})"
+                )
+            return "LOW_LIQUIDITY_NO_SIGNAL"
         return blocker
 
     def _format_entry_blockers(
