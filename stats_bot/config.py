@@ -334,11 +334,11 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         ),
         low_liquidity_no_signal_max_abs_move_dz=max(
             0.0,
-            _float_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_MAX_ABS_MOVE_DZ", 0.50),
+            _float_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_MAX_ABS_MOVE_DZ", 1.00),
         ),
         low_liquidity_no_signal_max_vol_bps=max(
             0.0,
-            _float_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_MAX_VOL_BPS", 10.0),
+            _float_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_MAX_VOL_BPS", 12.5),
         ),
         policy_no_longer_viable_latch_seconds=max(
             0.0,

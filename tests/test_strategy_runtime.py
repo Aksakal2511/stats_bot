@@ -1902,8 +1902,8 @@ def test_low_liquidity_no_signal_guard_blocks_cheap_weak_low_vol_entries() -> No
     bot.config = SimpleNamespace(
         low_liquidity_no_signal_guard_enabled=True,
         low_liquidity_no_signal_max_price=0.40,
-        low_liquidity_no_signal_max_abs_move_dz=0.50,
-        low_liquidity_no_signal_max_vol_bps=10.0,
+        low_liquidity_no_signal_max_abs_move_dz=1.00,
+        low_liquidity_no_signal_max_vol_bps=12.5,
     )
     snapshot = {
         "selected_move_dz": 0.003,
@@ -1938,8 +1938,8 @@ def test_low_liquidity_no_signal_guard_allows_stronger_or_higher_vol_entries() -
     bot.config = SimpleNamespace(
         low_liquidity_no_signal_guard_enabled=True,
         low_liquidity_no_signal_max_price=0.40,
-        low_liquidity_no_signal_max_abs_move_dz=0.50,
-        low_liquidity_no_signal_max_vol_bps=10.0,
+        low_liquidity_no_signal_max_abs_move_dz=1.00,
+        low_liquidity_no_signal_max_vol_bps=12.5,
     )
     decision = EntryDecision(
         viable=True,
@@ -1960,11 +1960,11 @@ def test_low_liquidity_no_signal_guard_allows_stronger_or_higher_vol_entries() -
     )
 
     assert bot._low_liquidity_no_signal_entry_blockers(
-        {"selected_move_dz": 0.60, "local_volatility_1h_bps": 8.25},
+        {"selected_move_dz": 1.01, "local_volatility_1h_bps": 8.25},
         decision,
     ) == ()
     assert bot._low_liquidity_no_signal_entry_blockers(
-        {"selected_move_dz": 0.003, "local_volatility_1h_bps": 10.01},
+        {"selected_move_dz": 0.003, "local_volatility_1h_bps": 12.51},
         decision,
     ) == ()
 
