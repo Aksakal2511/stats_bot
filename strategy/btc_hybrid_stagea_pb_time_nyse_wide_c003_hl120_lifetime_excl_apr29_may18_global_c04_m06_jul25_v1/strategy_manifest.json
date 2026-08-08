@@ -1,0 +1,102 @@
+{
+  "schema_version": 3,
+  "policy_type": "continuous_surface",
+  "strategy_id": "btc_hybrid_stagea_pb_time_nyse_wide_c003_hl120_lifetime_excl_apr29_may18_global_c04_m06_jul25_v1",
+  "description": "Hybrid Stage A nyse_wide price-bucket model with fixed global C04/M06 edges.",
+  "created_at_utc": "2026-08-08T00:18:52.397909+00:00",
+  "training_start": "2026-02-14",
+  "training_end": "2026-07-25",
+  "training_segments": [
+    [
+      "2026-02-14",
+      "2026-04-28"
+    ],
+    [
+      "2026-05-19",
+      "2026-07-25"
+    ]
+  ],
+  "excluded_training_ranges": [
+    [
+      "2026-04-29",
+      "2026-05-18"
+    ]
+  ],
+  "signal_source": "coinbase_btc_usd",
+  "signal_feature": "move_dz",
+  "settlement_label": "polymarket_resolution",
+  "display_session_width_hours": 4,
+  "entry": {
+    "edge_profile": "global_edges_c04_m06",
+    "continuation_edge": 0.04,
+    "mean_reversion_edge": 0.06,
+    "min_tte": 45,
+    "max_tte": 265,
+    "min_price": 0.2,
+    "max_price": 0.8,
+    "max_quote_spread": 0.03,
+    "unique_markets": 0
+  },
+  "model": {
+    "artifact": "surface_model_weekday_included_hl120.pkl",
+    "kind": "stagea_hybrid_weekday_included_weekend_excluded",
+    "label": "hybrid_stagea_pb_time_nyse_wide_c0.03_weekday_included_hl120_weekend_excluded_lifetime",
+    "c_value": 0.03,
+    "day_type_mode": "hybrid",
+    "side_mode": "pooled",
+    "policy_level": "hybrid|POOLED",
+    "price_bucket_scheme": "asymmetric",
+    "stagea_time_scheme": "nyse_wide",
+    "training_rows": 19274728
+  },
+  "model_branches": {
+    "weekday": {
+      "artifact": "surface_model_weekday_included_hl120.pkl",
+      "kind": "stagea_pb_time",
+      "label": "weekday_included_stagea_pb_time_nyse_wide_c0.03_hl120",
+      "c_value": 0.03,
+      "recency_half_life_days": 120,
+      "day_type_mode": "included",
+      "side_mode": "pooled",
+      "policy_level": "weekday|POOLED",
+      "price_bucket_scheme": "asymmetric",
+      "stagea_time_scheme": "nyse_wide",
+      "training_rows": 7886115,
+      "bucket_rows": {
+        "p20_30": 1138187,
+        "p30_40": 1292312,
+        "p40_45": 690913,
+        "p45_48": 427500,
+        "p48_52": 590356,
+        "p52_55": 427287,
+        "p55_60": 703945,
+        "p60_70": 1323063,
+        "p70_80": 1292552
+      }
+    },
+    "weekend": {
+      "artifact": "surface_model_weekend_excluded_lifetime.pkl",
+      "kind": "stagea_pb_time",
+      "label": "weekend_excluded_stagea_pb_time_nyse_wide_c0.03_lifetime",
+      "c_value": 0.03,
+      "recency_half_life_days": "LIFETIME",
+      "day_type_mode": "excluded",
+      "side_mode": "pooled",
+      "policy_level": "weekend_from_ALL|POOLED",
+      "price_bucket_scheme": "asymmetric",
+      "stagea_time_scheme": "nyse_wide",
+      "training_rows": 11388613,
+      "bucket_rows": {
+        "p20_30": 1599335,
+        "p30_40": 1865773,
+        "p40_45": 1011928,
+        "p45_48": 629356,
+        "p48_52": 875176,
+        "p52_55": 633070,
+        "p55_60": 1032074,
+        "p60_70": 1920900,
+        "p70_80": 1821001
+      }
+    }
+  }
+}

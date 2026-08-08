@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "selected_spec": "HYBRID_STAGEA_PB_TIME_NYSE_WIDE_C003_GLOBAL_C04_M06_T45_265",
+  "default": {
+    "continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "min_tte": 45,
+    "max_tte": 265
+  },
+  "overrides": {
+    "weekday|h00_06|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h00_06|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h06_12|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h06_12|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h12_18|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h12_18|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h18_24|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h18_24|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h00_08|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h00_08|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h08_14|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h08_14|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h14_24|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekday|h14_24|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h00_06|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h00_06|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h06_12|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h06_12|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h12_18|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h12_18|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h18_24|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h18_24|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h00_08|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h00_08|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h08_14|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h08_14|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h14_24|continuation": {
+      "edge": 0.04,
+      "min_tte": 45,
+      "max_tte": 265
+    },
+    "weekend|h14_24|mean_reversion": {
+      "edge": 0.06,
+      "min_tte": 45,
+      "max_tte": 265
+    }
+  }
+}

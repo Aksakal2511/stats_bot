@@ -4421,7 +4421,7 @@ class StatsBot:
             default_entry_rule = (
                 getattr(self.macro_policy.dynamic_edge_selector, "rule_label", "price_bucket_edges")
                 if getattr(self.macro_policy, "dynamic_edge_selector", None) is not None
-                else "price_bucket_edges"
+                else str(getattr(self.macro_policy, "entry", {}).get("edge_profile") or "global_edges")
             )
             entry_rule = str(snapshot.get("entry_rule_name") or default_entry_rule)
             min_tte = finite_float(snapshot.get("entry_rule_min_tte"))
