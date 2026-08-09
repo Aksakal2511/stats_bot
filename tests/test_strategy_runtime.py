@@ -1969,6 +1969,108 @@ def test_low_liquidity_no_signal_guard_allows_stronger_or_higher_vol_entries() -
     ) == ()
 
 
+def test_ultra_low_vol_guard_blocks_low_vol_mean_reversion() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        ultra_low_vol_guard_enabled=True,
+        ultra_low_vol_mr_max_vol_bps=15.0,
+        ultra_low_vol_cont_max_vol_bps=10.0,
+        ultra_low_vol_cont_min_price=0.60,
+        ultra_low_vol_cont_max_abs_move_dz=1.25,
+    )
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("strategy", "surface", "p20_30", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.24,
+        selected_ask=0.25,
+        selected_mid=0.245,
+        selected_spread=0.01,
+        selected_trade_value=0.35,
+        selected_policy_edge=0.10,
+        selected_trade_style="mean_reversion",
+        entry_edge_threshold=0.06,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+    snapshot = {"selected_move_dz": 0.20, "local_volatility_1h_bps": 14.99}
+
+    assert bot._ultra_low_vol_entry_blockers(snapshot, decision) == ("ULTRA_LOW_VOL_MR",)
+    assert snapshot["ultra_low_vol_guard_local_vol_bps"] == 14.99
+
+
+def test_ultra_low_vol_guard_blocks_high_price_weak_continuation() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        ultra_low_vol_guard_enabled=True,
+        ultra_low_vol_mr_max_vol_bps=15.0,
+        ultra_low_vol_cont_max_vol_bps=10.0,
+        ultra_low_vol_cont_min_price=0.60,
+        ultra_low_vol_cont_max_abs_move_dz=1.25,
+    )
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("strategy", "surface", "p60_70", "DOWN"),
+        policy_record=None,
+        selected_side="DOWN",
+        selected_bid=0.61,
+        selected_ask=0.62,
+        selected_mid=0.615,
+        selected_spread=0.01,
+        selected_trade_value=0.70,
+        selected_policy_edge=0.08,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+    snapshot = {"selected_move_dz": 1.25, "local_volatility_1h_bps": 10.0}
+
+    assert bot._ultra_low_vol_entry_blockers(snapshot, decision) == ("ULTRA_LOW_VOL_HIGH_PRICE_CONT",)
+    assert snapshot["ultra_low_vol_guard_selected_price"] == 0.62
+    assert snapshot["ultra_low_vol_guard_abs_move_dz"] == 1.25
+
+
+def test_ultra_low_vol_guard_allows_strong_or_higher_vol_continuation() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        ultra_low_vol_guard_enabled=True,
+        ultra_low_vol_mr_max_vol_bps=15.0,
+        ultra_low_vol_cont_max_vol_bps=10.0,
+        ultra_low_vol_cont_min_price=0.60,
+        ultra_low_vol_cont_max_abs_move_dz=1.25,
+    )
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("strategy", "surface", "p60_70", "DOWN"),
+        policy_record=None,
+        selected_side="DOWN",
+        selected_bid=0.61,
+        selected_ask=0.62,
+        selected_mid=0.615,
+        selected_spread=0.01,
+        selected_trade_value=0.70,
+        selected_policy_edge=0.08,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.04,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+
+    assert bot._ultra_low_vol_entry_blockers(
+        {"selected_move_dz": 1.26, "local_volatility_1h_bps": 10.0},
+        decision,
+    ) == ()
+    assert bot._ultra_low_vol_entry_blockers(
+        {"selected_move_dz": 1.00, "local_volatility_1h_bps": 10.01},
+        decision,
+    ) == ()
+
+
 def test_drawdown_guard_normalises_losses_by_share_count() -> None:
     assert normalised_5_share_pnl(-7.0, 10.0) == -3.5
     assert normalised_5_share_pnl(-5.6, 8.0) == -3.5

@@ -111,6 +111,11 @@ class BotConfig:
     low_liquidity_no_signal_max_price: float
     low_liquidity_no_signal_max_abs_move_dz: float
     low_liquidity_no_signal_max_vol_bps: float
+    ultra_low_vol_guard_enabled: bool
+    ultra_low_vol_mr_max_vol_bps: float
+    ultra_low_vol_cont_max_vol_bps: float
+    ultra_low_vol_cont_min_price: float
+    ultra_low_vol_cont_max_abs_move_dz: float
     policy_no_longer_viable_latch_seconds: float
     live_entry_retry_cooldown_seconds: float
     live_max_entry_attempts_per_window: int
@@ -339,6 +344,23 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         low_liquidity_no_signal_max_vol_bps=max(
             0.0,
             _float_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_MAX_VOL_BPS", 12.5),
+        ),
+        ultra_low_vol_guard_enabled=_bool_env("STATS_ULTRA_LOW_VOL_GUARD_ENABLED", False),
+        ultra_low_vol_mr_max_vol_bps=max(
+            0.0,
+            _float_env("STATS_ULTRA_LOW_VOL_MR_MAX_VOL_BPS", 15.0),
+        ),
+        ultra_low_vol_cont_max_vol_bps=max(
+            0.0,
+            _float_env("STATS_ULTRA_LOW_VOL_CONT_MAX_VOL_BPS", 10.0),
+        ),
+        ultra_low_vol_cont_min_price=max(
+            0.0,
+            min(1.0, _float_env("STATS_ULTRA_LOW_VOL_CONT_MIN_PRICE", 0.60)),
+        ),
+        ultra_low_vol_cont_max_abs_move_dz=max(
+            0.0,
+            _float_env("STATS_ULTRA_LOW_VOL_CONT_MAX_ABS_MOVE_DZ", 1.25),
         ),
         policy_no_longer_viable_latch_seconds=max(
             0.0,

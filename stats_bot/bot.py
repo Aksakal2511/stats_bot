@@ -3946,6 +3946,52 @@ class StatsBot:
             return ("LOW_LIQUIDITY_NO_SIGNAL",)
         return ()
 
+    def _ultra_low_vol_entry_blockers(
+        self,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision | None,
+    ) -> tuple[str, ...]:
+        if not bool(getattr(self.config, "ultra_low_vol_guard_enabled", False)):
+            return ()
+        if snapshot is None or decision is None or not decision.viable:
+            return ()
+        trade_style = str(decision.selected_trade_style or "").strip().lower()
+        local_vol = finite_float(snapshot.get("local_volatility_1h_bps"))
+        if not trade_style or local_vol is None:
+            return ()
+        if trade_style == "mean_reversion":
+            mr_max_vol = float(getattr(self.config, "ultra_low_vol_mr_max_vol_bps", 15.0))
+            if local_vol <= mr_max_vol + 1e-12:
+                snapshot["ultra_low_vol_guard_style"] = trade_style
+                snapshot["ultra_low_vol_guard_local_vol_bps"] = local_vol
+                snapshot["ultra_low_vol_guard_mr_max_vol_bps"] = mr_max_vol
+                return ("ULTRA_LOW_VOL_MR",)
+            return ()
+        if trade_style != "continuation":
+            return ()
+        selected_price = finite_float(decision.selected_ask)
+        selected_move_dz = finite_float(snapshot.get("selected_move_dz"))
+        if selected_price is None or selected_move_dz is None:
+            return ()
+        cont_max_vol = float(getattr(self.config, "ultra_low_vol_cont_max_vol_bps", 10.0))
+        cont_min_price = float(getattr(self.config, "ultra_low_vol_cont_min_price", 0.60))
+        cont_max_abs_dz = float(getattr(self.config, "ultra_low_vol_cont_max_abs_move_dz", 1.25))
+        abs_dz = abs(selected_move_dz)
+        if (
+            local_vol <= cont_max_vol + 1e-12
+            and selected_price >= cont_min_price - 1e-12
+            and abs_dz <= cont_max_abs_dz + 1e-12
+        ):
+            snapshot["ultra_low_vol_guard_style"] = trade_style
+            snapshot["ultra_low_vol_guard_selected_price"] = selected_price
+            snapshot["ultra_low_vol_guard_abs_move_dz"] = abs_dz
+            snapshot["ultra_low_vol_guard_local_vol_bps"] = local_vol
+            snapshot["ultra_low_vol_guard_cont_max_vol_bps"] = cont_max_vol
+            snapshot["ultra_low_vol_guard_cont_min_price"] = cont_min_price
+            snapshot["ultra_low_vol_guard_cont_max_abs_move_dz"] = cont_max_abs_dz
+            return ("ULTRA_LOW_VOL_HIGH_PRICE_CONT",)
+        return ()
+
     def _record_session_style_guard_closed_trade(
         self,
         position: OpenPosition,
@@ -4004,10 +4050,17 @@ class StatsBot:
             if active and reason:
                 self.last_guard_blocker = reason
                 decision = self._entry_decision_with_blockers(decision, (reason,))
-        low_liquidity_blockers = self._low_liquidity_no_signal_entry_blockers(snapshot, decision)
-        if low_liquidity_blockers:
-            self.last_guard_blocker = low_liquidity_blockers[0]
-            decision = self._entry_decision_with_blockers(decision, low_liquidity_blockers)
+        liquidity_regime_blockers = tuple(
+            dict.fromkeys(
+                [
+                    *self._low_liquidity_no_signal_entry_blockers(snapshot, decision),
+                    *self._ultra_low_vol_entry_blockers(snapshot, decision),
+                ]
+            )
+        )
+        if liquidity_regime_blockers:
+            self.last_guard_blocker = liquidity_regime_blockers[0]
+            decision = self._entry_decision_with_blockers(decision, liquidity_regime_blockers)
         session_style_blockers, effective_entry_edge = self._session_style_entry_blockers(now_utc, snapshot, decision)
         if decision is not None and effective_entry_edge is not None:
             decision = self._entry_decision_with_entry_threshold(decision, effective_entry_edge)
@@ -4109,6 +4162,31 @@ class StatsBot:
                     f"vol {vol:.1f}<={max_vol:.1f})"
                 )
             return "LOW_LIQUIDITY_NO_SIGNAL"
+        if blocker == "ULTRA_LOW_VOL_MR":
+            if snapshot is None:
+                return "ULTRA_LOW_VOL_MR"
+            vol = finite_float(snapshot.get("ultra_low_vol_guard_local_vol_bps"))
+            max_vol = finite_float(snapshot.get("ultra_low_vol_guard_mr_max_vol_bps"))
+            if None not in (vol, max_vol):
+                return f"ULTRA_LOW_VOL_MR (vol {vol:.1f}<={max_vol:.1f})"
+            return "ULTRA_LOW_VOL_MR"
+        if blocker == "ULTRA_LOW_VOL_HIGH_PRICE_CONT":
+            if snapshot is None:
+                return "ULTRA_LOW_VOL_HIGH_PRICE_CONT"
+            price = finite_float(snapshot.get("ultra_low_vol_guard_selected_price"))
+            abs_dz = finite_float(snapshot.get("ultra_low_vol_guard_abs_move_dz"))
+            vol = finite_float(snapshot.get("ultra_low_vol_guard_local_vol_bps"))
+            min_price = finite_float(snapshot.get("ultra_low_vol_guard_cont_min_price"))
+            max_abs_dz = finite_float(snapshot.get("ultra_low_vol_guard_cont_max_abs_move_dz"))
+            max_vol = finite_float(snapshot.get("ultra_low_vol_guard_cont_max_vol_bps"))
+            if None not in (price, abs_dz, vol, min_price, max_abs_dz, max_vol):
+                return (
+                    "ULTRA_LOW_VOL_HIGH_PRICE_CONT "
+                    f"(price {price:.2f}>={min_price:.2f}, "
+                    f"|dz| {abs_dz:.2f}<={max_abs_dz:.2f}, "
+                    f"vol {vol:.1f}<={max_vol:.1f})"
+                )
+            return "ULTRA_LOW_VOL_HIGH_PRICE_CONT"
         return blocker
 
     def _format_entry_blockers(
