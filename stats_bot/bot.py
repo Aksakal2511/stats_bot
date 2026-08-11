@@ -444,6 +444,7 @@ class StatsBot:
         self.stoploss_submitted = 0
         self.stoploss_filled = 0
         self.stoploss_failed = 0
+        self.recent_stoploss_latency_ms: collections.deque[float] = collections.deque(maxlen=5)
         self.last_session_style_guard_detail: dict[str, Any] | None = None
         self.startup_window_ts: int | None = None
         self.start_time = datetime.now(tz=timezone.utc)
@@ -1021,6 +1022,16 @@ class StatsBot:
             parts.append(reason)
         return " | ".join(parts)
 
+    def _dashboard_stoploss_counter_text(self) -> str:
+        text = (
+            f"{self.stoploss_filled}/{self.stoploss_submitted} filled/submitted "
+            f"({self.stoploss_failed} failed)"
+        )
+        latencies = list(getattr(self, "recent_stoploss_latency_ms", ()))
+        if latencies:
+            text += f" [avg: {sum(latencies) / len(latencies):.0f} ms]"
+        return text
+
     def _ffm_signed_volume_pressure(self, held_side: str) -> dict[str, Any]:
         adverse, signed_total, buy_total, sell_total, seconds = adverse_signed_volume(
             self.binance_spot.history_rows(),
@@ -1385,6 +1396,9 @@ class StatsBot:
             except Exception as exc:
                 result = OrderResult(False, None, "ERROR", str(exc), matched_shares=0.0, price=limit_price)
         elapsed_ms = (time.perf_counter() - submit_start) * 1000.0
+        if not hasattr(self, "recent_stoploss_latency_ms"):
+            self.recent_stoploss_latency_ms = collections.deque(maxlen=5)
+        self.recent_stoploss_latency_ms.append(elapsed_ms)
         matched = float(result.matched_shares or 0.0)
         fill_price = finite_float(result.price) or limit_price
         status = result.status
@@ -4697,9 +4711,7 @@ class StatsBot:
             )
         if self.config.move_dz_stoploss_enabled:
             lines.append(
-                f"    {'stoploss counter':<18}: {self.stoploss_filled}/"
-                f"{self.stoploss_submitted} filled/submitted "
-                f"({self.stoploss_failed} failed)"
+                f"    {'stoploss counter':<18}: {self._dashboard_stoploss_counter_text()}"
             )
         if self.peak_drawdown_kill_active:
             lines.append("    kill_switch       : ACTIVE (new entries disabled)")

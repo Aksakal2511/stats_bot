@@ -1151,6 +1151,7 @@ def _move_dz_stoploss_bot(*, result: OrderResult):
     bot.stoploss_submitted = 0
     bot.stoploss_filled = 0
     bot.stoploss_failed = 0
+    bot.recent_stoploss_latency_ms = deque(maxlen=5)
     bot.last_move_dz_stoploss = None
     bot.recent_events = []
     bot.window_errors = []
@@ -1213,6 +1214,20 @@ def test_pressure_defence_does_not_submit_after_move_dz_stoploss_attempt() -> No
 
     assert bot.pressure_hedges_submitted == 0
     assert bot.active_position.pressure_defence_status == "idle"
+
+
+def test_stoploss_counter_dashboard_uses_last_five_latency_average() -> None:
+    bot = object.__new__(StatsBot)
+    bot.stoploss_filled = 4
+    bot.stoploss_submitted = 5
+    bot.stoploss_failed = 1
+    bot.recent_stoploss_latency_ms = deque([100, 200, 300, 400, 500], maxlen=5)
+
+    assert bot._dashboard_stoploss_counter_text() == "4/5 filled/submitted (1 failed) [avg: 300 ms]"
+
+    bot.recent_stoploss_latency_ms.append(1000)
+
+    assert bot._dashboard_stoploss_counter_text() == "4/5 filled/submitted (1 failed) [avg: 480 ms]"
 
 
 def test_pressure_defence_live_accepted_without_match_reconciles_later_fill() -> None:
