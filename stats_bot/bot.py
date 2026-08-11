@@ -440,6 +440,10 @@ class StatsBot:
         self.pressure_hedges_submitted = 0
         self.pressure_hedges_filled = 0
         self.pressure_hedges_blocked = 0
+        self.last_move_dz_stoploss: dict[str, Any] | None = None
+        self.stoploss_submitted = 0
+        self.stoploss_filled = 0
+        self.stoploss_failed = 0
         self.last_session_style_guard_detail: dict[str, Any] | None = None
         self.startup_window_ts: int | None = None
         self.start_time = datetime.now(tz=timezone.utc)
@@ -988,6 +992,35 @@ class StatsBot:
 
         return _signed_flow_part(lookback_seconds)
 
+    def _dashboard_move_dz_stoploss_text(self, snapshot: dict[str, Any] | None) -> str:
+        position = self.active_position
+        if position is None:
+            return "idle"
+        side_prefix = position.held_side.lower()
+        held_dz = finite_float(snapshot.get(f"{side_prefix}_move_dz")) if snapshot else None
+        bid = finite_float(snapshot.get(f"{side_prefix}_bid")) if snapshot else None
+        detail = self.last_move_dz_stoploss or {}
+        status = str(position.extra.get("move_dz_stoploss_status") or detail.get("status") or "armed")
+        if held_dz is None:
+            stored_held_dz = finite_float(position.extra.get("move_dz_stoploss_held_dz"))
+            held_dz = stored_held_dz if stored_held_dz is not None else finite_float(detail.get("held_dz"))
+        if bid is None:
+            stored_bid = finite_float(position.extra.get("move_dz_stoploss_bid"))
+            bid = stored_bid if stored_bid is not None else finite_float(detail.get("bid"))
+        parts = [status, f"held_dz {_fmt(held_dz, 2)}", f"bid {_fmt(bid, 2)}"]
+        if status in {"submitted", "filled", "partial", "failed"}:
+            order_type = str(position.extra.get("move_dz_stoploss_order_type") or detail.get("order_type") or "FAK").upper()
+            action = "sent" if status in {"submitted", "filled", "partial"} else "failed"
+            parts.append(f"{order_type} {action}")
+            stored_elapsed_ms = finite_float(position.extra.get("move_dz_stoploss_elapsed_ms"))
+            elapsed_ms = stored_elapsed_ms if stored_elapsed_ms is not None else finite_float(detail.get("elapsed_ms"))
+            if elapsed_ms is not None:
+                parts.append(f"{elapsed_ms:.0f} ms")
+        reason = str(position.extra.get("move_dz_stoploss_reason") or detail.get("reason") or "")
+        if status == "blocked" and reason:
+            parts.append(reason)
+        return " | ".join(parts)
+
     def _ffm_signed_volume_pressure(self, held_side: str) -> dict[str, Any]:
         adverse, signed_total, buy_total, sell_total, seconds = adverse_signed_volume(
             self.binance_spot.history_rows(),
@@ -1057,6 +1090,7 @@ class StatsBot:
             position.hedge_leg is not None
             or position.pressure_defence_status in {"submitted", "pending", "filled", "failed"}
             or bool(position.extra.get("pressure_defence_attempted"))
+            or bool(position.extra.get("move_dz_stoploss_attempted"))
         ):
             return
         held_prefix = position.held_side.lower()
@@ -1230,6 +1264,185 @@ class StatsBot:
             held_mid=held_mid,
             tte=tte,
             pressure=pressure,
+        )
+
+    def _remember_move_dz_stoploss(
+        self,
+        status: str,
+        *,
+        held_dz: float | None,
+        bid: float | None,
+        threshold: float | None = None,
+        order_type: str | None = None,
+        elapsed_ms: float | None = None,
+        reason: str | None = None,
+        limit_price: float | None = None,
+        matched_shares: float | None = None,
+        order_id: str | None = None,
+    ) -> None:
+        detail = {
+            "status": status,
+            "held_dz": held_dz,
+            "bid": bid,
+            "threshold": threshold if threshold is not None else self.config.move_dz_stoploss_threshold,
+            "order_type": str(order_type or self.config.move_dz_stoploss_order_type).upper(),
+            "elapsed_ms": elapsed_ms,
+            "reason": reason,
+            "limit_price": limit_price,
+            "matched_shares": matched_shares,
+            "order_id": order_id,
+        }
+        self.last_move_dz_stoploss = detail
+        position = self.active_position
+        if position is not None:
+            position.extra["move_dz_stoploss_status"] = status
+            if reason:
+                position.extra["move_dz_stoploss_reason"] = reason
+            if held_dz is not None:
+                position.extra["move_dz_stoploss_held_dz"] = held_dz
+            if bid is not None:
+                position.extra["move_dz_stoploss_bid"] = bid
+            if elapsed_ms is not None:
+                position.extra["move_dz_stoploss_elapsed_ms"] = elapsed_ms
+
+    def _maybe_execute_move_dz_stoploss(self, now_utc: datetime, snapshot: dict[str, Any] | None) -> None:
+        position = self.active_position
+        market = self.current_market
+        if position is None or market is None or snapshot is None:
+            return
+        if not self.config.move_dz_stoploss_enabled:
+            return
+        held_prefix = position.held_side.lower()
+        held_dz = finite_float(snapshot.get(f"{held_prefix}_move_dz"))
+        bid = finite_float(snapshot.get(f"{held_prefix}_bid"))
+        threshold = self.config.move_dz_stoploss_threshold
+        if (
+            position.hedge_leg is not None
+            or position.pressure_defence_status in {"submitted", "pending", "filled", "failed"}
+            or bool(position.extra.get("pressure_defence_attempted"))
+        ):
+            self._remember_move_dz_stoploss(
+                "blocked",
+                held_dz=held_dz,
+                bid=bid,
+                threshold=threshold,
+                reason="PRESSURE_DEFENCE_ACTIVE",
+            )
+            return
+        if bool(position.extra.get("move_dz_stoploss_attempted")):
+            self._remember_move_dz_stoploss(
+                str(position.extra.get("move_dz_stoploss_status") or "submitted"),
+                held_dz=held_dz,
+                bid=bid,
+                threshold=threshold,
+                reason=str(position.extra.get("move_dz_stoploss_reason") or ""),
+            )
+            return
+        if held_dz is None:
+            self._remember_move_dz_stoploss("armed", held_dz=None, bid=bid, threshold=threshold, reason="NO_HELD_DZ")
+            return
+        if bid is None or bid <= 0.0:
+            self._remember_move_dz_stoploss("armed", held_dz=held_dz, bid=bid, threshold=threshold, reason="NO_BID")
+            return
+        if held_dz > -threshold:
+            self._remember_move_dz_stoploss("armed", held_dz=held_dz, bid=bid, threshold=threshold)
+            return
+        shares = max(0.0, position.shares)
+        if shares <= self.config.dust_share_threshold:
+            return
+        limit_price = round_price(
+            max(0.01, bid - market.tick_size * self.config.move_dz_stoploss_cross_ticks),
+            market.tick_size,
+        )
+        order_type = str(self.config.move_dz_stoploss_order_type or "FAK").upper()
+        position.extra["move_dz_stoploss_attempted"] = True
+        position.extra["move_dz_stoploss_triggered_at_utc"] = now_utc.isoformat()
+        position.extra["move_dz_stoploss_held_dz"] = held_dz
+        position.extra["move_dz_stoploss_bid"] = bid
+        position.extra["move_dz_stoploss_limit_price"] = limit_price
+        position.extra["move_dz_stoploss_order_type"] = order_type
+        position.exit_triggered = True
+        position.exit_reason = "MOVE_DZ_STOPLOSS"
+        self.stoploss_submitted += 1
+        submit_start = time.perf_counter()
+        if self.config.paper_trading:
+            result = OrderResult(
+                True,
+                f"paper-stoploss-{uuid.uuid4().hex[:10]}",
+                f"PAPER_{order_type}",
+                matched_shares=shares,
+                price=limit_price,
+            )
+        else:
+            try:
+                result = self.pm.place_immediate_sell(
+                    token_id=position.token_id,
+                    price=limit_price,
+                    shares=shares,
+                    order_type=order_type,
+                    market=market,
+                )
+            except Exception as exc:
+                result = OrderResult(False, None, "ERROR", str(exc), matched_shares=0.0, price=limit_price)
+        elapsed_ms = (time.perf_counter() - submit_start) * 1000.0
+        matched = float(result.matched_shares or 0.0)
+        fill_price = finite_float(result.price) or limit_price
+        status = result.status
+        if result.order_id:
+            try:
+                status, polled_matched, polled_price = self._poll_immediate_order(result.order_id, limit_price)
+                matched = max(matched, polled_matched)
+                fill_price = polled_price or fill_price
+            except Exception as exc:
+                self._remember_error(f"MOVE_DZ_STOPLOSS_POLL_ERROR:{exc}")
+        self._log_event(
+            "move_dz_stoploss_submitted",
+            status,
+            {
+                "ok": result.ok,
+                "side": position.held_side,
+                "shares": shares,
+                "bid": bid,
+                "limit_price": limit_price,
+                "held_dz": held_dz,
+                "threshold": threshold,
+                "order_type": order_type,
+                "matched_shares": matched,
+                "fill_price": fill_price,
+                "elapsed_ms": elapsed_ms,
+                "message": result.message[:500],
+            },
+        )
+        position.extra["move_dz_stoploss_order_id"] = result.order_id
+        position.extra["move_dz_stoploss_order_status"] = status
+        position.extra["move_dz_stoploss_elapsed_ms"] = elapsed_ms
+        if matched > self.config.dust_share_threshold:
+            self.stoploss_filled += 1
+            self._remember_move_dz_stoploss(
+                "filled" if matched >= shares - self.config.dust_share_threshold else "partial",
+                held_dz=held_dz,
+                bid=bid,
+                threshold=threshold,
+                order_type=order_type,
+                elapsed_ms=elapsed_ms,
+                limit_price=limit_price,
+                matched_shares=matched,
+                order_id=result.order_id,
+            )
+            self._apply_exit_fill(matched, fill_price, now_utc, "MOVE_DZ_STOPLOSS")
+            return
+        self.stoploss_failed += 1
+        self._remember_move_dz_stoploss(
+            "failed",
+            held_dz=held_dz,
+            bid=bid,
+            threshold=threshold,
+            order_type=order_type,
+            elapsed_ms=elapsed_ms,
+            reason=f"NO_MATCH:{status}",
+            limit_price=limit_price,
+            matched_shares=matched,
+            order_id=result.order_id,
         )
 
     def _pressure_hedge_accounting_price(
@@ -3433,6 +3646,8 @@ class StatsBot:
         position.exit_proceeds_accumulated += proceeds
         position.realized_pnl_accumulated += pnl_delta
         self.balance += proceeds
+        if not self.config.paper_trading and self.wallet_balance_live is not None:
+            self.wallet_balance_live += proceeds
         self.session_pnl += pnl_delta
         self.realized_pnl += pnl_delta
         self._log_event(
@@ -4480,6 +4695,12 @@ class StatsBot:
                 f"{self.pressure_hedges_submitted} filled/submitted "
                 f"({self.pressure_hedges_blocked} blocked)"
             )
+        if self.config.move_dz_stoploss_enabled:
+            lines.append(
+                f"    {'stoploss counter':<18}: {self.stoploss_filled}/"
+                f"{self.stoploss_submitted} filled/submitted "
+                f"({self.stoploss_failed} failed)"
+            )
         if self.peak_drawdown_kill_active:
             lines.append("    kill_switch       : ACTIVE (new entries disabled)")
         if stake_decision is not None and self.config.stake_mode == "dynamic_shares":
@@ -4711,6 +4932,8 @@ class StatsBot:
             lines.append(f"    entry_bps         : {self.active_position.entry_bps:+.2f}")
             lines.append(f"    entry_edge_thresh : {self.active_position.entry_edge_threshold:.2f}")
             lines.append(f"    exit_policy_mode  : {self.config.exit_policy_mode}")
+            if self.config.move_dz_stoploss_enabled:
+                lines.append(f"    {'move_dz_stoploss':<18}: {self._dashboard_move_dz_stoploss_text(snapshot)}")
             if not str(self.active_position.entry_policy_key_text or "").startswith(f"{self.macro_policy.strategy_id}|"):
                 lines.append(f"    policy_key        : {self.active_position.entry_policy_key_text}")
             if self.active_position.hedge_leg is not None:
@@ -4909,10 +5132,12 @@ class StatsBot:
                 exit_decision = None
                 force_exit_reason = None
                 if self.active_position is not None and snapshot is not None:
-                    self._maybe_execute_pressure_defence(now_utc, snapshot)
-                    if self.config.exit_policy_mode == "hold_to_resolution":
+                    self._maybe_execute_move_dz_stoploss(now_utc, snapshot)
+                    if self.active_position is not None:
+                        self._maybe_execute_pressure_defence(now_utc, snapshot)
+                    if self.active_position is not None and self.config.exit_policy_mode == "hold_to_resolution":
                         exit_decision = self._hold_to_resolution_exit_decision(snapshot)
-                    else:
+                    elif self.active_position is not None:
                         exit_decision = evaluate_exit(
                             held_side=self.active_position.held_side,
                             entry_bps=self.active_position.entry_bps,
@@ -4922,7 +5147,8 @@ class StatsBot:
                             policy_cube=self.policy_cube,
                         )
                     if (
-                        bool(getattr(self.config, "bps_yes_guard_enabled", True))
+                        self.active_position is not None
+                        and bool(getattr(self.config, "bps_yes_guard_enabled", True))
                         and self.config.exit_policy_mode != "hold_to_resolution"
                     ):
                         force_exit, force_reason = self.guard.update_position_exit_guard(
@@ -4932,7 +5158,8 @@ class StatsBot:
                         )
                         if force_exit:
                             force_exit_reason = force_reason
-                    self._maybe_execute_exit(now_utc, snapshot, exit_decision, force_exit_reason)
+                    if self.active_position is not None:
+                        self._maybe_execute_exit(now_utc, snapshot, exit_decision, force_exit_reason)
                 elif (
                     self.active_position is None
                     and self.pending_entry is None

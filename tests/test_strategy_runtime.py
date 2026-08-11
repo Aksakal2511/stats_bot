@@ -1091,6 +1091,130 @@ def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False, o
     return bot, market_start, snapshot
 
 
+def _move_dz_stoploss_bot(*, result: OrderResult):
+    class FakePolymarket:
+        def __init__(self, sell_result: OrderResult) -> None:
+            self.sell_result = sell_result
+            self.sell_calls: list[dict[str, object]] = []
+
+        def place_immediate_sell(self, **kwargs):
+            self.sell_calls.append(kwargs)
+            return self.sell_result
+
+    bot = object.__new__(StatsBot)
+    market_start = datetime(2026, 7, 15, 18, 5, tzinfo=timezone.utc)
+    bot.config = SimpleNamespace(
+        move_dz_stoploss_enabled=True,
+        move_dz_stoploss_threshold=0.75,
+        move_dz_stoploss_order_type="FAK",
+        move_dz_stoploss_cross_ticks=1,
+        pressure_defence_enabled=True,
+        dust_share_threshold=0.01,
+        paper_trading=False,
+    )
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=market_start,
+        market_end_utc=market_start + timedelta(seconds=300),
+        tick_size=0.01,
+        min_order_size=5.0,
+    )
+    bot.active_position = OpenPosition(
+        token_id="up",
+        market_slug=bot.current_market.slug,
+        market_id=bot.current_market.market_id,
+        market_question=bot.current_market.question,
+        market_end_utc=bot.current_market.market_end_utc,
+        held_side="UP",
+        shares=5.0,
+        avg_entry_price=0.60,
+        entry_cost=3.00,
+        entry_time_utc=market_start + timedelta(seconds=180),
+        entry_bps=4.0,
+        entry_day_type="weekday",
+        entry_session_bucket="US_OPEN_LATE",
+        entry_edge_threshold=0.04,
+        entry_bps_threshold=2.0,
+        entry_policy_key_text="policy",
+        entry_snapshot={"entry_trade_style": "continuation"},
+    )
+    bot.pm = FakePolymarket(result)
+    bot.balance = 100.0
+    bot.wallet_balance_live = 100.0
+    bot.session_pnl = 0.0
+    bot.realized_pnl = 0.0
+    bot.stoploss_submitted = 0
+    bot.stoploss_filled = 0
+    bot.stoploss_failed = 0
+    bot.last_move_dz_stoploss = None
+    bot.recent_events = []
+    bot.window_errors = []
+    bot._log_event = lambda event_type, message, fields: bot.recent_events.append((event_type, message, fields))
+    bot._remember_error = lambda message: bot.window_errors.append(message)
+    snapshot = {
+        "canonical_tte_seconds": 35.0,
+        "up_move_dz": -0.92,
+        "down_move_dz": 0.92,
+        "up_bid": 0.19,
+        "down_bid": 0.81,
+    }
+    return bot, market_start, snapshot
+
+
+def test_move_dz_stoploss_partial_fill_updates_accounting_and_counters() -> None:
+    bot, now, snapshot = _move_dz_stoploss_bot(
+        result=OrderResult(True, None, "FAK", matched_shares=2.0, price=0.18)
+    )
+
+    bot._maybe_execute_move_dz_stoploss(now, snapshot)
+
+    assert bot.stoploss_submitted == 1
+    assert bot.stoploss_filled == 1
+    assert bot.stoploss_failed == 0
+    assert bot.active_position is not None
+    assert round(bot.active_position.shares, 6) == 3.0
+    assert round(bot.active_position.entry_cost, 6) == 1.8
+    assert round(bot.balance, 6) == 100.36
+    assert round(bot.wallet_balance_live, 6) == 100.36
+    assert round(bot.realized_pnl, 6) == -0.84
+    assert bot.active_position.extra["move_dz_stoploss_attempted"] is True
+    assert bot.last_move_dz_stoploss["status"] == "partial"
+    assert bot.pm.sell_calls[0]["order_type"] == "FAK"
+    assert bot.pm.sell_calls[0]["price"] == 0.18
+
+
+def test_move_dz_stoploss_does_not_sell_after_pressure_defence_attempt() -> None:
+    bot, now, snapshot = _move_dz_stoploss_bot(
+        result=OrderResult(True, None, "FAK", matched_shares=5.0, price=0.18)
+    )
+    bot.active_position.extra["pressure_defence_attempted"] = True
+
+    bot._maybe_execute_move_dz_stoploss(now, snapshot)
+
+    assert bot.stoploss_submitted == 0
+    assert bot.stoploss_filled == 0
+    assert bot.active_position is not None
+    assert bot.active_position.shares == 5.0
+    assert bot.pm.sell_calls == []
+    assert bot.last_move_dz_stoploss["status"] == "blocked"
+
+
+def test_pressure_defence_does_not_submit_after_move_dz_stoploss_attempt() -> None:
+    result = OrderResult(True, None, "GTC", matched_shares=5.0, price=0.30)
+    bot, now, snapshot = _pressure_defence_bot(result=result)
+    bot.active_position.extra["move_dz_stoploss_attempted"] = True
+
+    bot._maybe_execute_pressure_defence(now + timedelta(seconds=270), snapshot)
+
+    assert bot.pressure_hedges_submitted == 0
+    assert bot.active_position.pressure_defence_status == "idle"
+
+
 def test_pressure_defence_live_accepted_without_match_reconciles_later_fill() -> None:
     result = OrderResult(True, "hedge-1", "LIVE", matched_shares=0.0, price=0.30)
     bot, now, snapshot = _pressure_defence_bot(

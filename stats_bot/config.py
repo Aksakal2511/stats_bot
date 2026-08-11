@@ -123,6 +123,10 @@ class BotConfig:
     exit_retry_cadence_seconds: float
     dust_share_threshold: float
     observe_first_window: bool
+    move_dz_stoploss_enabled: bool
+    move_dz_stoploss_threshold: float
+    move_dz_stoploss_order_type: str
+    move_dz_stoploss_cross_ticks: int
     pressure_defence_enabled: bool
     pressure_min_held_mid: float
     pressure_max_held_mid: float
@@ -372,6 +376,10 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         exit_retry_cadence_seconds=max(0.1, _float_env("STATS_EXIT_RETRY_CADENCE_SECONDS", 1.0)),
         dust_share_threshold=max(0.0, _float_env("STATS_DUST_SHARE_THRESHOLD", 0.01)),
         observe_first_window=observe_first_window,
+        move_dz_stoploss_enabled=_bool_env("STATS_MOVE_DZ_STOPLOSS_ENABLED", False),
+        move_dz_stoploss_threshold=max(0.0, _float_env("STATS_MOVE_DZ_STOPLOSS_THRESHOLD", 0.75)),
+        move_dz_stoploss_order_type=str(os.getenv("STATS_MOVE_DZ_STOPLOSS_ORDER_TYPE", "FAK") or "FAK").strip().upper(),
+        move_dz_stoploss_cross_ticks=max(0, _int_env("STATS_MOVE_DZ_STOPLOSS_CROSS_TICKS", 1)),
         pressure_defence_enabled=_bool_env(
             "STATS_PRESSURE_DEFENCE_ENABLED",
             _bool_env("STATS_FFM_DEFENCE_ENABLED", False),
