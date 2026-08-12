@@ -4,6 +4,7 @@ Live TWAP-2 bundle for the BTC 5-minute TWAP settlement era.
 
 - Model: hybrid Stage A price-bucket linear model (`stagea_pb_time`)
 - Signal: Coinbase 30-sample discrete 1s ffilled TWAP move_dz
+- Settlement label: `cb_twap_UP_outcome`
 - Weekday branch: weekday-only, HL120
 - Weekend branch: day-type excluded, LIFETIME
 - Price buckets: asymmetric, train/entry price range 0.20-0.80

@@ -24,7 +24,7 @@ from .guards import DrawdownGuard, BpsYesGuard, SessionStyleDrawdownGuard
 from .macro_policy import MacroLocalPolicy
 from .models import HedgeLeg, OpenPosition, PendingEntryOrder, RuntimeEvent
 from .polymarket import BookSnapshot, MarketInfo, OrderResult, PolymarketClient, SignedBuyOrder, WINDOW_SECONDS, round_price
-from .polymarket_ref import PolymarketReferenceFeed
+from .polymarket_ref import POLYMARKET_TWAP_30_SUBSCRIBE, PolymarketReferenceFeed
 from .strategy import (
     EntryDecision,
     ExitDecision,
@@ -211,6 +211,12 @@ def _fmt(value: object, digits: int = 4, blank: str = "NA") -> str:
     if number is None:
         return blank
     return f"{number:.{digits}f}"
+
+
+def _iso(value: object) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return ""
 
 
 def _event_fields(fields: dict[str, Any]) -> dict[str, Any]:
@@ -406,6 +412,11 @@ class StatsBot:
             on_update=self._on_execution_event if config.binance_perp_trigger_enabled else None,
         )
         self.pm_chainlink = PolymarketReferenceFeed(on_update=self._on_execution_event)
+        self.pm_chainlink_twap = PolymarketReferenceFeed(
+            name="pm_chainlink_twap_30s",
+            subscribe_message=POLYMARKET_TWAP_30_SUBSCRIBE,
+            on_update=self._on_execution_event,
+        )
         self.guard = BpsYesGuard()
         self.drawdown_guard = DrawdownGuard()
         self.session_style_drawdown_guard = SessionStyleDrawdownGuard(
@@ -463,6 +474,9 @@ class StatsBot:
         binance_spot_started = self.binance_spot.start() if config.binance_spot_feed_enabled else False
         binance_perp_started = self.binance_perp.start() if config.binance_perp_feed_enabled else False
         pm_chainlink_started = self.pm_chainlink.start() if config.pm_chainlink_feed_enabled else False
+        pm_chainlink_twap_started = (
+            self.pm_chainlink_twap.start() if config.pm_chainlink_twap_diag_enabled else False
+        )
         log.info(
             "  init: Binance/PM reference feeds %s in %.2fs",
             (
@@ -472,6 +486,7 @@ class StatsBot:
                         ("binance_spot", binance_spot_started),
                         ("binance_perp", binance_perp_started),
                         ("pm_chainlink", pm_chainlink_started),
+                        ("pm_chainlink_twap_30s", pm_chainlink_twap_started),
                     )
                     if started
                 )
@@ -493,6 +508,20 @@ class StatsBot:
                 "started": pm_chainlink_started,
                 "enabled": config.pm_chainlink_feed_enabled,
                 "topic": "crypto_prices_chainlink",
+            },
+        )
+        self._log_event(
+            "startup",
+            (
+                "Polymarket Chainlink TWAP diagnostic started"
+                if pm_chainlink_twap_started
+                else "Polymarket Chainlink TWAP diagnostic disabled/unavailable"
+            ),
+            {
+                "started": pm_chainlink_twap_started,
+                "enabled": config.pm_chainlink_twap_diag_enabled,
+                "topic": "crypto_prices_twap_thirty",
+                "window_seconds": 30,
             },
         )
         self._log_event(
@@ -981,6 +1010,102 @@ class StatsBot:
         if anchor_price is None or anchor_price <= 0:
             return None
         return (latest_price / anchor_price - 1.0) * 10_000.0
+
+    def _chainlink_twap_diagnostics(self, now_utc: datetime, snapshot: dict[str, Any] | None) -> dict[str, Any]:
+        market = self.current_market
+        if market is None:
+            return {}
+
+        def _bps(now_value: Any, open_value: Any) -> float | None:
+            current = finite_float(now_value)
+            anchor = finite_float(open_value)
+            if current is None or anchor is None or anchor <= 0.0:
+                return None
+            return 10_000.0 * (current - anchor) / anchor
+
+        def _age_ms(row: dict[str, Any] | None) -> float | None:
+            if not row:
+                return None
+            observed = row.get("source_timestamp_utc") or row.get("timestamp_utc")
+            if not isinstance(observed, datetime):
+                return None
+            return max(0.0, (now_utc - observed).total_seconds() * 1000.0)
+
+        spot_latest = self.pm_chainlink.latest() if self.config.pm_chainlink_feed_enabled else None
+        spot_twap_now, spot_twap_staleness = (
+            self.pm_chainlink.discrete_ffill_twap(target_utc=now_utc, sample_seconds=30)
+            if self.config.pm_chainlink_feed_enabled
+            else (None, None)
+        )
+        spot_twap_open, spot_twap_open_staleness = (
+            self.pm_chainlink.discrete_ffill_twap(target_utc=market.market_start_utc, sample_seconds=30)
+            if self.config.pm_chainlink_feed_enabled
+            else (None, None)
+        )
+        spot_twap_signed_bps = _bps(spot_twap_now, spot_twap_open)
+        twap_latest = self.pm_chainlink_twap.latest_at_or_before(now_utc) if self.config.pm_chainlink_twap_diag_enabled else None
+        twap_open = (
+            self.pm_chainlink_twap.latest_at_or_before(market.market_start_utc)
+            if self.config.pm_chainlink_twap_diag_enabled
+            else None
+        )
+        official_twap_now = finite_float(twap_latest.get("close_1s")) if twap_latest else None
+        official_twap_open = finite_float(twap_open.get("close_1s")) if twap_open else None
+        official_twap_signed_bps = _bps(official_twap_now, official_twap_open)
+        cb_twap_now = finite_float(snapshot.get("cb_twap_30s_discrete_1s")) if snapshot else None
+        cb_twap_open = finite_float(snapshot.get("cb_twap_open_30s_discrete_1s")) if snapshot else None
+        cb_twap_bps = finite_float(snapshot.get("cb_twap_signed_bps_raw")) if snapshot else None
+        return {
+            "pm_cl_spot_price": finite_float(spot_latest.get("close_1s")) if spot_latest else None,
+            "pm_cl_spot_observed_at_utc": spot_latest.get("source_timestamp_utc") if spot_latest else None,
+            "pm_cl_spot_age_ms": _age_ms(spot_latest),
+            "pm_cl_spot_twap_30s_discrete_1s": spot_twap_now,
+            "pm_cl_spot_twap_open_30s_discrete_1s": spot_twap_open,
+            "pm_cl_spot_twap_signed_bps": spot_twap_signed_bps,
+            "pm_cl_spot_twap_max_sample_staleness_seconds": max(
+                [value for value in (spot_twap_staleness, spot_twap_open_staleness) if value is not None],
+                default=None,
+            ),
+            "pm_cl_twap_30s": official_twap_now,
+            "pm_cl_twap_open_30s": official_twap_open,
+            "pm_cl_twap_signed_bps": official_twap_signed_bps,
+            "pm_cl_twap_observed_at_utc": twap_latest.get("source_timestamp_utc") if twap_latest else None,
+            "pm_cl_twap_age_ms": _age_ms(twap_latest),
+            "pm_cl_twap_full_accuracy_value": twap_latest.get("full_accuracy_value", "") if twap_latest else "",
+            "pm_cl_spot_rebuild_minus_official_twap": (
+                spot_twap_now - official_twap_now
+                if spot_twap_now is not None and official_twap_now is not None
+                else None
+            ),
+            "pm_cl_spot_rebuild_minus_official_bps": (
+                spot_twap_signed_bps - official_twap_signed_bps
+                if spot_twap_signed_bps is not None and official_twap_signed_bps is not None
+                else None
+            ),
+            "cb_twap_minus_pm_cl_twap": (
+                cb_twap_now - official_twap_now
+                if cb_twap_now is not None and official_twap_now is not None
+                else None
+            ),
+            "cb_twap_bps_minus_pm_cl_twap_bps": (
+                cb_twap_bps - official_twap_signed_bps
+                if cb_twap_bps is not None and official_twap_signed_bps is not None
+                else None
+            ),
+            "cb_twap_minus_pm_cl_spot_rebuild_twap": (
+                cb_twap_now - spot_twap_now if cb_twap_now is not None and spot_twap_now is not None else None
+            ),
+            "cb_twap_bps_minus_pm_cl_spot_rebuild_bps": (
+                cb_twap_bps - spot_twap_signed_bps
+                if cb_twap_bps is not None and spot_twap_signed_bps is not None
+                else None
+            ),
+            "cb_twap_open_minus_pm_cl_twap_open": (
+                cb_twap_open - official_twap_open
+                if cb_twap_open is not None and official_twap_open is not None
+                else None
+            ),
+        }
 
     def _dashboard_signed_bps_text(self, snapshot: dict[str, Any]) -> str:
         coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
@@ -2849,6 +2974,7 @@ class StatsBot:
                 "binance_spot": "binance_spot_ws",
                 "binance_perp": "binance_perp_ws",
                 "pm_chainlink": "polymarket_chainlink_ws",
+                "pm_chainlink_twap_30s": "polymarket_chainlink_twap_ws",
             }.get(event_type, "polymarket_ws")
             self._log_latency(
                 event_type,
@@ -4560,6 +4686,7 @@ class StatsBot:
             return
         self.last_cadence_second_written = second
         pressure_detail = self.last_pressure_defence if self.active_position is not None else {}
+        twap_diag = self._chainlink_twap_diagnostics(now_utc, snapshot)
         write_header = not self.cadence_log_path.exists() or self.cadence_log_path.stat().st_size == 0
         with self.cadence_log_path.open("a", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
@@ -4583,6 +4710,26 @@ class StatsBot:
                         "cb_twap_signed_bps_raw",
                         "cb_twap_max_sample_staleness_seconds",
                         "cb_spot_signed_bps_raw",
+                        "pm_cl_spot_price",
+                        "pm_cl_spot_observed_at_utc",
+                        "pm_cl_spot_age_ms",
+                        "pm_cl_spot_twap_30s_discrete_1s",
+                        "pm_cl_spot_twap_open_30s_discrete_1s",
+                        "pm_cl_spot_twap_signed_bps",
+                        "pm_cl_spot_twap_max_sample_staleness_seconds",
+                        "pm_cl_twap_30s",
+                        "pm_cl_twap_open_30s",
+                        "pm_cl_twap_signed_bps",
+                        "pm_cl_twap_observed_at_utc",
+                        "pm_cl_twap_age_ms",
+                        "pm_cl_twap_full_accuracy_value",
+                        "pm_cl_spot_rebuild_minus_official_twap",
+                        "pm_cl_spot_rebuild_minus_official_bps",
+                        "cb_twap_minus_pm_cl_twap",
+                        "cb_twap_bps_minus_pm_cl_twap_bps",
+                        "cb_twap_minus_pm_cl_spot_rebuild_twap",
+                        "cb_twap_bps_minus_pm_cl_spot_rebuild_bps",
+                        "cb_twap_open_minus_pm_cl_twap_open",
                         "btc_mom_20s_bps",
                         "cb_signed_bps_raw",
                         "signed_bps_bucket",
@@ -4691,6 +4838,26 @@ class StatsBot:
                     _fmt(snapshot.get("cb_twap_signed_bps_raw"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("cb_twap_max_sample_staleness_seconds"), 3, "") if snapshot else "",
                     _fmt(snapshot.get("cb_spot_signed_bps_raw"), 6, "") if snapshot else "",
+                    _fmt(twap_diag.get("pm_cl_spot_price"), 6, ""),
+                    _iso(twap_diag.get("pm_cl_spot_observed_at_utc")),
+                    _fmt(twap_diag.get("pm_cl_spot_age_ms"), 3, ""),
+                    _fmt(twap_diag.get("pm_cl_spot_twap_30s_discrete_1s"), 6, ""),
+                    _fmt(twap_diag.get("pm_cl_spot_twap_open_30s_discrete_1s"), 6, ""),
+                    _fmt(twap_diag.get("pm_cl_spot_twap_signed_bps"), 6, ""),
+                    _fmt(twap_diag.get("pm_cl_spot_twap_max_sample_staleness_seconds"), 3, ""),
+                    _fmt(twap_diag.get("pm_cl_twap_30s"), 6, ""),
+                    _fmt(twap_diag.get("pm_cl_twap_open_30s"), 6, ""),
+                    _fmt(twap_diag.get("pm_cl_twap_signed_bps"), 6, ""),
+                    _iso(twap_diag.get("pm_cl_twap_observed_at_utc")),
+                    _fmt(twap_diag.get("pm_cl_twap_age_ms"), 3, ""),
+                    twap_diag.get("pm_cl_twap_full_accuracy_value", ""),
+                    _fmt(twap_diag.get("pm_cl_spot_rebuild_minus_official_twap"), 6, ""),
+                    _fmt(twap_diag.get("pm_cl_spot_rebuild_minus_official_bps"), 6, ""),
+                    _fmt(twap_diag.get("cb_twap_minus_pm_cl_twap"), 6, ""),
+                    _fmt(twap_diag.get("cb_twap_bps_minus_pm_cl_twap_bps"), 6, ""),
+                    _fmt(twap_diag.get("cb_twap_minus_pm_cl_spot_rebuild_twap"), 6, ""),
+                    _fmt(twap_diag.get("cb_twap_bps_minus_pm_cl_spot_rebuild_bps"), 6, ""),
+                    _fmt(twap_diag.get("cb_twap_open_minus_pm_cl_twap_open"), 6, ""),
                     _fmt(snapshot.get("btc_mom_20s_bps"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("cb_signed_bps_raw"), 6, "") if snapshot else "",
                     snapshot.get("signed_bps_bucket", "") if snapshot else "",

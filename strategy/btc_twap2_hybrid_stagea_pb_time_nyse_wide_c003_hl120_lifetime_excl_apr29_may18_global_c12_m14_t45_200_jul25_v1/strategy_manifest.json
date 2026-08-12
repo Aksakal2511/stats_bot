@@ -3,7 +3,7 @@
   "policy_type": "continuous_surface",
   "strategy_id": "btc_twap2_hybrid_stagea_pb_time_nyse_wide_c003_hl120_lifetime_excl_apr29_may18_global_c12_m14_t45_200_jul25_v1",
   "description": "TWAP-2 hybrid Stage A nyse_wide price-bucket model with fixed global C12/M14 edges.",
-  "created_at_utc": "2026-08-12T09:07:39.826659+00:00",
+  "created_at_utc": "2026-08-12T10:00:54.616538+00:00",
   "training_start": "2026-02-14",
   "training_end": "2026-07-25",
   "training_segments": [
@@ -25,7 +25,7 @@
   "signal_source": "coinbase_btc_usd",
   "signal_feature": "move_dz",
   "signal_price_mode": "coinbase_twap_30s_discrete_1s",
-  "settlement_label": "cb_twap_UP_outcome_discrete_1s",
+  "settlement_label": "cb_twap_UP_outcome",
   "display_session_width_hours": 4,
   "entry": {
     "edge_profile": "twap2_global_edges_c12_m14",
@@ -102,6 +102,10 @@
     }
   },
   "export_inputs": {
-    "distance_root": "/Volumes/Kate_DATA/policy_finder/data/artifacts/distance_to_beat_twap_discrete1s_shifted_20260214_20260725/p0"
+    "distance_root": "/Volumes/Kate_DATA/policy_finder/data/artifacts/distance_to_beat_twap_discrete1s_shifted_20260214_20260725/p0",
+    "outcomes": "/Volumes/Kate_DATA/policy_finder/data/artifacts/synthetic_twap30_labels_coinbase_discrete_1s_shifted_20260214_20260725/p0/combined.parquet",
+    "outcome_column": "cb_twap_UP_outcome",
+    "outcome_matched_markets": 46144,
+    "outcome_missing_markets": 0
   }
 }
