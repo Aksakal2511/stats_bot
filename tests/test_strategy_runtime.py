@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from collections import Counter, deque
 from datetime import datetime, timedelta, timezone
+import math
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -26,6 +27,7 @@ from stats_bot.bot import (
 )
 from stats_bot.binance import BinanceTickerFeed
 from stats_bot.features import compute_live_snapshot
+from stats_bot.macro_policy import MacroLocalPolicy
 from stats_bot.models import OpenPosition, PendingEntryOrder
 from stats_bot.polymarket import BookSnapshot, MarketInfo, MarketResolution, OrderResult, SignedBuyOrder
 from stats_bot.strategy import (
@@ -184,6 +186,68 @@ def test_trade_style_falls_back_to_signed_bps_bucket() -> None:
     assert trade_style_from_bps_bucket("UP", "neg5_to_neg2p5") == "mean_reversion"
     assert trade_style_from_bps_bucket("DOWN", "neg5_to_neg2p5") == "continuation"
     assert trade_style_from_bps_bucket("UP", "near_zero") == "neutral"
+
+
+def test_twap_snapshot_and_policy_signal_use_discrete_twap_not_spot() -> None:
+    start = datetime(2026, 8, 12, 10, 0, tzinfo=timezone.utc)
+    now = start + timedelta(seconds=100)
+    end = start + timedelta(seconds=300)
+    btc_rows = []
+    for offset in range(-60, 101):
+        ts = start + timedelta(seconds=offset)
+        price = 65_000.0 + offset * 0.25
+        btc_rows.append(
+            {
+                "timestamp_utc": ts,
+                "open_1s": price,
+                "high_1s": price,
+                "low_1s": price,
+                "close_1s": price,
+                "volume_1s": 1.0,
+            }
+        )
+    pm_rows = [
+        {
+            "timestamp_utc": now,
+            "up_bid": 0.41,
+            "up_ask": 0.42,
+            "up_mid": 0.415,
+            "up_spread": 0.01,
+            "down_bid": 0.58,
+            "down_ask": 0.59,
+            "down_mid": 0.585,
+            "down_spread": 0.01,
+        }
+    ]
+    snapshot = compute_live_snapshot(
+        btc_history=btc_rows,
+        pm_history=pm_rows,
+        now_utc=now,
+        market_start_utc=start,
+        market_end_utc=end,
+        window_open_btc_price=65_000.0,
+        volatility_edges=VolatilityEdges(1, 0.0, 0.0, {}),
+        market_slug="test",
+        local_volatility_1h_bps=35.0,
+        local_volatility_status="ready",
+        signal_price_mode="coinbase_twap_30s_discrete_1s",
+    )
+    assert snapshot is not None
+    expected_open_twap = sum(65_000.0 + offset * 0.25 for offset in range(-30, 0)) / 30.0
+    expected_now_twap = sum(65_000.0 + offset * 0.25 for offset in range(70, 100)) / 30.0
+    expected_bps = 10_000.0 * (expected_now_twap - expected_open_twap) / expected_open_twap
+
+    assert snapshot["cb_signal_price_mode"] == "coinbase_twap_30s_discrete_1s"
+    assert snapshot["cb_signal_price"] == pytest.approx(expected_now_twap)
+    assert snapshot["cb_close_1s"] != pytest.approx(expected_now_twap)
+    assert snapshot["cb_signed_bps_raw"] == pytest.approx(expected_bps)
+
+    policy = object.__new__(MacroLocalPolicy)
+    policy.signal_feature = "move_dz"
+    up_signal, up_bps = policy._side_signal_value(snapshot, "UP")
+    remaining_vol = 35.0 * math.sqrt(200.0 / 3600.0)
+    assert up_bps == pytest.approx(expected_bps)
+    assert up_signal == pytest.approx(expected_bps / remaining_vol)
 
 
 def test_london_session_map_matches_offset250_12bucket_2h_scheme() -> None:
@@ -1091,24 +1155,36 @@ def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False, o
     return bot, market_start, snapshot
 
 
-def _move_dz_stoploss_bot(*, result: OrderResult):
+def _move_dz_stoploss_bot(
+    *,
+    result: OrderResult | None = None,
+    results: list[OrderResult] | None = None,
+    mode: str = "absolute",
+    threshold: float = 0.75,
+    trade_styles: tuple[str, ...] = ("all",),
+):
     class FakePolymarket:
-        def __init__(self, sell_result: OrderResult) -> None:
-            self.sell_result = sell_result
+        def __init__(self, sell_results: list[OrderResult]) -> None:
+            self.sell_results = list(sell_results)
             self.sell_calls: list[dict[str, object]] = []
 
         def place_immediate_sell(self, **kwargs):
             self.sell_calls.append(kwargs)
-            return self.sell_result
+            if self.sell_results:
+                return self.sell_results.pop(0)
+            return OrderResult(False, None, "NO_MORE_RESULTS", matched_shares=0.0, price=kwargs.get("price"))
 
     bot = object.__new__(StatsBot)
     market_start = datetime(2026, 7, 15, 18, 5, tzinfo=timezone.utc)
     bot.config = SimpleNamespace(
         move_dz_stoploss_enabled=True,
-        move_dz_stoploss_threshold=0.75,
+        move_dz_stoploss_mode=mode,
+        move_dz_stoploss_threshold=threshold,
+        move_dz_stoploss_trade_styles=trade_styles,
         move_dz_stoploss_order_type="FAK",
         move_dz_stoploss_cross_ticks=1,
         pressure_defence_enabled=True,
+        exit_retry_cadence_seconds=1.0,
         dust_share_threshold=0.01,
         paper_trading=False,
     )
@@ -1143,7 +1219,8 @@ def _move_dz_stoploss_bot(*, result: OrderResult):
         entry_policy_key_text="policy",
         entry_snapshot={"entry_trade_style": "continuation"},
     )
-    bot.pm = FakePolymarket(result)
+    sell_results = results if results is not None else [result or OrderResult(True, None, "FAK", matched_shares=5.0, price=0.18)]
+    bot.pm = FakePolymarket(sell_results)
     bot.balance = 100.0
     bot.wallet_balance_live = 100.0
     bot.session_pnl = 0.0
@@ -1157,6 +1234,18 @@ def _move_dz_stoploss_bot(*, result: OrderResult):
     bot.window_errors = []
     bot._log_event = lambda event_type, message, fields: bot.recent_events.append((event_type, message, fields))
     bot._remember_error = lambda message: bot.window_errors.append(message)
+    bot.total_wins = 0
+    bot.total_losses = 0
+    bot.trade_style_wins = Counter()
+    bot.trade_style_losses = Counter()
+    bot.last_exit_time_by_window = {}
+    bot.trades_log_path = Path(f"/tmp/stats_bot_stoploss_test_{id(bot)}.csv")
+    if bot.trades_log_path.exists():
+        bot.trades_log_path.unlink()
+    bot._update_peak_drawdown_kill = lambda _exit_time: None
+    bot._record_session_style_guard_closed_trade = lambda *_args, **_kwargs: None
+    bot._record_regime_closed_trade = lambda *_args, **_kwargs: None
+    bot._record_staking_closed_trade = lambda *_args, **_kwargs: None
     snapshot = {
         "canonical_tte_seconds": 35.0,
         "up_move_dz": -0.92,
@@ -1175,7 +1264,7 @@ def test_move_dz_stoploss_partial_fill_updates_accounting_and_counters() -> None
     bot._maybe_execute_move_dz_stoploss(now, snapshot)
 
     assert bot.stoploss_submitted == 1
-    assert bot.stoploss_filled == 1
+    assert bot.stoploss_filled == 0
     assert bot.stoploss_failed == 0
     assert bot.active_position is not None
     assert round(bot.active_position.shares, 6) == 3.0
@@ -1205,6 +1294,78 @@ def test_move_dz_stoploss_does_not_sell_after_pressure_defence_attempt() -> None
     assert bot.last_move_dz_stoploss["status"] == "blocked"
 
 
+def test_move_dz_stoploss_from_peak_nonpos_continuation_only_triggers() -> None:
+    bot, now, snapshot = _move_dz_stoploss_bot(
+        result=OrderResult(True, None, "FAK", matched_shares=5.0, price=0.18),
+        mode="from_peak_nonpos",
+        threshold=3.0,
+        trade_styles=("continuation",),
+    )
+    bot.active_position.extra["move_dz_stoploss_peak_held_dz"] = 2.25
+
+    bot._maybe_execute_move_dz_stoploss(now, snapshot)
+
+    assert bot.stoploss_submitted == 1
+    assert bot.stoploss_filled == 1
+    assert bot.stoploss_failed == 0
+    assert bot.active_position is None
+    assert bot.pm.sell_calls[0]["order_type"] == "FAK"
+    assert bot.last_move_dz_stoploss["status"] == "filled"
+
+
+def test_move_dz_stoploss_from_peak_nonpos_ignores_mean_reversion() -> None:
+    bot, now, snapshot = _move_dz_stoploss_bot(
+        result=OrderResult(True, None, "FAK", matched_shares=5.0, price=0.18),
+        mode="from_peak_nonpos",
+        threshold=3.0,
+        trade_styles=("continuation",),
+    )
+    bot.active_position.entry_snapshot["entry_trade_style"] = "mean_reversion"
+    bot.active_position.extra["move_dz_stoploss_peak_held_dz"] = 2.25
+
+    bot._maybe_execute_move_dz_stoploss(now, snapshot)
+
+    assert bot.stoploss_submitted == 0
+    assert bot.stoploss_filled == 0
+    assert bot.active_position is not None
+    assert bot.pm.sell_calls == []
+    assert bot.last_move_dz_stoploss["status"] == "armed"
+    assert bot.last_move_dz_stoploss["reason"] == "STYLE_NOT_ENABLED:mean_reversion"
+
+
+def test_move_dz_stoploss_retries_failed_fak_and_counts_completed_exit_once() -> None:
+    bot, now, snapshot = _move_dz_stoploss_bot(
+        results=[
+            OrderResult(True, None, "FAK", matched_shares=0.0, price=0.18),
+            OrderResult(True, None, "FAK", matched_shares=5.0, price=0.17),
+        ],
+        mode="from_peak_nonpos",
+        threshold=3.0,
+        trade_styles=("continuation",),
+    )
+    bot.active_position.extra["move_dz_stoploss_peak_held_dz"] = 2.25
+
+    bot._maybe_execute_move_dz_stoploss(now, snapshot)
+    assert bot.stoploss_submitted == 1
+    assert bot.stoploss_filled == 0
+    assert bot.stoploss_failed == 1
+    assert bot.active_position is not None
+    assert len(bot.recent_stoploss_latency_ms) == 0
+
+    bot._maybe_execute_move_dz_stoploss(now + timedelta(milliseconds=500), snapshot)
+    assert bot.stoploss_submitted == 1
+    assert len(bot.pm.sell_calls) == 1
+    assert bot.last_move_dz_stoploss["status"] == "retry_wait"
+
+    bot._maybe_execute_move_dz_stoploss(now + timedelta(seconds=1.1), snapshot)
+    assert bot.stoploss_submitted == 2
+    assert bot.stoploss_filled == 1
+    assert bot.stoploss_failed == 1
+    assert bot.active_position is None
+    assert len(bot.pm.sell_calls) == 2
+    assert len(bot.recent_stoploss_latency_ms) == 1
+
+
 def test_pressure_defence_does_not_submit_after_move_dz_stoploss_attempt() -> None:
     result = OrderResult(True, None, "GTC", matched_shares=5.0, price=0.30)
     bot, now, snapshot = _pressure_defence_bot(result=result)
@@ -1223,11 +1384,11 @@ def test_stoploss_counter_dashboard_uses_last_five_latency_average() -> None:
     bot.stoploss_failed = 1
     bot.recent_stoploss_latency_ms = deque([100, 200, 300, 400, 500], maxlen=5)
 
-    assert bot._dashboard_stoploss_counter_text() == "4/5 filled/submitted (1 failed) [avg: 300 ms]"
+    assert bot._dashboard_stoploss_counter_text() == "4 [avg: 300 ms]"
 
     bot.recent_stoploss_latency_ms.append(1000)
 
-    assert bot._dashboard_stoploss_counter_text() == "4/5 filled/submitted (1 failed) [avg: 480 ms]"
+    assert bot._dashboard_stoploss_counter_text() == "4 [avg: 480 ms]"
 
 
 def test_pressure_defence_live_accepted_without_match_reconciles_later_fill() -> None:

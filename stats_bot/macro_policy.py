@@ -216,6 +216,7 @@ class MacroLocalPolicy:
         self.training_end = str(payload["training_end"])
         self.signal_source = str(payload.get("signal_source") or "coinbase_btc_usd")
         self.signal_feature = str(payload.get("signal_feature") or "move_z").strip().lower()
+        self.signal_price_mode = str(payload.get("signal_price_mode") or "spot").strip().lower()
         self.settlement_label = str(payload.get("settlement_label") or "unspecified")
         self.entry = dict(payload["entry"])
         profile_path = path.with_name("entry_profiles.json")
@@ -818,7 +819,7 @@ class MacroLocalPolicy:
             elapsed = 300.0 - tte
 
         if self.signal_feature == "move_dz":
-            close = finite_float(snapshot.get("cb_close_1s"))
+            close = self._first_finite(snapshot, "cb_signal_price", "cb_close_1s")
             anchor = self._first_finite(
                 snapshot,
                 "cb_price_to_beat_anchor",
@@ -1031,7 +1032,7 @@ class MacroLocalPolicy:
         if self.signal_feature == "move_z" and finite_float(snapshot.get("cb_signed_bps_raw")) is None:
             blockers.append("CB_SIGNED_BPS_MISSING")
         if self.signal_feature == "move_dz":
-            if finite_float(snapshot.get("cb_close_1s")) is None:
+            if self._first_finite(snapshot, "cb_signal_price", "cb_close_1s") is None:
                 blockers.append("BTC_CLOSE_MISSING")
             if self._first_finite(snapshot, "cb_price_to_beat_anchor", "price_to_beat", "window_open_btc_price") is None:
                 blockers.append("PRICE_TO_BEAT_MISSING")

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timezone
+import bisect
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .strategy import (
@@ -18,6 +19,7 @@ from .strategy import (
 VOLATILITY_WINDOW_SECONDS = 60
 BTC_MOMENTUM_GUARD_WINDOW_SECONDS = 20
 MOVE_DZ_MOMENTUM_SECONDS = 2
+TWAP_SAMPLE_SECONDS = 30
 BTC_FIELDS = ("open_1s", "high_1s", "low_1s", "close_1s", "volume_1s")
 PM_FIELDS = (
     "up_bid",
@@ -134,6 +136,37 @@ def _latest_volatility(close_values: list[float | None], smoothing_seconds: int)
     return latest_raw, smoothed
 
 
+def _discrete_ffill_twap(
+    rows_by_ts: dict[datetime, dict[str, float]],
+    *,
+    target_utc: datetime,
+    sample_seconds: int = TWAP_SAMPLE_SECONDS,
+) -> tuple[float | None, int | None]:
+    """Coinbase 1s ffilled TWAP over [target-sample_seconds, target)."""
+    target_utc = _ensure_utc(target_utc)
+    target_second = int(target_utc.timestamp())
+    close_by_second: dict[int, float] = {}
+    for ts, row in rows_by_ts.items():
+        close = finite_float(row.get("close_1s"))
+        if close is not None and close > 0.0:
+            close_by_second[int(_ensure_utc(ts).timestamp())] = close
+    if not close_by_second:
+        return None, None
+    seconds = sorted(close_by_second)
+    samples: list[float] = []
+    max_staleness = 0
+    for sample_second in range(target_second - int(sample_seconds), target_second):
+        idx = bisect.bisect_right(seconds, sample_second) - 1
+        if idx < 0:
+            return None, None
+        source_second = seconds[idx]
+        samples.append(close_by_second[source_second])
+        max_staleness = max(max_staleness, sample_second - source_second)
+    if len(samples) != int(sample_seconds):
+        return None, None
+    return float(sum(samples) / len(samples)), int(max_staleness)
+
+
 def _momentum_bps(rows: list[dict[str, Any]], *, latest_ts: datetime, latest_close: float, seconds: int) -> float | None:
     target_ts = latest_ts.timestamp() - float(seconds)
     prior_close: float | None = None
@@ -224,6 +257,7 @@ def compute_live_snapshot(
     local_volatility_1h_bps: float | None = None,
     local_volatility_status: str = "LOCAL_VOL_WARMUP",
     local_volatility_age_minutes: int | None = None,
+    signal_price_mode: str = "spot",
 ) -> dict[str, Any] | None:
     now_utc = _ensure_utc(now_utc)
     market_start_utc = _ensure_utc(market_start_utc)
@@ -258,31 +292,83 @@ def compute_live_snapshot(
 
     latest = merged_rows[-1]
     latest_ts = _coerce_timestamp(latest.get("timestamp_utc")) or now_utc
-    latest_close = finite_float(latest.get("close_1s"))
-    if latest_close is None:
+    latest_spot_close = finite_float(latest.get("close_1s"))
+    if latest_spot_close is None:
         return None
     btc_mom_20s_bps = _momentum_bps(
         merged_rows,
         latest_ts=latest_ts,
-        latest_close=latest_close,
+        latest_close=latest_spot_close,
         seconds=BTC_MOMENTUM_GUARD_WINDOW_SECONDS,
     )
 
     volatility_raw, volatility_smoothed_raw = _latest_volatility(close_values, volatility_edges.smoothing_seconds)
-    signed_bps_raw = 10000.0 * (latest_close - open_price) / open_price
     day_type, session_bucket, london_ts = classify_day_type_and_session(now_utc)
     tte_seconds = max(0.0, (market_end_utc - now_utc).total_seconds())
     elapsed_seconds = max(0.0, (now_utc - market_start_utc).total_seconds())
-    distance_z, distance_z_delta_2s = _distance_z_delta(
+    spot_signed_bps_raw = 10000.0 * (latest_spot_close - open_price) / open_price
+    spot_distance_z, spot_distance_z_delta_2s = _distance_z_delta(
         merged_rows,
         now_utc=now_utc,
         market_end_utc=market_end_utc,
-        latest_close=latest_close,
+        latest_close=latest_spot_close,
         anchor=float(open_price),
         local_volatility_1h_bps=local_volatility_1h_bps,
         current_tte_seconds=float(tte_seconds),
         seconds=MOVE_DZ_MOMENTUM_SECONDS,
     )
+    normalized_signal_mode = str(signal_price_mode or "spot").strip().lower()
+    signal_close = latest_spot_close
+    signal_anchor = float(open_price)
+    signal_max_staleness_seconds: int | None = None
+    twap_now: float | None = None
+    twap_open: float | None = None
+    twap_prior: float | None = None
+    twap_now_staleness: int | None = None
+    twap_open_staleness: int | None = None
+    if normalized_signal_mode in {
+        "twap_30s",
+        "twap_30s_discrete_1s",
+        "coinbase_twap_30s_discrete_1s",
+    }:
+        normalized_signal_mode = "coinbase_twap_30s_discrete_1s"
+        twap_now, twap_now_staleness = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=now_utc)
+        twap_open, twap_open_staleness = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=market_start_utc)
+        prior_dt = now_utc - timedelta(seconds=MOVE_DZ_MOMENTUM_SECONDS)
+        twap_prior, _ = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=prior_dt)
+        if twap_now is None or twap_open is None:
+            return None
+        signal_close = twap_now
+        signal_anchor = twap_open
+        signal_max_staleness_seconds = max(
+            value for value in (twap_now_staleness, twap_open_staleness) if value is not None
+        )
+    else:
+        normalized_signal_mode = "spot"
+    signed_bps_raw = 10000.0 * (signal_close - signal_anchor) / signal_anchor
+    distance_z = _distance_to_beat_z(
+        close=signal_close,
+        anchor=signal_anchor,
+        local_volatility_1h_bps=local_volatility_1h_bps,
+        tte_seconds=tte_seconds,
+    )
+    distance_z_delta_2s: float | None
+    if normalized_signal_mode == "coinbase_twap_30s_discrete_1s":
+        prior_dt = now_utc - timedelta(seconds=MOVE_DZ_MOMENTUM_SECONDS)
+        prior_tte = max(0.0, (market_end_utc - prior_dt).total_seconds())
+        prior_z = _distance_to_beat_z(
+            close=twap_prior,
+            anchor=signal_anchor,
+            local_volatility_1h_bps=local_volatility_1h_bps,
+            tte_seconds=prior_tte,
+        )
+        distance_z_delta_2s = (
+            float(distance_z - prior_z)
+            if distance_z is not None and prior_z is not None
+            else None
+        )
+    else:
+        distance_z_delta_2s = spot_distance_z_delta_2s
     signed_bps_bucket = bucket_signed_bps(signed_bps_raw)
     tte_bucket = bucket_tte(tte_seconds)
     volatility_bucket = (
@@ -320,14 +406,30 @@ def compute_live_snapshot(
         "elapsed_seconds_since_market_start": float(elapsed_seconds),
         "day_type": day_type,
         "session_bucket": session_bucket,
-        "cb_close_1s": latest_close,
+        "cb_close_1s": latest_spot_close,
+        "cb_signal_price": signal_close,
+        "cb_signal_price_mode": normalized_signal_mode,
+        "cb_spot_signed_bps_raw": float(spot_signed_bps_raw),
+        "cb_spot_distance_to_beat_z": float("nan") if spot_distance_z is None else float(spot_distance_z),
+        "cb_spot_distance_z_delta_2s": (
+            float("nan") if spot_distance_z_delta_2s is None else float(spot_distance_z_delta_2s)
+        ),
+        "cb_twap_30s_discrete_1s": float("nan") if twap_now is None else float(twap_now),
+        "cb_twap_open_30s_discrete_1s": float("nan") if twap_open is None else float(twap_open),
+        "cb_twap_signed_bps_raw": (
+            float("nan") if twap_now is None or twap_open is None else 10000.0 * (twap_now - twap_open) / twap_open
+        ),
+        "cb_twap_max_sample_staleness_seconds": (
+            float("nan") if signal_max_staleness_seconds is None else float(signal_max_staleness_seconds)
+        ),
         "btc_mom_20s_bps": float("nan") if btc_mom_20s_bps is None else float(btc_mom_20s_bps),
         "distance_to_beat_z": float("nan") if distance_z is None else float(distance_z),
         "distance_z_delta_2s": float("nan") if distance_z_delta_2s is None else float(distance_z_delta_2s),
         "up_side_dz_delta_2s": float("nan") if distance_z_delta_2s is None else float(distance_z_delta_2s),
         "down_side_dz_delta_2s": float("nan") if distance_z_delta_2s is None else float(-distance_z_delta_2s),
         "window_open_btc_price": float(open_price),
-        "cb_price_to_beat_anchor": float(open_price),
+        "cb_price_to_beat_anchor": float(signal_anchor),
+        "cb_spot_price_to_beat_anchor": float(open_price),
         "cb_signed_bps_raw": float(signed_bps_raw),
         "signed_bps_raw": float(signed_bps_raw),
         "signed_bps_bucket": signed_bps_bucket,

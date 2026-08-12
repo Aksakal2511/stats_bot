@@ -26,7 +26,7 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_MACRO_POLICY_BUNDLE = (
     REPO_ROOT
     / "strategy"
-    / "btc_linear_z_pb_asym_hl120_excl_apr29_may18_c04_m06_jul25_v1"
+    / "btc_twap2_hybrid_stagea_pb_time_nyse_wide_c003_hl120_lifetime_excl_apr29_may18_global_c12_m14_t45_200_jul25_v1"
     / "strategy_manifest.json"
 )
 
@@ -124,7 +124,9 @@ class BotConfig:
     dust_share_threshold: float
     observe_first_window: bool
     move_dz_stoploss_enabled: bool
+    move_dz_stoploss_mode: str
     move_dz_stoploss_threshold: float
+    move_dz_stoploss_trade_styles: tuple[str, ...]
     move_dz_stoploss_order_type: str
     move_dz_stoploss_cross_ticks: int
     pressure_defence_enabled: bool
@@ -325,7 +327,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         weekend_max_entry_price=weekend_max_entry_price,
         entry_start_block_seconds=max(0, _int_env("STATS_ENTRY_START_BLOCK_SECONDS", 45)),
         entry_min_tte_seconds=max(0, _int_env("STATS_ENTRY_MIN_TTE_SECONDS", 45)),
-        entry_max_tte_seconds=max(0, _int_env("STATS_ENTRY_MAX_TTE_SECONDS", 265)),
+        entry_max_tte_seconds=max(0, _int_env("STATS_ENTRY_MAX_TTE_SECONDS", 200)),
         cooldown_seconds=max(0, _int_env("STATS_COOLDOWN_SECONDS", 10)),
         maker_min_spread_ticks=max(1, _int_env("STATS_MAKER_MIN_SPREAD_TICKS", 1)),
         entry_quote_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_QUOTE_MAX_AGE_SECONDS", 1.5)),
@@ -377,7 +379,14 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         dust_share_threshold=max(0.0, _float_env("STATS_DUST_SHARE_THRESHOLD", 0.01)),
         observe_first_window=observe_first_window,
         move_dz_stoploss_enabled=_bool_env("STATS_MOVE_DZ_STOPLOSS_ENABLED", False),
+        move_dz_stoploss_mode=str(os.getenv("STATS_MOVE_DZ_STOPLOSS_MODE", "absolute") or "absolute").strip().lower(),
         move_dz_stoploss_threshold=max(0.0, _float_env("STATS_MOVE_DZ_STOPLOSS_THRESHOLD", 0.75)),
+        move_dz_stoploss_trade_styles=tuple(
+            part.strip().lower()
+            for part in str(os.getenv("STATS_MOVE_DZ_STOPLOSS_TRADE_STYLES", "all") or "all").split(",")
+            if part.strip()
+        )
+        or ("all",),
         move_dz_stoploss_order_type=str(os.getenv("STATS_MOVE_DZ_STOPLOSS_ORDER_TYPE", "FAK") or "FAK").strip().upper(),
         move_dz_stoploss_cross_ticks=max(0, _int_env("STATS_MOVE_DZ_STOPLOSS_CROSS_TICKS", 1)),
         pressure_defence_enabled=_bool_env(

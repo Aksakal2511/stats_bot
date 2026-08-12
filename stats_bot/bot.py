@@ -889,7 +889,15 @@ class StatsBot:
             self.pm_rows.popitem(last=False)
 
     def _build_snapshot(self, now_utc: datetime) -> dict[str, Any] | None:
-        if self.current_market is None or self.window_open_btc_price is None:
+        if self.current_market is None:
+            return None
+        signal_price_mode = str(getattr(self.macro_policy, "signal_price_mode", "spot") or "spot").strip().lower()
+        if self.window_open_btc_price is None and "twap" not in signal_price_mode:
+            return None
+        window_open_btc_price = self.window_open_btc_price
+        if window_open_btc_price is None:
+            window_open_btc_price = finite_float(getattr(self.coinbase, "price", None))
+        if window_open_btc_price is None or window_open_btc_price <= 0.0:
             return None
         local_rv, local_rv_status, local_rv_age = self.coinbase.local_volatility_1h_bps(now_utc)
         return compute_live_snapshot(
@@ -898,12 +906,13 @@ class StatsBot:
             now_utc=now_utc,
             market_start_utc=self.current_market.market_start_utc,
             market_end_utc=self.current_market.market_end_utc,
-            window_open_btc_price=float(self.window_open_btc_price),
+            window_open_btc_price=float(window_open_btc_price),
             volatility_edges=self.volatility_edges,
             market_slug=self.current_market.slug,
             local_volatility_1h_bps=local_rv,
             local_volatility_status=local_rv_status,
             local_volatility_age_minutes=local_rv_age,
+            signal_price_mode=signal_price_mode,
         )
 
     def _coinbase_pressure_z(self, held_side: str) -> tuple[float | None, float | None, float | None]:
@@ -1023,10 +1032,7 @@ class StatsBot:
         return " | ".join(parts)
 
     def _dashboard_stoploss_counter_text(self) -> str:
-        text = (
-            f"{self.stoploss_filled}/{self.stoploss_submitted} filled/submitted "
-            f"({self.stoploss_failed} failed)"
-        )
+        text = f"{self.stoploss_filled}"
         latencies = list(getattr(self, "recent_stoploss_latency_ms", ()))
         if latencies:
             text += f" [avg: {sum(latencies) / len(latencies):.0f} ms]"
@@ -1284,6 +1290,8 @@ class StatsBot:
         held_dz: float | None,
         bid: float | None,
         threshold: float | None = None,
+        peak_held_dz: float | None = None,
+        peak_drawdown: float | None = None,
         order_type: str | None = None,
         elapsed_ms: float | None = None,
         reason: str | None = None,
@@ -1296,6 +1304,8 @@ class StatsBot:
             "held_dz": held_dz,
             "bid": bid,
             "threshold": threshold if threshold is not None else self.config.move_dz_stoploss_threshold,
+            "peak_held_dz": peak_held_dz,
+            "peak_drawdown": peak_drawdown,
             "order_type": str(order_type or self.config.move_dz_stoploss_order_type).upper(),
             "elapsed_ms": elapsed_ms,
             "reason": reason,
@@ -1313,8 +1323,45 @@ class StatsBot:
                 position.extra["move_dz_stoploss_held_dz"] = held_dz
             if bid is not None:
                 position.extra["move_dz_stoploss_bid"] = bid
+            if peak_held_dz is not None:
+                position.extra["move_dz_stoploss_peak_held_dz"] = peak_held_dz
+            if peak_drawdown is not None:
+                position.extra["move_dz_stoploss_peak_drawdown"] = peak_drawdown
             if elapsed_ms is not None:
                 position.extra["move_dz_stoploss_elapsed_ms"] = elapsed_ms
+
+    def _move_dz_stoploss_style_allowed(self, position: OpenPosition) -> bool:
+        allowed = tuple(getattr(self.config, "move_dz_stoploss_trade_styles", ("all",)) or ("all",))
+        allowed_set = {str(item).strip().lower() for item in allowed if str(item).strip()}
+        if not allowed_set or "all" in allowed_set or "*" in allowed_set:
+            return True
+        return self._position_trade_style(position) in allowed_set
+
+    def _move_dz_stoploss_triggered(
+        self,
+        position: OpenPosition,
+        held_dz: float,
+        threshold: float,
+    ) -> tuple[bool, float | None, float | None, str]:
+        peak = finite_float(position.extra.get("move_dz_stoploss_peak_held_dz"))
+        if peak is None:
+            peak = held_dz
+        else:
+            peak = max(peak, held_dz)
+        position.extra["move_dz_stoploss_peak_held_dz"] = peak
+        drawdown = peak - held_dz
+        position.extra["move_dz_stoploss_peak_drawdown"] = drawdown
+
+        mode = str(getattr(self.config, "move_dz_stoploss_mode", "absolute") or "absolute").strip().lower()
+        if mode in {"absolute", "held_dz", "abs"}:
+            return held_dz <= -threshold, peak, drawdown, "absolute"
+        if mode in {"from_peak_nonpos", "peak_nonpos", "peak_drawdown_nonpos"}:
+            return drawdown >= threshold and held_dz <= 0.0, peak, drawdown, "from_peak_nonpos"
+        if mode in {"from_peak", "peak_drawdown"}:
+            return drawdown >= threshold, peak, drawdown, "from_peak"
+
+        self._remember_error(f"MOVE_DZ_STOPLOSS_UNKNOWN_MODE:{mode}")
+        return held_dz <= -threshold, peak, drawdown, "absolute"
 
     def _maybe_execute_move_dz_stoploss(self, now_utc: datetime, snapshot: dict[str, Any] | None) -> None:
         position = self.active_position
@@ -1327,6 +1374,8 @@ class StatsBot:
         held_dz = finite_float(snapshot.get(f"{held_prefix}_move_dz"))
         bid = finite_float(snapshot.get(f"{held_prefix}_bid"))
         threshold = self.config.move_dz_stoploss_threshold
+        peak_held_dz = finite_float(position.extra.get("move_dz_stoploss_peak_held_dz"))
+        peak_drawdown = finite_float(position.extra.get("move_dz_stoploss_peak_drawdown"))
         if (
             position.hedge_leg is not None
             or position.pressure_defence_status in {"submitted", "pending", "filled", "failed"}
@@ -1337,26 +1386,84 @@ class StatsBot:
                 held_dz=held_dz,
                 bid=bid,
                 threshold=threshold,
+                peak_held_dz=peak_held_dz,
+                peak_drawdown=peak_drawdown,
                 reason="PRESSURE_DEFENCE_ACTIVE",
-            )
-            return
-        if bool(position.extra.get("move_dz_stoploss_attempted")):
-            self._remember_move_dz_stoploss(
-                str(position.extra.get("move_dz_stoploss_status") or "submitted"),
-                held_dz=held_dz,
-                bid=bid,
-                threshold=threshold,
-                reason=str(position.extra.get("move_dz_stoploss_reason") or ""),
             )
             return
         if held_dz is None:
             self._remember_move_dz_stoploss("armed", held_dz=None, bid=bid, threshold=threshold, reason="NO_HELD_DZ")
             return
-        if bid is None or bid <= 0.0:
-            self._remember_move_dz_stoploss("armed", held_dz=held_dz, bid=bid, threshold=threshold, reason="NO_BID")
+        triggered, peak_held_dz, peak_drawdown, mode = self._move_dz_stoploss_triggered(position, held_dz, threshold)
+        if not self._move_dz_stoploss_style_allowed(position):
+            self._remember_move_dz_stoploss(
+                "armed",
+                held_dz=held_dz,
+                bid=bid,
+                threshold=threshold,
+                peak_held_dz=peak_held_dz,
+                peak_drawdown=peak_drawdown,
+                reason=f"STYLE_NOT_ENABLED:{self._position_trade_style(position) or 'unknown'}",
+            )
             return
-        if held_dz > -threshold:
-            self._remember_move_dz_stoploss("armed", held_dz=held_dz, bid=bid, threshold=threshold)
+        if bid is None or bid <= 0.0:
+            self._remember_move_dz_stoploss(
+                "armed",
+                held_dz=held_dz,
+                bid=bid,
+                threshold=threshold,
+                peak_held_dz=peak_held_dz,
+                peak_drawdown=peak_drawdown,
+                reason="NO_BID",
+            )
+            return
+        already_attempted = bool(position.extra.get("move_dz_stoploss_attempted"))
+        if not triggered and not already_attempted:
+            self._remember_move_dz_stoploss(
+                "armed",
+                held_dz=held_dz,
+                bid=bid,
+                threshold=threshold,
+                peak_held_dz=peak_held_dz,
+                peak_drawdown=peak_drawdown,
+                reason=mode,
+            )
+            return
+        last_attempt_raw = position.extra.get("move_dz_stoploss_last_attempt_utc")
+        last_attempt = None
+        if isinstance(last_attempt_raw, str):
+            try:
+                last_attempt = datetime.fromisoformat(last_attempt_raw)
+            except ValueError:
+                last_attempt = None
+        elif isinstance(last_attempt_raw, datetime):
+            last_attempt = last_attempt_raw
+        if already_attempted and last_attempt is not None:
+            if last_attempt.tzinfo is None:
+                last_attempt = last_attempt.replace(tzinfo=timezone.utc)
+            retry_age = (now_utc - last_attempt).total_seconds()
+            if retry_age < self.config.exit_retry_cadence_seconds:
+                self._remember_move_dz_stoploss(
+                    "retry_wait",
+                    held_dz=held_dz,
+                    bid=bid,
+                    threshold=threshold,
+                    peak_held_dz=peak_held_dz,
+                    peak_drawdown=peak_drawdown,
+                    reason=f"RETRY_WAIT:{retry_age:.2f}s",
+                )
+                return
+        if not already_attempted:
+            position.extra["move_dz_stoploss_first_attempt_perf"] = time.perf_counter()
+            position.extra["move_dz_stoploss_first_triggered_at_utc"] = now_utc.isoformat()
+            position.extra["move_dz_stoploss_attempt_count"] = 0
+        if already_attempted and not position.exit_triggered:
+            position.exit_triggered = True
+            position.exit_reason = "MOVE_DZ_STOPLOSS"
+        if not triggered and already_attempted:
+            # Once a stoploss has started, keep working the remaining shares.
+            position.extra["move_dz_stoploss_recovered_after_trigger"] = True
+        if bid is None or bid <= 0.0:
             return
         shares = max(0.0, position.shares)
         if shares <= self.config.dust_share_threshold:
@@ -1367,11 +1474,17 @@ class StatsBot:
         )
         order_type = str(self.config.move_dz_stoploss_order_type or "FAK").upper()
         position.extra["move_dz_stoploss_attempted"] = True
-        position.extra["move_dz_stoploss_triggered_at_utc"] = now_utc.isoformat()
+        position.extra["move_dz_stoploss_last_attempt_utc"] = now_utc.isoformat()
+        position.extra["move_dz_stoploss_triggered_at_utc"] = position.extra.get(
+            "move_dz_stoploss_first_triggered_at_utc",
+            now_utc.isoformat(),
+        )
         position.extra["move_dz_stoploss_held_dz"] = held_dz
         position.extra["move_dz_stoploss_bid"] = bid
         position.extra["move_dz_stoploss_limit_price"] = limit_price
         position.extra["move_dz_stoploss_order_type"] = order_type
+        position.extra["move_dz_stoploss_mode"] = mode
+        position.extra["move_dz_stoploss_attempt_count"] = int(position.extra.get("move_dz_stoploss_attempt_count") or 0) + 1
         position.exit_triggered = True
         position.exit_reason = "MOVE_DZ_STOPLOSS"
         self.stoploss_submitted += 1
@@ -1396,9 +1509,6 @@ class StatsBot:
             except Exception as exc:
                 result = OrderResult(False, None, "ERROR", str(exc), matched_shares=0.0, price=limit_price)
         elapsed_ms = (time.perf_counter() - submit_start) * 1000.0
-        if not hasattr(self, "recent_stoploss_latency_ms"):
-            self.recent_stoploss_latency_ms = collections.deque(maxlen=5)
-        self.recent_stoploss_latency_ms.append(elapsed_ms)
         matched = float(result.matched_shares or 0.0)
         fill_price = finite_float(result.price) or limit_price
         status = result.status
@@ -1419,7 +1529,11 @@ class StatsBot:
                 "bid": bid,
                 "limit_price": limit_price,
                 "held_dz": held_dz,
+                "peak_held_dz": peak_held_dz,
+                "peak_drawdown": peak_drawdown,
                 "threshold": threshold,
+                "mode": mode,
+                "attempt_count": position.extra["move_dz_stoploss_attempt_count"],
                 "order_type": order_type,
                 "matched_shares": matched,
                 "fill_price": fill_price,
@@ -1431,19 +1545,30 @@ class StatsBot:
         position.extra["move_dz_stoploss_order_status"] = status
         position.extra["move_dz_stoploss_elapsed_ms"] = elapsed_ms
         if matched > self.config.dust_share_threshold:
-            self.stoploss_filled += 1
+            will_close = matched >= position.shares - self.config.dust_share_threshold
+            total_elapsed_ms = elapsed_ms
+            first_attempt_perf = finite_float(position.extra.get("move_dz_stoploss_first_attempt_perf"))
+            if first_attempt_perf is not None:
+                total_elapsed_ms = (time.perf_counter() - first_attempt_perf) * 1000.0
             self._remember_move_dz_stoploss(
                 "filled" if matched >= shares - self.config.dust_share_threshold else "partial",
                 held_dz=held_dz,
                 bid=bid,
                 threshold=threshold,
+                peak_held_dz=peak_held_dz,
+                peak_drawdown=peak_drawdown,
                 order_type=order_type,
-                elapsed_ms=elapsed_ms,
+                elapsed_ms=total_elapsed_ms if will_close else elapsed_ms,
                 limit_price=limit_price,
                 matched_shares=matched,
                 order_id=result.order_id,
             )
             self._apply_exit_fill(matched, fill_price, now_utc, "MOVE_DZ_STOPLOSS")
+            if will_close:
+                self.stoploss_filled += 1
+                if not hasattr(self, "recent_stoploss_latency_ms"):
+                    self.recent_stoploss_latency_ms = collections.deque(maxlen=5)
+                self.recent_stoploss_latency_ms.append(total_elapsed_ms)
             return
         self.stoploss_failed += 1
         self._remember_move_dz_stoploss(
@@ -1451,6 +1576,8 @@ class StatsBot:
             held_dz=held_dz,
             bid=bid,
             threshold=threshold,
+            peak_held_dz=peak_held_dz,
+            peak_drawdown=peak_drawdown,
             order_type=order_type,
             elapsed_ms=elapsed_ms,
             reason=f"NO_MATCH:{status}",
@@ -4449,6 +4576,13 @@ class StatsBot:
                         "session_bucket",
                         "macro_session",
                         "cb_close_1s",
+                        "cb_signal_price",
+                        "cb_signal_price_mode",
+                        "cb_twap_30s_discrete_1s",
+                        "cb_twap_open_30s_discrete_1s",
+                        "cb_twap_signed_bps_raw",
+                        "cb_twap_max_sample_staleness_seconds",
+                        "cb_spot_signed_bps_raw",
                         "btc_mom_20s_bps",
                         "cb_signed_bps_raw",
                         "signed_bps_bucket",
@@ -4550,6 +4684,13 @@ class StatsBot:
                     snapshot.get("session_bucket", "") if snapshot else "",
                     snapshot.get("macro_session", "") if snapshot else "",
                     _fmt(snapshot.get("cb_close_1s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("cb_signal_price"), 6, "") if snapshot else "",
+                    snapshot.get("cb_signal_price_mode", "") if snapshot else "",
+                    _fmt(snapshot.get("cb_twap_30s_discrete_1s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("cb_twap_open_30s_discrete_1s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("cb_twap_signed_bps_raw"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("cb_twap_max_sample_staleness_seconds"), 3, "") if snapshot else "",
+                    _fmt(snapshot.get("cb_spot_signed_bps_raw"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("btc_mom_20s_bps"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("cb_signed_bps_raw"), 6, "") if snapshot else "",
                     snapshot.get("signed_bps_bucket", "") if snapshot else "",
@@ -4819,7 +4960,14 @@ class StatsBot:
                     else:
                         lines.append(f"    style_ladder      : {level} ({session} {style} +{penalty * 100:.0f}c)")
             lines.append(f"    elapsed_seconds   : {_fmt(snapshot.get('elapsed_seconds_since_market_start'), 1)}")
-            lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
+            signal_price_mode = str(snapshot.get("cb_signal_price_mode") or "spot")
+            if "twap" in signal_price_mode:
+                lines.append(
+                    f"    btc_twap_30s      : {_fmt(snapshot.get('cb_twap_30s_discrete_1s'), 2)} "
+                    f"(spot {_fmt(snapshot.get('cb_close_1s'), 2)})"
+                )
+            else:
+                lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
             lines.append(f"    signed_bps        : {self._dashboard_signed_bps_text(snapshot)}")
             signal_name = str(snapshot.get("policy_signal_name") or "move_z")
             if signal_name not in {"move_z", "move_dz"}:
