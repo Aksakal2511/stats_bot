@@ -26,7 +26,7 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_MACRO_POLICY_BUNDLE = (
     REPO_ROOT
     / "strategy"
-    / "btc_w30_hybrid_stagea_pb_time_nyse_wide_c003_hl120_excl_apr29_may18_weekday_included_c05_m06_weekend_excluded_c08_m10_t75_240_jul25_v1"
+    / "btc_w60_stagea_pb_time_nyse_wide_c003_hl120_lifetime_excl_apr29_may18_daytype_included_c08_m10_t75_240_jul25_v1"
     / "strategy_manifest.json"
 )
 

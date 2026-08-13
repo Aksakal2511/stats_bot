@@ -4996,6 +4996,14 @@ class StatsBot:
         if presign_text:
             lines.append(f"    presign           : {presign_text}")
         lines.append(f"    {balance_label:<18}: ${balance_value:.2f}")
+        if self.config.paper_trading:
+            wallet_delta = float(self.balance) - float(self.config.starting_balance)
+        elif self.wallet_balance_live is not None and self.wallet_balance_start_live is not None:
+            wallet_delta = float(self.wallet_balance_live) - float(self.wallet_balance_start_live)
+        else:
+            wallet_delta = None
+        if wallet_delta is not None:
+            lines.append(f"    wallet_delta      : {wallet_delta:+.2f}")
         lines.append(f"    realized_pnl      : {self.realized_pnl:+.2f}")
         submission_fills, submission_attempts = _submission_fill_attempt_counts(
             self.entry_fills_by_window, self.entry_attempts_by_window
@@ -5129,8 +5137,10 @@ class StatsBot:
             lines.append(f"    elapsed_seconds   : {_fmt(snapshot.get('elapsed_seconds_since_market_start'), 1)}")
             signal_price_mode = str(snapshot.get("cb_signal_price_mode") or "spot")
             if "twap" in signal_price_mode:
+                twap_seconds = 60 if "w60" in signal_price_mode.lower() or "60s" in signal_price_mode.lower() else 30
+                twap_column = f"cb_twap_{twap_seconds}s_discrete_1s"
                 lines.append(
-                    f"    btc_twap_30s      : {_fmt(snapshot.get('cb_twap_30s_discrete_1s'), 2)} "
+                    f"    btc_twap_{twap_seconds}s      : {_fmt(snapshot.get(twap_column), 2)} "
                     f"(spot {_fmt(snapshot.get('cb_close_1s'), 2)})"
                 )
             else:

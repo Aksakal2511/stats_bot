@@ -343,6 +343,13 @@ def compute_live_snapshot(
         window_seconds=30,
     )
     analytic_w30_fair_up = _normal_cdf(analytic_w30_z)
+    analytic_w60_z, analytic_w60_effective_tte = _analytic_twap_pre_z(
+        spot_distance_bps=float(spot_signed_bps_raw),
+        local_volatility_1h_bps=local_volatility_1h_bps,
+        tte_seconds=float(tte_seconds),
+        window_seconds=60,
+    )
+    analytic_w60_fair_up = _normal_cdf(analytic_w60_z)
     spot_distance_z, spot_distance_z_delta_2s = _distance_z_delta(
         merged_rows,
         now_utc=now_utc,
@@ -360,6 +367,10 @@ def compute_live_snapshot(
     twap_now: float | None = None
     twap_open: float | None = None
     twap_prior: float | None = None
+    twap_60_now: float | None = None
+    twap_60_open: float | None = None
+    twap_60_now_staleness: int | None = None
+    twap_60_open_staleness: int | None = None
     twap_now_staleness: int | None = None
     twap_open_staleness: int | None = None
     is_discrete_twap_signal = normalized_signal_mode in {
@@ -372,9 +383,24 @@ def compute_live_snapshot(
         "coinbase_analytic_twap_pre_w30s",
         "coinbase_twap_analytic_pre_w30s",
     }
-    if is_discrete_twap_signal or is_analytic_w30_signal:
+    is_analytic_w60_signal = normalized_signal_mode in {
+        "analytic_twap_pre_w60s",
+        "coinbase_analytic_twap_pre_w60s",
+        "coinbase_twap_analytic_pre_w60s",
+    }
+    if is_discrete_twap_signal or is_analytic_w30_signal or is_analytic_w60_signal:
         twap_now, twap_now_staleness = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=now_utc)
         twap_open, twap_open_staleness = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=market_start_utc)
+        twap_60_now, twap_60_now_staleness = _discrete_ffill_twap(
+            rows_by_ts=btc_rows,
+            target_utc=now_utc,
+            sample_seconds=60,
+        )
+        twap_60_open, twap_60_open_staleness = _discrete_ffill_twap(
+            rows_by_ts=btc_rows,
+            target_utc=market_start_utc,
+            sample_seconds=60,
+        )
         prior_dt = now_utc - timedelta(seconds=MOVE_DZ_MOMENTUM_SECONDS)
         twap_prior, _ = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=prior_dt)
         if is_discrete_twap_signal:
@@ -387,9 +413,18 @@ def compute_live_snapshot(
                 value for value in (twap_now_staleness, twap_open_staleness) if value is not None
             )
         else:
-            normalized_signal_mode = "coinbase_analytic_twap_pre_w30s"
+            normalized_signal_mode = (
+                "coinbase_analytic_twap_pre_w60s"
+                if is_analytic_w60_signal
+                else "coinbase_analytic_twap_pre_w30s"
+            )
+            staleness_values = (
+                (twap_60_now_staleness, twap_60_open_staleness)
+                if is_analytic_w60_signal
+                else (twap_now_staleness, twap_open_staleness)
+            )
             signal_max_staleness_seconds = max(
-                (value for value in (twap_now_staleness, twap_open_staleness) if value is not None),
+                (value for value in staleness_values if value is not None),
                 default=None,
             )
     else:
@@ -481,11 +516,36 @@ def compute_live_snapshot(
         "down_analytic_twap_pre_fair_w30s": (
             float("nan") if analytic_w30_fair_up is None else float(1.0 - analytic_w30_fair_up)
         ),
+        "analytic_twap_pre_effective_tte_w60s": (
+            float("nan") if analytic_w60_effective_tte is None else float(analytic_w60_effective_tte)
+        ),
+        "analytic_twap_pre_z_w60s": float("nan") if analytic_w60_z is None else float(analytic_w60_z),
+        "analytic_twap_pre_fair_up_w60s": (
+            float("nan") if analytic_w60_fair_up is None else float(analytic_w60_fair_up)
+        ),
+        "analytic_twap_pre_fair_down_w60s": (
+            float("nan") if analytic_w60_fair_up is None else float(1.0 - analytic_w60_fair_up)
+        ),
+        "up_analytic_twap_pre_z_w60s": float("nan") if analytic_w60_z is None else float(analytic_w60_z),
+        "down_analytic_twap_pre_z_w60s": float("nan") if analytic_w60_z is None else float(-analytic_w60_z),
+        "up_analytic_twap_pre_fair_w60s": (
+            float("nan") if analytic_w60_fair_up is None else float(analytic_w60_fair_up)
+        ),
+        "down_analytic_twap_pre_fair_w60s": (
+            float("nan") if analytic_w60_fair_up is None else float(1.0 - analytic_w60_fair_up)
+        ),
         "analytic_twap_pre_method": "spot_bps_over_rv_sqrt_tte_minus_2w_over_3",
         "cb_twap_30s_discrete_1s": float("nan") if twap_now is None else float(twap_now),
         "cb_twap_open_30s_discrete_1s": float("nan") if twap_open is None else float(twap_open),
+        "cb_twap_60s_discrete_1s": float("nan") if twap_60_now is None else float(twap_60_now),
+        "cb_twap_open_60s_discrete_1s": float("nan") if twap_60_open is None else float(twap_60_open),
         "cb_twap_signed_bps_raw": (
             float("nan") if twap_now is None or twap_open is None else 10000.0 * (twap_now - twap_open) / twap_open
+        ),
+        "cb_twap_60s_signed_bps_raw": (
+            float("nan")
+            if twap_60_now is None or twap_60_open is None
+            else 10000.0 * (twap_60_now - twap_60_open) / twap_60_open
         ),
         "cb_twap_max_sample_staleness_seconds": (
             float("nan") if signal_max_staleness_seconds is None else float(signal_max_staleness_seconds)
