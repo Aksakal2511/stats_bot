@@ -1,0 +1,112 @@
+{
+  "schema_version": 3,
+  "policy_type": "continuous_surface",
+  "strategy_id": "btc_w30_hybrid_stagea_pb_time_nyse_wide_c003_hl120_excl_apr29_may18_weekday_included_c05_m06_weekend_excluded_c08_m10_t75_240_jul25_v1",
+  "description": "W30 analytic TWAP hybrid Stage A nyse_wide price-bucket model with weekday C05/M06 and weekend C08/M10 edges.",
+  "created_at_utc": "2026-08-13T16:06:45.143929+00:00",
+  "training_start": "2026-02-14",
+  "training_end": "2026-07-25",
+  "training_segments": [
+    [
+      "2026-02-14",
+      "2026-04-28"
+    ],
+    [
+      "2026-05-19",
+      "2026-07-25"
+    ]
+  ],
+  "excluded_training_ranges": [
+    [
+      "2026-04-29",
+      "2026-05-18"
+    ]
+  ],
+  "signal_source": "coinbase_btc_usd",
+  "signal_feature": "move_dz",
+  "signal_price_mode": "coinbase_analytic_twap_pre_w30s",
+  "settlement_label": "cb_twap_UP_outcome",
+  "display_session_width_hours": 4,
+  "entry": {
+    "edge_profile": "w30_hybrid_weekday_c05_m06_weekend_c08_m10",
+    "continuation_edge": 0.05,
+    "mean_reversion_edge": 0.06,
+    "min_tte": 75,
+    "max_tte": 240,
+    "min_price": 0.2,
+    "max_price": 0.8,
+    "shares": 5,
+    "max_quote_spread": 0.03,
+    "unique_markets": 39078
+  },
+  "model": {
+    "artifact": "surface_model_weekday_included_hl120.pkl",
+    "kind": "stagea_hybrid_weekday_included_weekend_excluded",
+    "label": "w30_hybrid_stagea_pb_time_nyse_wide_c0.03_weekday_included_hl120_weekend_excluded_hl120",
+    "c_value": 0.03,
+    "day_type_mode": "hybrid",
+    "side_mode": "pooled",
+    "policy_level": "hybrid|POOLED",
+    "price_bucket_scheme": "asymmetric",
+    "stagea_time_scheme": "nyse_wide",
+    "training_rows": 14683351
+  },
+  "model_branches": {
+    "weekday": {
+      "artifact": "surface_model_weekday_included_hl120.pkl",
+      "kind": "stagea_pb_time",
+      "label": "w30_weekday_included_stagea_pb_time_nyse_wide_c0.03_hl120",
+      "c_value": 0.03,
+      "recency_half_life_days": 120,
+      "day_type_mode": "included",
+      "side_mode": "pooled",
+      "policy_level": "weekday|POOLED",
+      "price_bucket_scheme": "asymmetric",
+      "stagea_time_scheme": "nyse_wide",
+      "training_rows": 6005076,
+      "bucket_rows": {
+        "p20_30": 922363,
+        "p30_40": 983869,
+        "p40_45": 507684,
+        "p45_48": 310924,
+        "p48_52": 424607,
+        "p52_55": 309196,
+        "p55_60": 514303,
+        "p60_70": 995227,
+        "p70_80": 1036903
+      }
+    },
+    "weekend": {
+      "artifact": "surface_model_weekend_excluded_hl120.pkl",
+      "kind": "stagea_pb_time",
+      "label": "w30_weekend_excluded_stagea_pb_time_nyse_wide_c0.03_hl120",
+      "c_value": 0.03,
+      "recency_half_life_days": 120,
+      "day_type_mode": "excluded",
+      "side_mode": "pooled",
+      "policy_level": "weekend_from_ALL|POOLED",
+      "price_bucket_scheme": "asymmetric",
+      "stagea_time_scheme": "nyse_wide",
+      "training_rows": 8678275,
+      "bucket_rows": {
+        "p20_30": 1295720,
+        "p30_40": 1422107,
+        "p40_45": 746472,
+        "p45_48": 459195,
+        "p48_52": 630435,
+        "p52_55": 458888,
+        "p55_60": 757148,
+        "p60_70": 1447572,
+        "p70_80": 1460738
+      }
+    }
+  },
+  "export_inputs": {
+    "distance_root": "/Volumes/Kate_DATA/policy_finder/data/artifacts/distance_to_beat_analytic_twap_fair_w30_w60_20260214_20260725",
+    "outcomes": "/Volumes/Kate_DATA/policy_finder/data/artifacts/synthetic_twap30_labels_coinbase_discrete_1s_20260214_20260725/combined.parquet",
+    "outcome_column": "cb_twap_UP_outcome",
+    "move_dz_column": "side_analytic_twap_pre_z_w30s",
+    "outcome_matched_markets": 46144,
+    "outcome_missing_markets": 0
+  }
+}

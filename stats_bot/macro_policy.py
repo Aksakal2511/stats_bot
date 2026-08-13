@@ -819,6 +819,22 @@ class MacroLocalPolicy:
             elapsed = 300.0 - tte
 
         if self.signal_feature == "move_dz":
+            if self.signal_price_mode in {
+                "analytic_twap_pre_w30s",
+                "coinbase_analytic_twap_pre_w30s",
+                "coinbase_twap_analytic_pre_w30s",
+            }:
+                side_key = side.lower()
+                move_dz = finite_float(snapshot.get(f"{side_key}_analytic_twap_pre_z_w30s"))
+                if move_dz is None:
+                    base_z = finite_float(snapshot.get("analytic_twap_pre_z_w30s"))
+                    if base_z is not None:
+                        move_dz = base_z if side == "UP" else -base_z
+                spot_bps = self._first_finite(snapshot, "cb_spot_signed_bps_raw", "cb_signed_bps_raw")
+                if move_dz is None or spot_bps is None:
+                    return None
+                aligned_bps = float(spot_bps) if side == "UP" else -float(spot_bps)
+                return float(move_dz), float(aligned_bps)
             close = self._first_finite(snapshot, "cb_signal_price", "cb_close_1s")
             anchor = self._first_finite(
                 snapshot,

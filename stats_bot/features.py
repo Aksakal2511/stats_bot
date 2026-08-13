@@ -203,6 +203,35 @@ def _distance_to_beat_z(
     return float(distance_bps / remaining_vol)
 
 
+def _analytic_twap_pre_z(
+    *,
+    spot_distance_bps: float | None,
+    local_volatility_1h_bps: float | None,
+    tte_seconds: float | None,
+    window_seconds: int = 30,
+) -> tuple[float | None, float | None]:
+    """Pre-settlement TWAP z using variance shortened by 2w/3."""
+    if (
+        spot_distance_bps is None
+        or local_volatility_1h_bps is None
+        or tte_seconds is None
+        or not math.isfinite(float(spot_distance_bps))
+        or not math.isfinite(float(local_volatility_1h_bps))
+        or not math.isfinite(float(tte_seconds))
+        or local_volatility_1h_bps <= 0.0
+    ):
+        return None, None
+    effective_tte = max(1.0, float(tte_seconds) - (2.0 * float(window_seconds) / 3.0))
+    denom = max(0.05, float(local_volatility_1h_bps) * math.sqrt(effective_tte / 3600.0))
+    return float(float(spot_distance_bps) / denom), float(effective_tte)
+
+
+def _normal_cdf(value: float | None) -> float | None:
+    if value is None or not math.isfinite(float(value)):
+        return None
+    return float(0.5 * (1.0 + math.erf(float(value) / math.sqrt(2.0))))
+
+
 def _distance_z_delta(
     rows: list[dict[str, Any]],
     *,
@@ -307,6 +336,13 @@ def compute_live_snapshot(
     tte_seconds = max(0.0, (market_end_utc - now_utc).total_seconds())
     elapsed_seconds = max(0.0, (now_utc - market_start_utc).total_seconds())
     spot_signed_bps_raw = 10000.0 * (latest_spot_close - open_price) / open_price
+    analytic_w30_z, analytic_w30_effective_tte = _analytic_twap_pre_z(
+        spot_distance_bps=float(spot_signed_bps_raw),
+        local_volatility_1h_bps=local_volatility_1h_bps,
+        tte_seconds=float(tte_seconds),
+        window_seconds=30,
+    )
+    analytic_w30_fair_up = _normal_cdf(analytic_w30_z)
     spot_distance_z, spot_distance_z_delta_2s = _distance_z_delta(
         merged_rows,
         now_utc=now_utc,
@@ -326,23 +362,36 @@ def compute_live_snapshot(
     twap_prior: float | None = None
     twap_now_staleness: int | None = None
     twap_open_staleness: int | None = None
-    if normalized_signal_mode in {
+    is_discrete_twap_signal = normalized_signal_mode in {
         "twap_30s",
         "twap_30s_discrete_1s",
         "coinbase_twap_30s_discrete_1s",
-    }:
-        normalized_signal_mode = "coinbase_twap_30s_discrete_1s"
+    }
+    is_analytic_w30_signal = normalized_signal_mode in {
+        "analytic_twap_pre_w30s",
+        "coinbase_analytic_twap_pre_w30s",
+        "coinbase_twap_analytic_pre_w30s",
+    }
+    if is_discrete_twap_signal or is_analytic_w30_signal:
         twap_now, twap_now_staleness = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=now_utc)
         twap_open, twap_open_staleness = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=market_start_utc)
         prior_dt = now_utc - timedelta(seconds=MOVE_DZ_MOMENTUM_SECONDS)
         twap_prior, _ = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=prior_dt)
-        if twap_now is None or twap_open is None:
-            return None
-        signal_close = twap_now
-        signal_anchor = twap_open
-        signal_max_staleness_seconds = max(
-            value for value in (twap_now_staleness, twap_open_staleness) if value is not None
-        )
+        if is_discrete_twap_signal:
+            normalized_signal_mode = "coinbase_twap_30s_discrete_1s"
+            if twap_now is None or twap_open is None:
+                return None
+            signal_close = twap_now
+            signal_anchor = twap_open
+            signal_max_staleness_seconds = max(
+                value for value in (twap_now_staleness, twap_open_staleness) if value is not None
+            )
+        else:
+            normalized_signal_mode = "coinbase_analytic_twap_pre_w30s"
+            signal_max_staleness_seconds = max(
+                (value for value in (twap_now_staleness, twap_open_staleness) if value is not None),
+                default=None,
+            )
     else:
         normalized_signal_mode = "spot"
     signed_bps_raw = 10000.0 * (signal_close - signal_anchor) / signal_anchor
@@ -414,6 +463,25 @@ def compute_live_snapshot(
         "cb_spot_distance_z_delta_2s": (
             float("nan") if spot_distance_z_delta_2s is None else float(spot_distance_z_delta_2s)
         ),
+        "analytic_twap_pre_effective_tte_w30s": (
+            float("nan") if analytic_w30_effective_tte is None else float(analytic_w30_effective_tte)
+        ),
+        "analytic_twap_pre_z_w30s": float("nan") if analytic_w30_z is None else float(analytic_w30_z),
+        "analytic_twap_pre_fair_up_w30s": (
+            float("nan") if analytic_w30_fair_up is None else float(analytic_w30_fair_up)
+        ),
+        "analytic_twap_pre_fair_down_w30s": (
+            float("nan") if analytic_w30_fair_up is None else float(1.0 - analytic_w30_fair_up)
+        ),
+        "up_analytic_twap_pre_z_w30s": float("nan") if analytic_w30_z is None else float(analytic_w30_z),
+        "down_analytic_twap_pre_z_w30s": float("nan") if analytic_w30_z is None else float(-analytic_w30_z),
+        "up_analytic_twap_pre_fair_w30s": (
+            float("nan") if analytic_w30_fair_up is None else float(analytic_w30_fair_up)
+        ),
+        "down_analytic_twap_pre_fair_w30s": (
+            float("nan") if analytic_w30_fair_up is None else float(1.0 - analytic_w30_fair_up)
+        ),
+        "analytic_twap_pre_method": "spot_bps_over_rv_sqrt_tte_minus_2w_over_3",
         "cb_twap_30s_discrete_1s": float("nan") if twap_now is None else float(twap_now),
         "cb_twap_open_30s_discrete_1s": float("nan") if twap_open is None else float(twap_open),
         "cb_twap_signed_bps_raw": (
