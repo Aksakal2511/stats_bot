@@ -336,20 +336,12 @@ def compute_live_snapshot(
     tte_seconds = max(0.0, (market_end_utc - now_utc).total_seconds())
     elapsed_seconds = max(0.0, (now_utc - market_start_utc).total_seconds())
     spot_signed_bps_raw = 10000.0 * (latest_spot_close - open_price) / open_price
-    analytic_w30_z, analytic_w30_effective_tte = _analytic_twap_pre_z(
-        spot_distance_bps=float(spot_signed_bps_raw),
-        local_volatility_1h_bps=local_volatility_1h_bps,
-        tte_seconds=float(tte_seconds),
-        window_seconds=30,
-    )
-    analytic_w30_fair_up = _normal_cdf(analytic_w30_z)
-    analytic_w60_z, analytic_w60_effective_tte = _analytic_twap_pre_z(
-        spot_distance_bps=float(spot_signed_bps_raw),
-        local_volatility_1h_bps=local_volatility_1h_bps,
-        tte_seconds=float(tte_seconds),
-        window_seconds=60,
-    )
-    analytic_w60_fair_up = _normal_cdf(analytic_w60_z)
+    analytic_w30_z: float | None = None
+    analytic_w30_effective_tte: float | None = None
+    analytic_w30_fair_up: float | None = None
+    analytic_w60_z: float | None = None
+    analytic_w60_effective_tte: float | None = None
+    analytic_w60_fair_up: float | None = None
     spot_distance_z, spot_distance_z_delta_2s = _distance_z_delta(
         merged_rows,
         now_utc=now_utc,
@@ -418,6 +410,10 @@ def compute_live_snapshot(
                 if is_analytic_w60_signal
                 else "coinbase_analytic_twap_pre_w30s"
             )
+            if is_analytic_w60_signal and twap_60_open is not None and twap_60_open > 0.0:
+                signal_anchor = float(twap_60_open)
+            elif is_analytic_w30_signal and twap_open is not None and twap_open > 0.0:
+                signal_anchor = float(twap_open)
             staleness_values = (
                 (twap_60_now_staleness, twap_60_open_staleness)
                 if is_analytic_w60_signal
@@ -429,6 +425,26 @@ def compute_live_snapshot(
             )
     else:
         normalized_signal_mode = "spot"
+    analytic_w30_anchor = float(twap_open) if twap_open is not None and twap_open > 0.0 else float(open_price)
+    analytic_w60_anchor = (
+        float(twap_60_open) if twap_60_open is not None and twap_60_open > 0.0 else float(open_price)
+    )
+    analytic_w30_distance_bps = 10000.0 * (latest_spot_close - analytic_w30_anchor) / analytic_w30_anchor
+    analytic_w60_distance_bps = 10000.0 * (latest_spot_close - analytic_w60_anchor) / analytic_w60_anchor
+    analytic_w30_z, analytic_w30_effective_tte = _analytic_twap_pre_z(
+        spot_distance_bps=float(analytic_w30_distance_bps),
+        local_volatility_1h_bps=local_volatility_1h_bps,
+        tte_seconds=float(tte_seconds),
+        window_seconds=30,
+    )
+    analytic_w30_fair_up = _normal_cdf(analytic_w30_z)
+    analytic_w60_z, analytic_w60_effective_tte = _analytic_twap_pre_z(
+        spot_distance_bps=float(analytic_w60_distance_bps),
+        local_volatility_1h_bps=local_volatility_1h_bps,
+        tte_seconds=float(tte_seconds),
+        window_seconds=60,
+    )
+    analytic_w60_fair_up = _normal_cdf(analytic_w60_z)
     signed_bps_raw = 10000.0 * (signal_close - signal_anchor) / signal_anchor
     distance_z = _distance_to_beat_z(
         close=signal_close,

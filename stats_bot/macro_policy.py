@@ -835,10 +835,10 @@ class MacroLocalPolicy:
                     base_z = finite_float(snapshot.get(f"analytic_twap_pre_z_{window_suffix}"))
                     if base_z is not None:
                         move_dz = base_z if side == "UP" else -base_z
-                spot_bps = self._first_finite(snapshot, "cb_spot_signed_bps_raw", "cb_signed_bps_raw")
-                if move_dz is None or spot_bps is None:
+                signal_bps = self._first_finite(snapshot, "cb_signed_bps_raw", "cb_spot_signed_bps_raw")
+                if move_dz is None or signal_bps is None:
                     return None
-                aligned_bps = float(spot_bps) if side == "UP" else -float(spot_bps)
+                aligned_bps = float(signal_bps) if side == "UP" else -float(signal_bps)
                 return float(move_dz), float(aligned_bps)
             close = self._first_finite(snapshot, "cb_signal_price", "cb_close_1s")
             anchor = self._first_finite(

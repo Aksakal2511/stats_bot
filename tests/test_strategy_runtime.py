@@ -250,6 +250,73 @@ def test_twap_snapshot_and_policy_signal_use_discrete_twap_not_spot() -> None:
     assert up_signal == pytest.approx(expected_bps / remaining_vol)
 
 
+def test_analytic_w60_signal_uses_coinbase_w60_open_anchor() -> None:
+    start = datetime(2026, 8, 14, 8, 25, tzinfo=timezone.utc)
+    now = start + timedelta(seconds=100)
+    end = start + timedelta(seconds=300)
+    btc_rows = []
+    for offset in range(-60, 101):
+        ts = start + timedelta(seconds=offset)
+        price = 101.0 if offset < 0 else 100.5
+        btc_rows.append(
+            {
+                "timestamp_utc": ts,
+                "open_1s": price,
+                "high_1s": price,
+                "low_1s": price,
+                "close_1s": price,
+                "volume_1s": 1.0,
+            }
+        )
+    pm_rows = [
+        {
+            "timestamp_utc": now,
+            "up_bid": 0.30,
+            "up_ask": 0.31,
+            "up_mid": 0.305,
+            "up_spread": 0.01,
+            "down_bid": 0.69,
+            "down_ask": 0.70,
+            "down_mid": 0.695,
+            "down_spread": 0.01,
+        }
+    ]
+    snapshot = compute_live_snapshot(
+        btc_history=btc_rows,
+        pm_history=pm_rows,
+        now_utc=now,
+        market_start_utc=start,
+        market_end_utc=end,
+        window_open_btc_price=100.0,
+        volatility_edges=VolatilityEdges(1, 0.0, 0.0, {}),
+        market_slug="test",
+        local_volatility_1h_bps=40.0,
+        local_volatility_status="ready",
+        signal_price_mode="coinbase_analytic_twap_pre_w60s",
+    )
+    assert snapshot is not None
+    expected_signal_bps = 10_000.0 * (100.5 - 101.0) / 101.0
+    expected_spot_bps = 10_000.0 * (100.5 - 100.0) / 100.0
+
+    assert snapshot["cb_signal_price_mode"] == "coinbase_analytic_twap_pre_w60s"
+    assert snapshot["cb_price_to_beat_anchor"] == pytest.approx(101.0)
+    assert snapshot["cb_spot_price_to_beat_anchor"] == pytest.approx(100.0)
+    assert snapshot["cb_signed_bps_raw"] == pytest.approx(expected_signal_bps)
+    assert snapshot["cb_spot_signed_bps_raw"] == pytest.approx(expected_spot_bps)
+    assert snapshot["up_analytic_twap_pre_z_w60s"] < 0.0
+    assert snapshot["down_analytic_twap_pre_z_w60s"] > 0.0
+
+    policy = object.__new__(MacroLocalPolicy)
+    policy.signal_feature = "move_dz"
+    policy.signal_price_mode = "coinbase_analytic_twap_pre_w60s"
+    up_signal, up_bps = policy._side_signal_value(snapshot, "UP")
+    down_signal, down_bps = policy._side_signal_value(snapshot, "DOWN")
+    assert up_bps == pytest.approx(expected_signal_bps)
+    assert down_bps == pytest.approx(-expected_signal_bps)
+    assert up_signal < 0.0
+    assert down_signal > 0.0
+
+
 def test_london_session_map_matches_offset250_12bucket_2h_scheme() -> None:
     expected = {
         0: "ASIA_DEEP_LOW",
