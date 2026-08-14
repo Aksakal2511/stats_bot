@@ -819,7 +819,8 @@ class MacroLocalPolicy:
             elapsed = 300.0 - tte
 
         if self.signal_feature == "move_dz":
-            if self.signal_price_mode in {
+            signal_price_mode = getattr(self, "signal_price_mode", "spot")
+            if signal_price_mode in {
                 "analytic_twap_pre_w30s",
                 "coinbase_analytic_twap_pre_w30s",
                 "coinbase_twap_analytic_pre_w30s",
@@ -828,7 +829,7 @@ class MacroLocalPolicy:
                 "coinbase_twap_analytic_pre_w60s",
             }:
                 side_key = side.lower()
-                window_suffix = "w60s" if "w60" in self.signal_price_mode else "w30s"
+                window_suffix = "w60s" if "w60" in signal_price_mode else "w30s"
                 move_dz = finite_float(snapshot.get(f"{side_key}_analytic_twap_pre_z_{window_suffix}"))
                 if move_dz is None:
                     base_z = finite_float(snapshot.get(f"analytic_twap_pre_z_{window_suffix}"))

@@ -24,7 +24,7 @@ from .guards import DrawdownGuard, BpsYesGuard, SessionStyleDrawdownGuard
 from .macro_policy import MacroLocalPolicy
 from .models import HedgeLeg, OpenPosition, PendingEntryOrder, RuntimeEvent
 from .polymarket import BookSnapshot, MarketInfo, OrderResult, PolymarketClient, SignedBuyOrder, WINDOW_SECONDS, round_price
-from .polymarket_ref import POLYMARKET_TWAP_30_SUBSCRIBE, PolymarketReferenceFeed
+from .polymarket_ref import PolymarketReferenceFeed, polymarket_twap_subscribe_message
 from .strategy import (
     EntryDecision,
     ExitDecision,
@@ -412,9 +412,10 @@ class StatsBot:
             on_update=self._on_execution_event if config.binance_perp_trigger_enabled else None,
         )
         self.pm_chainlink = PolymarketReferenceFeed(on_update=self._on_execution_event)
+        twap_diag_window_seconds = getattr(config, "pm_chainlink_twap_diag_window_seconds", 60)
         self.pm_chainlink_twap = PolymarketReferenceFeed(
-            name="pm_chainlink_twap_30s",
-            subscribe_message=POLYMARKET_TWAP_30_SUBSCRIBE,
+            name=f"pm_chainlink_twap_{twap_diag_window_seconds}s",
+            subscribe_message=polymarket_twap_subscribe_message(twap_diag_window_seconds),
             on_update=self._on_execution_event,
         )
         self.guard = BpsYesGuard()
@@ -486,7 +487,7 @@ class StatsBot:
                         ("binance_spot", binance_spot_started),
                         ("binance_perp", binance_perp_started),
                         ("pm_chainlink", pm_chainlink_started),
-                        ("pm_chainlink_twap_30s", pm_chainlink_twap_started),
+                        (f"pm_chainlink_twap_{config.pm_chainlink_twap_diag_window_seconds}s", pm_chainlink_twap_started),
                     )
                     if started
                 )
@@ -520,8 +521,12 @@ class StatsBot:
             {
                 "started": pm_chainlink_twap_started,
                 "enabled": config.pm_chainlink_twap_diag_enabled,
-                "topic": "crypto_prices_twap_thirty",
-                "window_seconds": 30,
+                "topic": (
+                    "crypto_prices_twap_sixty"
+                    if config.pm_chainlink_twap_diag_window_seconds == 60
+                    else "crypto_prices_twap_thirty"
+                ),
+                "window_seconds": config.pm_chainlink_twap_diag_window_seconds,
             },
         )
         self._log_event(
@@ -1015,6 +1020,7 @@ class StatsBot:
         market = self.current_market
         if market is None:
             return {}
+        twap_window_seconds = getattr(self.config, "pm_chainlink_twap_diag_window_seconds", 60)
 
         def _bps(now_value: Any, open_value: Any) -> float | None:
             current = finite_float(now_value)
@@ -1033,12 +1039,15 @@ class StatsBot:
 
         spot_latest = self.pm_chainlink.latest() if self.config.pm_chainlink_feed_enabled else None
         spot_twap_now, spot_twap_staleness = (
-            self.pm_chainlink.discrete_ffill_twap(target_utc=now_utc, sample_seconds=30)
+            self.pm_chainlink.discrete_ffill_twap(target_utc=now_utc, sample_seconds=twap_window_seconds)
             if self.config.pm_chainlink_feed_enabled
             else (None, None)
         )
         spot_twap_open, spot_twap_open_staleness = (
-            self.pm_chainlink.discrete_ffill_twap(target_utc=market.market_start_utc, sample_seconds=30)
+            self.pm_chainlink.discrete_ffill_twap(
+                target_utc=market.market_start_utc,
+                sample_seconds=twap_window_seconds,
+            )
             if self.config.pm_chainlink_feed_enabled
             else (None, None)
         )
@@ -1052,9 +1061,14 @@ class StatsBot:
         official_twap_now = finite_float(twap_latest.get("close_1s")) if twap_latest else None
         official_twap_open = finite_float(twap_open.get("close_1s")) if twap_open else None
         official_twap_signed_bps = _bps(official_twap_now, official_twap_open)
-        cb_twap_now = finite_float(snapshot.get("cb_twap_30s_discrete_1s")) if snapshot else None
-        cb_twap_open = finite_float(snapshot.get("cb_twap_open_30s_discrete_1s")) if snapshot else None
-        cb_twap_bps = finite_float(snapshot.get("cb_twap_signed_bps_raw")) if snapshot else None
+        if twap_window_seconds == 60:
+            cb_twap_now = finite_float(snapshot.get("cb_twap_60s_discrete_1s")) if snapshot else None
+            cb_twap_open = finite_float(snapshot.get("cb_twap_open_60s_discrete_1s")) if snapshot else None
+            cb_twap_bps = finite_float(snapshot.get("cb_twap_60s_signed_bps_raw")) if snapshot else None
+        else:
+            cb_twap_now = finite_float(snapshot.get("cb_twap_30s_discrete_1s")) if snapshot else None
+            cb_twap_open = finite_float(snapshot.get("cb_twap_open_30s_discrete_1s")) if snapshot else None
+            cb_twap_bps = finite_float(snapshot.get("cb_twap_signed_bps_raw")) if snapshot else None
         return {
             "pm_cl_spot_price": finite_float(spot_latest.get("close_1s")) if spot_latest else None,
             "pm_cl_spot_observed_at_utc": spot_latest.get("source_timestamp_utc") if spot_latest else None,
@@ -2975,6 +2989,7 @@ class StatsBot:
                 "binance_perp": "binance_perp_ws",
                 "pm_chainlink": "polymarket_chainlink_ws",
                 "pm_chainlink_twap_30s": "polymarket_chainlink_twap_ws",
+                "pm_chainlink_twap_60s": "polymarket_chainlink_twap_ws",
             }.get(event_type, "polymarket_ws")
             self._log_latency(
                 event_type,

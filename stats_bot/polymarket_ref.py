@@ -22,16 +22,22 @@ POLYMARKET_REF_SUBSCRIBE = {
         }
     ],
 }
-POLYMARKET_TWAP_30_SUBSCRIBE = {
-    "action": "subscribe",
-    "subscriptions": [
-        {
-            "topic": "crypto_prices_twap_thirty",
-            "type": "update",
-            "filters": "{\"symbol\":\"btc/usd\"}",
-        }
-    ],
-}
+def polymarket_twap_subscribe_message(window_seconds: int = 60) -> dict[str, Any]:
+    topic = "crypto_prices_twap_sixty" if int(window_seconds) == 60 else "crypto_prices_twap_thirty"
+    return {
+        "action": "subscribe",
+        "subscriptions": [
+            {
+                "topic": topic,
+                "type": "update",
+                "filters": "{\"symbol\":\"btc/usd\"}",
+            }
+        ],
+    }
+
+
+POLYMARKET_TWAP_30_SUBSCRIBE = polymarket_twap_subscribe_message(30)
+POLYMARKET_TWAP_60_SUBSCRIBE = polymarket_twap_subscribe_message(60)
 
 _websocket_lib = None
 WEBSOCKET_AVAILABLE = None

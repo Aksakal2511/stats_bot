@@ -148,6 +148,7 @@ class BotConfig:
     binance_perp_trigger_enabled: bool
     pm_chainlink_feed_enabled: bool
     pm_chainlink_twap_diag_enabled: bool
+    pm_chainlink_twap_diag_window_seconds: int
     bps_yes_guard_enabled: bool
     session_style_drawdown_guard_enabled: bool
     max_loop_seconds: float | None
@@ -424,6 +425,9 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         binance_perp_trigger_enabled=_bool_env("STATS_BINANCE_PERP_TRIGGER_ENABLED", False),
         pm_chainlink_feed_enabled=_bool_env("STATS_PM_CHAINLINK_FEED_ENABLED", False),
         pm_chainlink_twap_diag_enabled=_bool_env("STATS_PM_CHAINLINK_TWAP_DIAG_ENABLED", False),
+        pm_chainlink_twap_diag_window_seconds=60
+        if _int_env("STATS_PM_CHAINLINK_TWAP_DIAG_WINDOW_SECONDS", 60) >= 60
+        else 30,
         bps_yes_guard_enabled=_bool_env("STATS_BPS_YES_GUARD_ENABLED", False),
         session_style_drawdown_guard_enabled=_bool_env("STATS_SESSION_STYLE_DRAWDOWN_GUARD_ENABLED", False),
         max_loop_seconds=max_loop_seconds,

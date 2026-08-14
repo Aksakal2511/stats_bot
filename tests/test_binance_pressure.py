@@ -127,7 +127,11 @@ def test_chainlink_twap_diagnostics_compare_spot_rebuild_and_official_twap() -> 
     bot = object.__new__(StatsBot)
     start = datetime(2026, 7, 27, 19, 0, tzinfo=timezone.utc)
     now = start.replace(minute=2)
-    bot.config = SimpleNamespace(pm_chainlink_feed_enabled=True, pm_chainlink_twap_diag_enabled=True)
+    bot.config = SimpleNamespace(
+        pm_chainlink_feed_enabled=True,
+        pm_chainlink_twap_diag_enabled=True,
+        pm_chainlink_twap_diag_window_seconds=30,
+    )
     bot.current_market = MarketInfo(
         slug="btc-updown-5m-test",
         market_id="1",

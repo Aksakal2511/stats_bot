@@ -9,7 +9,7 @@ Live TWAP-2 bundle for the BTC 5-minute TWAP settlement era.
 - Weekend branch: day-type excluded, LIFETIME
 - Price buckets: asymmetric, train/entry price range 0.20-0.80
 - Edges: fixed global continuation 12%, mean reversion 14%
-- Entry TTE: 45-200s
+- Entry TTE: 45-240s
 - Training TTE: 45-265s
 - Training: 2026-02-14 to 2026-07-25, excluding 2026-04-29:2026-05-18
 - Training rows: weekday 7,886,115, weekend branch 11,388,613

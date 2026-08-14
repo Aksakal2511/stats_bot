@@ -2,20 +2,20 @@
   "schema_version": 1,
   "timezone": "Europe/London",
   "source": "twap2_hybrid_surface_export",
-  "selected_spec": "TWAP2_HYBRID_STAGEA_PB_TIME_NYSE_WIDE_C003_GLOBAL_C12_M14_T45_200",
+  "selected_spec": "TWAP2_HYBRID_STAGEA_PB_TIME_NYSE_WIDE_C003_GLOBAL_C12_M14_T45_240",
   "default": {
     "continuation": {
       "edge": 0.12,
       "min_tte": 45,
-      "max_tte": 200
+      "max_tte": 240
     },
     "mean_reversion": {
       "edge": 0.14,
       "min_tte": 45,
-      "max_tte": 200
+      "max_tte": 240
     },
     "min_tte": 45,
-    "max_tte": 200
+    "max_tte": 240
   },
   "overrides": {}
 }
