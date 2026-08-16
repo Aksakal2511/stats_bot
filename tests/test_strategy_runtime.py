@@ -317,6 +317,76 @@ def test_analytic_w60_signal_uses_coinbase_w60_open_anchor() -> None:
     assert down_signal > 0.0
 
 
+def test_analytic_w60_stream_signal_uses_current_coinbase_w60_twap() -> None:
+    start = datetime(2026, 8, 14, 8, 25, tzinfo=timezone.utc)
+    now = start + timedelta(seconds=100)
+    end = start + timedelta(seconds=300)
+    btc_rows = []
+    for offset in range(-60, 101):
+        ts = start + timedelta(seconds=offset)
+        price = 101.0 if offset < 70 else 100.5
+        btc_rows.append(
+            {
+                "timestamp_utc": ts,
+                "open_1s": price,
+                "high_1s": price,
+                "low_1s": price,
+                "close_1s": price,
+                "volume_1s": 1.0,
+            }
+        )
+    pm_rows = [
+        {
+            "timestamp_utc": now,
+            "up_bid": 0.30,
+            "up_ask": 0.31,
+            "up_mid": 0.305,
+            "up_spread": 0.01,
+            "down_bid": 0.69,
+            "down_ask": 0.70,
+            "down_mid": 0.695,
+            "down_spread": 0.01,
+        }
+    ]
+    snapshot = compute_live_snapshot(
+        btc_history=btc_rows,
+        pm_history=pm_rows,
+        now_utc=now,
+        market_start_utc=start,
+        market_end_utc=end,
+        window_open_btc_price=100.0,
+        volatility_edges=VolatilityEdges(1, 0.0, 0.0, {}),
+        market_slug="test",
+        local_volatility_1h_bps=40.0,
+        local_volatility_status="ready",
+        signal_price_mode="coinbase_analytic_twap_stream_pre_w60s",
+    )
+    assert snapshot is not None
+    expected_open_twap = 101.0
+    expected_now_twap = (30 * 101.0 + 30 * 100.5) / 60.0
+    expected_stream_bps = 10_000.0 * (expected_now_twap - expected_open_twap) / expected_open_twap
+    expected_spot_bps = 10_000.0 * (100.5 - expected_open_twap) / expected_open_twap
+
+    assert snapshot["cb_signal_price_mode"] == "coinbase_analytic_twap_stream_pre_w60s"
+    assert snapshot["cb_signal_price"] == pytest.approx(expected_now_twap)
+    assert snapshot["cb_price_to_beat_anchor"] == pytest.approx(expected_open_twap)
+    assert snapshot["cb_signed_bps_raw"] == pytest.approx(expected_stream_bps)
+    assert snapshot["analytic_twap_pre_z_w60s"] != pytest.approx(snapshot["analytic_twap_stream_pre_z_w60s"])
+    assert snapshot["up_analytic_twap_pre_z_w60s"] == pytest.approx(
+        expected_spot_bps / (40.0 * math.sqrt((200.0 - 40.0) / 3600.0))
+    )
+
+    policy = object.__new__(MacroLocalPolicy)
+    policy.signal_feature = "move_dz"
+    policy.signal_price_mode = "coinbase_analytic_twap_stream_pre_w60s"
+    up_signal, up_bps = policy._side_signal_value(snapshot, "UP")
+    down_signal, down_bps = policy._side_signal_value(snapshot, "DOWN")
+    assert up_bps == pytest.approx(expected_stream_bps)
+    assert down_bps == pytest.approx(-expected_stream_bps)
+    assert up_signal == pytest.approx(snapshot["up_analytic_twap_stream_pre_z_w60s"])
+    assert down_signal == pytest.approx(snapshot["down_analytic_twap_stream_pre_z_w60s"])
+
+
 def test_london_session_map_matches_offset250_12bucket_2h_scheme() -> None:
     expected = {
         0: "ASIA_DEEP_LOW",
@@ -567,6 +637,48 @@ def test_bps_yes_guard_can_be_disabled_in_bot_entry_path() -> None:
     assert guarded.viable
     assert not guarded.blockers
     assert bot.last_guard_blocker is None
+
+
+def test_entry_signal_persistence_is_separate_from_pending_viability_latch() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        entry_signal_persistence_seconds=1.5,
+        policy_no_longer_viable_latch_seconds=99.0,
+    )
+    bot.current_market = SimpleNamespace(slug="btc-updown-5m-test")
+    bot.entry_signal_persistence = None
+
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("weekday", "nyse_wide_00_08", "p48_52", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.48,
+        selected_ask=0.49,
+        selected_mid=0.485,
+        selected_spread=0.01,
+        selected_trade_value=0.58,
+        selected_policy_edge=0.09,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.08,
+        entry_session_enabled=True,
+        threshold_bps=None,
+    )
+    snapshot = {"selected_price_bucket": "p48_52"}
+    start = datetime(2026, 8, 15, 12, 0, tzinfo=timezone.utc)
+
+    assert not bot._entry_signal_persistence_ready(start, snapshot, decision)
+    assert snapshot["entry_signal_persistence_status"] == "warming"
+    assert snapshot["entry_signal_persistence_required_seconds"] == 1.5
+
+    assert not bot._entry_signal_persistence_ready(start + timedelta(seconds=1.0), snapshot, decision)
+    assert bot._entry_signal_persistence_ready(start + timedelta(seconds=1.5), snapshot, decision)
+    assert snapshot["entry_signal_persistence_status"] == "ready"
+
+    changed_bucket_snapshot = {"selected_price_bucket": "p52_55"}
+    assert not bot._entry_signal_persistence_ready(start + timedelta(seconds=1.6), changed_bucket_snapshot, decision)
+    assert changed_bucket_snapshot["entry_signal_persistence_status"] == "warming"
 
 
 def test_one_tick_spread_is_valid_maker_quote() -> None:

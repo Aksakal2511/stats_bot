@@ -24,7 +24,7 @@
   ],
   "signal_source": "coinbase_btc_usd",
   "signal_feature": "move_dz",
-  "signal_price_mode": "coinbase_analytic_twap_pre_w60s",
+  "signal_price_mode": "coinbase_analytic_twap_stream_pre_w60s",
   "settlement_label": "cb_twap_UP_outcome",
   "display_session_width_hours": 4,
   "entry": {
@@ -105,7 +105,7 @@
     "distance_root": "/Volumes/Kate_DATA/policy_finder/data/artifacts/distance_to_beat_analytic_twap_fair_w30_w60_20260214_20260725",
     "outcomes": "/Volumes/Kate_DATA/policy_finder/data/artifacts/synthetic_twap60_labels_coinbase_discrete_1s_20260214_20260725/combined.parquet",
     "outcome_column": "cb_twap_UP_outcome",
-    "move_dz_column": "side_analytic_twap_pre_z_w60s",
+    "move_dz_column": "side_analytic_twap_stream_pre_z_w60s",
     "outcome_matched_markets": 46144,
     "outcome_missing_markets": 0
   }

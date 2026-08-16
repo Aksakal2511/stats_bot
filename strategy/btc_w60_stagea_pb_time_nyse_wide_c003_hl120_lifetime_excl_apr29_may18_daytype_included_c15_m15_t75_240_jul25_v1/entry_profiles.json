@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "timezone": "Europe/London",
+  "source": "w60_surface_export",
+  "selected_spec": "W60_DAYTYPE_INCLUDED_GLOBAL_C15_M15",
+  "default": {
+    "continuation": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "mean_reversion": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "min_tte": 75,
+    "max_tte": 240
+  },
+  "overrides": {
+    "weekend|h00_04|continuation": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h00_04|mean_reversion": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h04_08|continuation": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h04_08|mean_reversion": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h08_12|continuation": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h08_12|mean_reversion": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h12_16|continuation": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h12_16|mean_reversion": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h16_20|continuation": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h16_20|mean_reversion": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h20_00|continuation": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "weekend|h20_00|mean_reversion": {
+      "edge": 0.15,
+      "min_tte": 75,
+      "max_tte": 240
+    }
+  }
+}

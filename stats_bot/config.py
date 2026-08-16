@@ -26,7 +26,7 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_MACRO_POLICY_BUNDLE = (
     REPO_ROOT
     / "strategy"
-    / "btc_w60_stagea_pb_time_nyse_wide_c003_hl120_lifetime_excl_apr29_may18_daytype_included_c08_m10_t75_240_jul25_v1"
+    / "btc_w60_stagea_pb_time_nyse_wide_c003_hl120_lifetime_excl_apr29_may18_daytype_included_c08_m08_t75_240_jul25_v1"
     / "strategy_manifest.json"
 )
 
@@ -100,6 +100,7 @@ class BotConfig:
     cooldown_seconds: int
     maker_min_spread_ticks: int
     entry_quote_max_age_seconds: float
+    entry_signal_persistence_seconds: float
     entry_resting_max_age_seconds: float
     entry_stale_quote_max_ticks: int
     entry_stale_quote_grace_seconds: float
@@ -333,6 +334,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         cooldown_seconds=max(0, _int_env("STATS_COOLDOWN_SECONDS", 10)),
         maker_min_spread_ticks=max(1, _int_env("STATS_MAKER_MIN_SPREAD_TICKS", 1)),
         entry_quote_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_QUOTE_MAX_AGE_SECONDS", 1.5)),
+        entry_signal_persistence_seconds=max(0.0, _float_env("STATS_ENTRY_SIGNAL_PERSISTENCE_SECONDS", 0.0)),
         entry_resting_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_RESTING_MAX_AGE_SECONDS", 3.0)),
         entry_stale_quote_max_ticks=max(0, _int_env("STATS_ENTRY_STALE_QUOTE_MAX_TICKS", 2)),
         entry_stale_quote_grace_seconds=max(0.0, _float_env("STATS_ENTRY_STALE_QUOTE_GRACE_SECONDS", 0.4)),

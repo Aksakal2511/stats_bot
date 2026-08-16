@@ -827,12 +827,20 @@ class MacroLocalPolicy:
                 "analytic_twap_pre_w60s",
                 "coinbase_analytic_twap_pre_w60s",
                 "coinbase_twap_analytic_pre_w60s",
+                "analytic_twap_stream_pre_w60s",
+                "coinbase_analytic_twap_stream_pre_w60s",
+                "coinbase_twap_stream_analytic_pre_w60s",
             }:
                 side_key = side.lower()
                 window_suffix = "w60s" if "w60" in signal_price_mode else "w30s"
-                move_dz = finite_float(snapshot.get(f"{side_key}_analytic_twap_pre_z_{window_suffix}"))
+                feature_prefix = (
+                    "analytic_twap_stream_pre"
+                    if "stream" in str(signal_price_mode).lower()
+                    else "analytic_twap_pre"
+                )
+                move_dz = finite_float(snapshot.get(f"{side_key}_{feature_prefix}_z_{window_suffix}"))
                 if move_dz is None:
-                    base_z = finite_float(snapshot.get(f"analytic_twap_pre_z_{window_suffix}"))
+                    base_z = finite_float(snapshot.get(f"{feature_prefix}_z_{window_suffix}"))
                     if base_z is not None:
                         move_dz = base_z if side == "UP" else -base_z
                 signal_bps = self._first_finite(snapshot, "cb_signed_bps_raw", "cb_spot_signed_bps_raw")

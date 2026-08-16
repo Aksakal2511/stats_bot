@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import collections
 import csv
+import json
 import logging
 import math
 import queue
@@ -19,7 +20,7 @@ from zoneinfo import ZoneInfo
 from .binance import BinanceTickerFeed, adverse_signed_volume, adverse_z
 from .coinbase import CoinbaseFeed
 from .config import REPO_ROOT, BotConfig, build_config, parse_args
-from .features import compute_live_snapshot
+from .features import compute_live_snapshot, compute_twap_provider_diagnostics
 from .guards import DrawdownGuard, BpsYesGuard, SessionStyleDrawdownGuard
 from .macro_policy import MacroLocalPolicy
 from .models import HedgeLeg, OpenPosition, PendingEntryOrder, RuntimeEvent
@@ -97,6 +98,8 @@ EXECUTION_HEALTH_MIN_SAMPLES = 5
 EXECUTION_HEALTH_WINDOW = 10
 ENTRY_LIFECYCLE_BLOCKING_STATES = {"SUBMITTING", "UNKNOWN", "RESTING", "FILLED"}
 SESSION_STYLE_DRAWDOWN_PER_SHARE_USD = 1.5
+CONTINUATION_OUTER_PRICE_LOW = 0.30
+CONTINUATION_OUTER_PRICE_HIGH = 0.70
 
 
 def _order_status_is_fill_like(status: object | None) -> bool:
@@ -196,6 +199,27 @@ class EntrySubmission:
     submitted_at_utc: datetime
 
 
+@dataclass
+class EntrySignalPersistenceState:
+    market_slug: str
+    side: str
+    trade_style: str
+    price_bucket: str
+    policy_key_text: str
+    started_at_utc: datetime
+    last_seen_at_utc: datetime
+
+    @property
+    def key(self) -> tuple[str, str, str, str, str]:
+        return (
+            self.market_slug,
+            self.side,
+            self.trade_style,
+            self.price_bucket,
+            self.policy_key_text,
+        )
+
+
 @dataclass(frozen=True)
 class EntrySubmissionResult:
     submission: EntrySubmission
@@ -227,6 +251,22 @@ def _event_fields(fields: dict[str, Any]) -> dict[str, Any]:
         else:
             clean[key] = value
     return clean
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (str, int, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    return str(value)
 
 
 def _policy_support_level(snapshot: dict[str, Any] | None) -> tuple[object, object]:
@@ -447,6 +487,7 @@ class StatsBot:
         self.recent_events: collections.deque[RuntimeEvent] = collections.deque(maxlen=10)
         self.last_entry_decision: EntryDecision | None = None
         self.last_exit_decision: ExitDecision | None = None
+        self.entry_signal_persistence: EntrySignalPersistenceState | None = None
         self.last_guard_blocker: str | None = None
         self.last_pressure_defence: dict[str, Any] | None = None
         self.pressure_hedges_submitted = 0
@@ -462,6 +503,10 @@ class StatsBot:
         self.start_time = datetime.now(tz=timezone.utc)
         self.last_dashboard_at: datetime | None = None
         self.last_cadence_second_written: int | None = None
+        self.decision_journal_path: Path | None = None
+        self._decision_journal_lock = threading.Lock()
+        self._decision_journal_last_emit_monotonic = 0.0
+        self._decision_journal_error_logged = False
         self._live_startup_sync_done = False
 
         t0 = time.time()
@@ -560,6 +605,7 @@ class StatsBot:
                 self.trades_log_path = session_dir / "stats_trades.csv"
                 self.orders_log_path = session_dir / "stats_orders.csv"
                 self.latency_log_path = session_dir / "stats_execution_latency.csv"
+                self.decision_journal_path = session_dir / "decision_journal.jsonl"
                 return
         raise RuntimeError("Unable to create session log directory")
 
@@ -640,6 +686,204 @@ class StatsBot:
                 if write_header:
                     writer.writeheader()
                 writer.writerow(row)
+
+    def _record_decision_journal(
+        self,
+        now_utc: datetime,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision | None,
+        *,
+        event_type: str = "decision_tick",
+        extra: dict[str, Any] | None = None,
+        force: bool = False,
+    ) -> None:
+        path = getattr(self, "decision_journal_path", None)
+        if path is None:
+            return
+        if not force and event_type == "decision_tick":
+            monotonic_now = time.monotonic()
+            if monotonic_now - self._decision_journal_last_emit_monotonic < 0.1:
+                return
+            self._decision_journal_last_emit_monotonic = monotonic_now
+
+        market = getattr(self, "current_market", None)
+        pending = getattr(self, "pending_entry", None)
+        position = getattr(self, "active_position", None)
+        state_market_slug = market.slug if market else (snapshot or {}).get("market_slug", "")
+        row: dict[str, Any] = {
+            "timestamp_utc": now_utc.isoformat(),
+            "session_id": getattr(self, "session_id", ""),
+            "mode": "paper" if self.config.paper_trading else "live",
+            "event_type": event_type,
+            "execution_mode": getattr(self.config, "execution_mode", ""),
+            "execution_state": getattr(self, "_entry_submission_state", ""),
+            "submission_inflight": int(self._entry_submission_inflight()),
+            "market_slug": state_market_slug,
+            "market_question": market.question if market else "",
+            "window_ts": getattr(self, "current_window_ts", None),
+            "window_lifecycle_state": self.entry_lifecycle_by_window.get(str(state_market_slug), ""),
+            "window_attempts": self.entry_attempts_by_window.get(str(state_market_slug), 0),
+            "window_fills": self.entry_fills_by_window.get(str(state_market_slug), 0),
+            "pending_entry": int(pending is not None),
+            "active_position": int(position is not None),
+        }
+        if snapshot is not None:
+            for key in (
+                "tte_seconds",
+                "elapsed_seconds_since_market_start",
+                "day_type",
+                "session_bucket",
+                "macro_session",
+                "cb_close_1s",
+                "cb_signal_price",
+                "cb_signal_price_mode",
+                "cb_twap_60s_discrete_1s",
+                "cb_twap_open_60s_discrete_1s",
+                "cb_twap_60s_signed_bps_raw",
+                "cb_twap_max_sample_staleness_seconds",
+                "bn_spot_price",
+                "bn_spot_observed_at_utc",
+                "bn_twap_60s_discrete_1s",
+                "bn_twap_open_60s_discrete_1s",
+                "bn_twap_60s_signed_bps_raw",
+                "bn_twap_max_sample_staleness_seconds",
+                "bn_analytic_twap_stream_pre_z_w60s",
+                "bn_up_analytic_twap_stream_pre_z_w60s",
+                "bn_down_analytic_twap_stream_pre_z_w60s",
+                "bn_analytic_twap_stream_pre_fair_up_w60s",
+                "bn_analytic_twap_stream_pre_fair_down_w60s",
+                "cb_minus_bn_twap_60s",
+                "cb_minus_bn_twap_open_60s",
+                "cb_minus_bn_twap_60s_bps",
+                "cb_z_minus_bn_z_w60s",
+                "cb_bn_avg_twap_60s_signed_bps_raw",
+                "cb_bn_avg_analytic_twap_stream_pre_z_w60s",
+                "cb_bn_avg_up_analytic_twap_stream_pre_z_w60s",
+                "cb_bn_avg_down_analytic_twap_stream_pre_z_w60s",
+                "entry_signal_persistence_status",
+                "entry_signal_persistence_elapsed_seconds",
+                "entry_signal_persistence_required_seconds",
+                "analytic_twap_stream_pre_z_w60s",
+                "up_analytic_twap_stream_pre_z_w60s",
+                "down_analytic_twap_stream_pre_z_w60s",
+                "cb_spot_signed_bps_raw",
+                "cb_signed_bps_raw",
+                "pm_cl_spot_price",
+                "pm_cl_spot_twap_30s_discrete_1s",
+                "pm_cl_twap_30s",
+                "pm_cl_twap_open_30s",
+                "pm_cl_twap_signed_bps",
+                "local_volatility_1h_bps",
+                "local_volatility_status",
+                "up_bid",
+                "up_ask",
+                "up_mid",
+                "up_spread",
+                "down_bid",
+                "down_ask",
+                "down_mid",
+                "down_spread",
+                "policy_signal_name",
+                "up_policy_value",
+                "up_policy_edge",
+                "up_policy_stressed_edge",
+                "down_policy_value",
+                "down_policy_edge",
+                "down_policy_stressed_edge",
+                "selected_price_bucket",
+                "selected_move_dz",
+                "selected_move_dz_bucket",
+                "up_move_dz",
+                "up_move_dz_bucket",
+                "down_move_dz",
+                "down_move_dz_bucket",
+                "distance_z_delta_2s",
+                "up_side_dz_delta_2s",
+                "down_side_dz_delta_2s",
+                "selected_side_dz_delta_2s",
+                "policy_support",
+                "policy_unique_markets",
+                "policy_level",
+                "entry_rule_name",
+                "entry_rule_min_tte",
+                "entry_rule_max_tte",
+                "entry_rule_source_family",
+                "entry_rule_source_segment",
+                "continuation_outer_price_selected_price",
+                "continuation_outer_price_low",
+                "continuation_outer_price_high",
+            ):
+                row[key] = snapshot.get(key)
+
+        if decision is not None:
+            row.update(
+                {
+                    "policy_matched": int(decision.policy_record is not None),
+                    "entry_viable": int(decision.viable),
+                    "entry_blockers": list(decision.blockers or ()),
+                    "policy_key": decision.policy_key_text,
+                    "selected_side": decision.selected_side,
+                    "selected_bid": decision.selected_bid,
+                    "selected_ask": decision.selected_ask,
+                    "selected_mid": decision.selected_mid,
+                    "selected_spread": decision.selected_spread,
+                    "selected_trade_value": decision.selected_trade_value,
+                    "selected_policy_edge": decision.selected_policy_edge,
+                    "selected_trade_style": decision.selected_trade_style,
+                    "entry_edge_threshold": decision.entry_edge_threshold,
+                    "entry_session_enabled": decision.entry_session_enabled,
+                    "threshold_bps": decision.threshold_bps,
+                }
+            )
+        else:
+            row.update({"policy_matched": 0, "entry_viable": 0, "entry_blockers": ["NO_DECISION"]})
+
+        if pending is not None:
+            row.update(
+                {
+                    "pending_order_id": pending.order_id,
+                    "pending_side": pending.policy_side,
+                    "pending_price": pending.price,
+                    "pending_target_shares": pending.target_shares,
+                    "pending_age_seconds": max(0.0, (now_utc - pending.created_at_utc).total_seconds()),
+                    "pending_policy_key": pending.policy_key_text,
+                    "pending_entry_trade_value": pending.snapshot.get("entry_policy_trade_value"),
+                    "pending_required_edge_at_limit": pending.snapshot.get("entry_required_edge_at_limit"),
+                    "pending_edge_at_limit": pending.snapshot.get("entry_edge_at_limit"),
+                    "pending_execution_mode": pending.snapshot.get("entry_execution_mode"),
+                    "pending_tolerance_ticks": pending.snapshot.get("entry_tolerance_ticks"),
+                    "pending_stale_quote_age_seconds": (
+                        max(0.0, (now_utc - pending.stale_quote_started_at_utc).total_seconds())
+                        if pending.stale_quote_started_at_utc is not None
+                        else None
+                    ),
+                }
+            )
+        if position is not None:
+            row.update(
+                {
+                    "position_side": position.held_side,
+                    "position_shares": position.shares,
+                    "position_entry_price": position.avg_entry_price,
+                    "position_hold_seconds": max(0.0, (now_utc - position.entry_time_utc).total_seconds()),
+                    "position_policy_key": position.entry_policy_key_text,
+                    "position_trade_style": position.entry_snapshot.get("entry_trade_style"),
+                    "position_entry_trade_value": position.entry_snapshot.get("entry_policy_trade_value"),
+                    "position_entry_edge_threshold": position.entry_edge_threshold,
+                    "position_pressure_defence_status": position.pressure_defence_status,
+                    "position_stoploss_status": position.extra.get("move_dz_stoploss_status"),
+                }
+            )
+        if extra:
+            row.update(extra)
+        try:
+            with self._decision_journal_lock:
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(_json_safe(row), separators=(",", ":")) + "\n")
+        except Exception as exc:
+            if not getattr(self, "_decision_journal_error_logged", False):
+                self._decision_journal_error_logged = True
+                self._remember_error(f"Decision journal write failed: {exc}")
 
     def _on_execution_event(self, event_type: str, received_at: datetime, fields: dict[str, Any]) -> None:
         if getattr(self.config, "execution_mode", "legacy_polling") != "event_driven_ws":
@@ -934,7 +1178,7 @@ class StatsBot:
         if window_open_btc_price is None or window_open_btc_price <= 0.0:
             return None
         local_rv, local_rv_status, local_rv_age = self.coinbase.local_volatility_1h_bps(now_utc)
-        return compute_live_snapshot(
+        snapshot = compute_live_snapshot(
             btc_history=self.coinbase.history_rows(),
             pm_history=list(self.pm_rows.values()),
             now_utc=now_utc,
@@ -948,6 +1192,44 @@ class StatsBot:
             local_volatility_age_minutes=local_rv_age,
             signal_price_mode=signal_price_mode,
         )
+        if snapshot is None:
+            return None
+        binance_diag = compute_twap_provider_diagnostics(
+            provider_history=self.binance_spot.history_rows(),
+            now_utc=now_utc,
+            market_start_utc=self.current_market.market_start_utc,
+            market_end_utc=self.current_market.market_end_utc,
+            local_volatility_1h_bps=local_rv,
+            window_seconds=60,
+        )
+        for key, value in binance_diag.items():
+            snapshot[f"bn_{key}"] = value
+        cb_twap = finite_float(snapshot.get("cb_twap_60s_discrete_1s"))
+        cb_twap_open = finite_float(snapshot.get("cb_twap_open_60s_discrete_1s"))
+        cb_twap_bps = finite_float(snapshot.get("cb_twap_60s_signed_bps_raw"))
+        cb_z = finite_float(snapshot.get("analytic_twap_stream_pre_z_w60s"))
+        bn_twap = finite_float(snapshot.get("bn_twap_60s_discrete_1s"))
+        bn_twap_open = finite_float(snapshot.get("bn_twap_open_60s_discrete_1s"))
+        bn_twap_bps = finite_float(snapshot.get("bn_twap_60s_signed_bps_raw"))
+        bn_z = finite_float(snapshot.get("bn_analytic_twap_stream_pre_z_w60s"))
+        snapshot["cb_minus_bn_twap_60s"] = cb_twap - bn_twap if cb_twap is not None and bn_twap is not None else float("nan")
+        snapshot["cb_minus_bn_twap_open_60s"] = (
+            cb_twap_open - bn_twap_open if cb_twap_open is not None and bn_twap_open is not None else float("nan")
+        )
+        snapshot["cb_minus_bn_twap_60s_bps"] = (
+            cb_twap_bps - bn_twap_bps if cb_twap_bps is not None and bn_twap_bps is not None else float("nan")
+        )
+        snapshot["cb_z_minus_bn_z_w60s"] = cb_z - bn_z if cb_z is not None and bn_z is not None else float("nan")
+        snapshot["cb_bn_avg_twap_60s_signed_bps_raw"] = (
+            0.5 * (cb_twap_bps + bn_twap_bps) if cb_twap_bps is not None and bn_twap_bps is not None else float("nan")
+        )
+        snapshot["cb_bn_avg_analytic_twap_stream_pre_z_w60s"] = (
+            0.5 * (cb_z + bn_z) if cb_z is not None and bn_z is not None else float("nan")
+        )
+        avg_z = finite_float(snapshot.get("cb_bn_avg_analytic_twap_stream_pre_z_w60s"))
+        snapshot["cb_bn_avg_up_analytic_twap_stream_pre_z_w60s"] = avg_z if avg_z is not None else float("nan")
+        snapshot["cb_bn_avg_down_analytic_twap_stream_pre_z_w60s"] = -avg_z if avg_z is not None else float("nan")
+        return snapshot
 
     def _coinbase_pressure_z(self, held_side: str) -> tuple[float | None, float | None, float | None]:
         return adverse_z(
@@ -2749,6 +3031,28 @@ class StatsBot:
             quote_source=quote.book.source,
             detail=execution_mode,
         )
+        self._record_decision_journal(
+            submitted_at,
+            snapshot_with_meta,
+            decision,
+            event_type="submit_start",
+            extra={
+                "submission_id": submission_id,
+                "attempt": attempt_count,
+                "limit_price": quote.price,
+                "target_shares": quote.shares,
+                "target_notional": quote.target_notional,
+                "observed_bid": quote.book.bid,
+                "observed_ask": quote.book.ask,
+                "edge_at_limit": quote.edge_at_limit,
+                "required_edge_at_limit": quote.required_edge,
+                "entry_execution_mode": execution_mode,
+                "entry_tolerance_ticks": quote.tolerance_ticks,
+                "decision_to_submit_ms": round(decision_to_submit_ms, 3),
+                "quote_book_age_ms": round(quote_book_age_ms, 3),
+            },
+            force=True,
+        )
         try:
             self._entry_submission_queue.put_nowait(submission)
         except queue.Full:
@@ -2837,6 +3141,32 @@ class StatsBot:
                 entry_tolerance_ticks=submission.quote.tolerance_ticks,
                 detail=(result.message or "")[:240],
             )
+            self._record_decision_journal(
+                completed,
+                submission.snapshot,
+                None,
+                event_type="submit_response",
+                extra={
+                    "submission_id": submission.submission_id,
+                    "attempt": submission.attempt_count,
+                    "order_id": result.order_id or "",
+                    "order_status": result.status,
+                    "result_ok": int(result.ok),
+                    "result_message": (result.message or "")[:240],
+                    "submit_elapsed_ms": round(elapsed_ms, 3),
+                    "wire_elapsed_ms": round(wire_elapsed_ms, 3),
+                    "entry_path_elapsed_ms": round(decision_to_response_ms, 3),
+                    "worker_queue_delay_ms": round(submission_result.queue_delay_ms, 3),
+                    "limit_price": submission.quote.price,
+                    "observed_bid": submission.quote.book.bid,
+                    "observed_ask": submission.quote.book.ask,
+                    "required_edge_at_limit": submission.quote.required_edge,
+                    "edge_at_limit": submission.quote.edge_at_limit,
+                    "entry_execution_mode": submission.execution_mode,
+                    "entry_tolerance_ticks": submission.quote.tolerance_ticks,
+                },
+                force=True,
+            )
             if not result.ok or not result.order_id:
                 self._remember_error(f"Entry submission failed: {result.status} {result.message[:160]}")
                 self._log_event(
@@ -2858,6 +3188,19 @@ class StatsBot:
                         self._entry_submission = None
                         self._entry_submission_state = "IDLE"
                         self._set_entry_lifecycle_state(submission.market_slug, "FAILED")
+                self._record_decision_journal(
+                    completed,
+                    submission.snapshot,
+                    None,
+                    event_type="submit_failed",
+                    extra={
+                        "submission_id": submission.submission_id,
+                        "attempt": submission.attempt_count,
+                        "order_status": result.status,
+                        "result_message": (result.message or "")[:240],
+                    },
+                    force=True,
+                )
                 continue
 
             pending = PendingEntryOrder(
@@ -2908,6 +3251,23 @@ class StatsBot:
             self.pending_entry = pending
             self.entry_attempt_orders_by_window.setdefault(submission.market_slug, []).append(pending)
             self._set_entry_lifecycle_state(submission.market_slug, "RESTING")
+            self._record_decision_journal(
+                completed,
+                submission.snapshot,
+                None,
+                event_type="order_resting",
+                extra={
+                    "submission_id": submission.submission_id,
+                    "attempt": submission.attempt_count,
+                    "order_id": result.order_id,
+                    "order_status": result.status,
+                    "limit_price": submission.quote.price,
+                    "matched_shares": result.matched_shares,
+                    "avg_price": result.price,
+                    "entry_execution_mode": submission.execution_mode,
+                },
+                force=True,
+            )
             self._log_event(
                 "fast_entry_placed" if submission.signed_order is not None or self.config.paper_trading else "maker_entry_placed",
                 (
@@ -3013,6 +3373,66 @@ class StatsBot:
         if reconcile_pending and self.pending_entry is not None:
             self._open_new_live_fill_if_any(self.pending_entry, now_utc, "USER_WS_TRIGGER")
 
+    def _entry_signal_persistence_key(
+        self,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision,
+    ) -> tuple[str, str, str, str, str] | None:
+        market = self.current_market
+        if market is None or snapshot is None or not decision.viable or not decision.selected_side:
+            return None
+        trade_style = str(decision.selected_trade_style or "")
+        price_bucket = str(snapshot.get("selected_price_bucket") or "")
+        if not trade_style or not price_bucket:
+            return None
+        return (
+            market.slug,
+            str(decision.selected_side),
+            trade_style,
+            price_bucket,
+            decision.policy_key_text,
+        )
+
+    def _clear_entry_signal_persistence(self) -> None:
+        self.entry_signal_persistence = None
+
+    def _entry_signal_persistence_ready(
+        self,
+        now_utc: datetime,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision,
+    ) -> bool:
+        required_seconds = finite_float(getattr(self.config, "entry_signal_persistence_seconds", 0.0))
+        if required_seconds is None or required_seconds <= 0.0:
+            return True
+        key = self._entry_signal_persistence_key(snapshot, decision)
+        if key is None:
+            self._clear_entry_signal_persistence()
+            return False
+        current = self.entry_signal_persistence
+        if current is None or current.key != key:
+            self.entry_signal_persistence = EntrySignalPersistenceState(
+                market_slug=key[0],
+                side=key[1],
+                trade_style=key[2],
+                price_bucket=key[3],
+                policy_key_text=key[4],
+                started_at_utc=now_utc,
+                last_seen_at_utc=now_utc,
+            )
+            if snapshot is not None:
+                snapshot["entry_signal_persistence_status"] = "warming"
+                snapshot["entry_signal_persistence_elapsed_seconds"] = 0.0
+                snapshot["entry_signal_persistence_required_seconds"] = float(required_seconds)
+            return False
+        current.last_seen_at_utc = now_utc
+        elapsed = max(0.0, (now_utc - current.started_at_utc).total_seconds())
+        if snapshot is not None:
+            snapshot["entry_signal_persistence_status"] = "ready" if elapsed >= required_seconds else "warming"
+            snapshot["entry_signal_persistence_elapsed_seconds"] = elapsed
+            snapshot["entry_signal_persistence_required_seconds"] = float(required_seconds)
+        return elapsed >= required_seconds
+
     def _request_entry(
         self,
         now_utc: datetime,
@@ -3021,6 +3441,19 @@ class StatsBot:
         *,
         ignore_retry_cooldown: bool = False,
     ) -> None:
+        if not ignore_retry_cooldown and not self._entry_signal_persistence_ready(now_utc, snapshot, decision):
+            self._log_event(
+                "entry_skipped",
+                "ENTRY_SIGNAL_PERSISTENCE_WAIT",
+                {
+                    "market_slug": self.current_market.slug if self.current_market else "",
+                    "side": decision.selected_side,
+                    "trade_style": decision.selected_trade_style,
+                    "price_bucket": snapshot.get("selected_price_bucket") if snapshot else "",
+                    "required_seconds": getattr(self.config, "entry_signal_persistence_seconds", 0.0),
+                },
+            )
+            return
         if getattr(self.config, "execution_mode", "legacy_polling") == "event_driven_ws":
             if ignore_retry_cooldown:
                 self._place_entry_event_driven(now_utc, snapshot, decision, ignore_retry_cooldown=True)
@@ -3632,6 +4065,22 @@ class StatsBot:
                     "total_cost": position.entry_cost,
                 },
             )
+            self._record_decision_journal(
+                now_utc,
+                pending.snapshot,
+                None,
+                event_type="entry_filled",
+                extra={
+                    "order_id": pending.order_id,
+                    "side": pending.policy_side,
+                    "fill_price": fill_price,
+                    "filled_shares": filled_shares,
+                    "entry_cost": cost,
+                    "total_shares": position.shares,
+                    "total_cost": position.entry_cost,
+                },
+                force=True,
+            )
             return
         self.active_position = OpenPosition(
             token_id=pending.token_id,
@@ -3664,6 +4113,22 @@ class StatsBot:
                 "entry_edge_threshold": self.active_position.entry_edge_threshold,
                 "exit_bps_threshold": self.active_position.entry_bps_threshold,
             },
+        )
+        self._record_decision_journal(
+            now_utc,
+            pending.snapshot,
+            None,
+            event_type="entry_filled",
+            extra={
+                "order_id": pending.order_id,
+                "side": pending.policy_side,
+                "fill_price": fill_price,
+                "filled_shares": filled_shares,
+                "entry_cost": cost,
+                "entry_edge_threshold": self.active_position.entry_edge_threshold,
+                "entry_bps_threshold": self.active_position.entry_bps_threshold,
+            },
+            force=True,
         )
         if not self.config.paper_trading:
             try:
@@ -3708,6 +4173,20 @@ class StatsBot:
             side=pending.policy_side,
             limit_price=pending.price,
             detail=reason,
+        )
+        self._record_decision_journal(
+            now_utc,
+            pending.snapshot,
+            None,
+            event_type="order_cancelled",
+            extra={
+                "cancel_reason": reason,
+                "order_id": pending.order_id,
+                "side": pending.policy_side,
+                "limit_price": pending.price,
+                "pending_age_seconds": round(age, 3),
+            },
+            force=True,
         )
         self.pending_entry = None
         self._set_entry_lifecycle_state(pending.market_slug, "CANCELLED")
@@ -4489,6 +4968,26 @@ class StatsBot:
             return ("ULTRA_LOW_VOL_HIGH_PRICE_CONT",)
         return ()
 
+    def _continuation_outer_price_entry_blockers(
+        self,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision | None,
+    ) -> tuple[str, ...]:
+        if snapshot is None or decision is None or not decision.viable:
+            return ()
+        trade_style = str(decision.selected_trade_style or "").strip().lower()
+        if trade_style != "continuation":
+            return ()
+        selected_price = finite_float(decision.selected_ask)
+        if selected_price is None:
+            return ()
+        if selected_price < CONTINUATION_OUTER_PRICE_LOW or selected_price >= CONTINUATION_OUTER_PRICE_HIGH:
+            snapshot["continuation_outer_price_selected_price"] = selected_price
+            snapshot["continuation_outer_price_low"] = CONTINUATION_OUTER_PRICE_LOW
+            snapshot["continuation_outer_price_high"] = CONTINUATION_OUTER_PRICE_HIGH
+            return ("CONTINUATION_OUTER_PRICE_BLOCK",)
+        return ()
+
     def _record_session_style_guard_closed_trade(
         self,
         position: OpenPosition,
@@ -4552,6 +5051,7 @@ class StatsBot:
                 [
                     *self._low_liquidity_no_signal_entry_blockers(snapshot, decision),
                     *self._ultra_low_vol_entry_blockers(snapshot, decision),
+                    *self._continuation_outer_price_entry_blockers(snapshot, decision),
                 ]
             )
         )
@@ -4684,6 +5184,15 @@ class StatsBot:
                     f"vol {vol:.1f}<={max_vol:.1f})"
                 )
             return "ULTRA_LOW_VOL_HIGH_PRICE_CONT"
+        if blocker == "CONTINUATION_OUTER_PRICE_BLOCK":
+            if snapshot is None:
+                return "CONTINUATION_OUTER_PRICE_BLOCK"
+            price = finite_float(snapshot.get("continuation_outer_price_selected_price"))
+            low = finite_float(snapshot.get("continuation_outer_price_low"))
+            high = finite_float(snapshot.get("continuation_outer_price_high"))
+            if None not in (price, low, high):
+                return f"CONTINUATION_OUTER_PRICE_BLOCK (price {price:.2f} < {low:.2f} or >= {high:.2f})"
+            return "CONTINUATION_OUTER_PRICE_BLOCK"
         return blocker
 
     def _format_entry_blockers(
@@ -4726,6 +5235,9 @@ class StatsBot:
                         "cb_twap_60s_discrete_1s",
                         "cb_twap_open_60s_discrete_1s",
                         "cb_twap_60s_signed_bps_raw",
+                        "analytic_twap_stream_pre_z_w60s",
+                        "up_analytic_twap_stream_pre_z_w60s",
+                        "down_analytic_twap_stream_pre_z_w60s",
                         "cb_twap_max_sample_staleness_seconds",
                         "cb_spot_signed_bps_raw",
                         "pm_cl_spot_price",
@@ -4857,6 +5369,9 @@ class StatsBot:
                     _fmt(snapshot.get("cb_twap_60s_discrete_1s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("cb_twap_open_60s_discrete_1s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("cb_twap_60s_signed_bps_raw"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("analytic_twap_stream_pre_z_w60s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("up_analytic_twap_stream_pre_z_w60s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("down_analytic_twap_stream_pre_z_w60s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("cb_twap_max_sample_staleness_seconds"), 3, "") if snapshot else "",
                     _fmt(snapshot.get("cb_spot_signed_bps_raw"), 6, "") if snapshot else "",
                     _fmt(twap_diag.get("pm_cl_spot_price"), 6, ""),
@@ -5472,12 +5987,37 @@ class StatsBot:
                 self._capture_pm_snapshot(now_utc)
                 self._poll_settling_positions(now_utc)
                 snapshot = self._build_snapshot(now_utc)
-                decision = self._entry_decision_with_guard(now_utc, snapshot)
-                self.last_entry_decision = decision
                 decision_at_utc = datetime.now(tz=timezone.utc)
+                raw_decision = self._entry_decision_with_guard(now_utc, snapshot)
+                decision = raw_decision
+                entry_request_decision = raw_decision
+                if (
+                    snapshot is not None
+                    and raw_decision is not None
+                    and raw_decision.viable
+                    and self.active_position is None
+                    and self.pending_entry is None
+                    and not self._entry_submission_inflight()
+                    and self.current_market is not None
+                ):
+                    if not self._entry_signal_persistence_ready(decision_at_utc, snapshot, raw_decision):
+                        decision = self._entry_decision_with_blockers(
+                            raw_decision,
+                            ("ENTRY_SIGNAL_PERSISTENCE_WAIT",),
+                        )
+                        entry_request_decision = None
+                elif (
+                    raw_decision is None
+                    or not raw_decision.viable
+                    or self.current_market is None
+                    or self.active_position is not None
+                ):
+                    self._clear_entry_signal_persistence()
+                self.last_entry_decision = decision
                 if decision is not None:
                     self._log_viable_decision(decision_at_utc, decision)
-                self._manage_pending_entry(now_utc, snapshot, decision)
+                self._record_decision_journal(decision_at_utc, snapshot, decision)
+                self._manage_pending_entry(now_utc, snapshot, raw_decision)
                 if (
                     not self.config.paper_trading
                     and self.active_position is None
@@ -5523,10 +6063,10 @@ class StatsBot:
                     and self.pending_entry is None
                     and not self._entry_submission_inflight()
                     and snapshot is not None
-                    and decision is not None
+                    and entry_request_decision is not None
                 ):
-                    if decision.viable:
-                        self._request_entry(decision_at_utc, snapshot, decision)
+                    if entry_request_decision.viable:
+                        self._request_entry(decision_at_utc, snapshot, entry_request_decision)
                 self.last_exit_decision = exit_decision
                 self._record_cadence(now_utc, snapshot, decision, exit_decision)
                 self._dashboard(now_utc, snapshot, decision, exit_decision)
