@@ -21,9 +21,17 @@ ASYMMETRIC_PRICE_BUCKET_EDGES: tuple[tuple[float, float, str], ...] = (
     (0.60, 0.70, "p60_70"),
     (0.70, 0.80, "p70_80"),
 )
+ASYMMETRIC_WIDE_MID_PRICE_BUCKET_EDGES: tuple[tuple[float, float, str], ...] = (
+    (0.20, 0.30, "p20_30"),
+    (0.30, 0.45, "p30_45"),
+    (0.45, 0.55, "p45_55"),
+    (0.55, 0.70, "p55_70"),
+    (0.70, 0.80, "p70_80"),
+)
 PRICE_BUCKET_SCHEMES: dict[str, tuple[tuple[float, float, str], ...]] = {
     "asymmetric": ASYMMETRIC_PRICE_BUCKET_EDGES,
     "current": ASYMMETRIC_PRICE_BUCKET_EDGES,
+    "asymmetric_wide_mid": ASYMMETRIC_WIDE_MID_PRICE_BUCKET_EDGES,
 }
 STAGEA_DAY_GROUPS: tuple[str, ...] = ("mon_wed", "thu_fri", "weekend")
 STAGEA_TIME_SCHEMES: dict[str, tuple[tuple[float, float, str], ...]] = {
@@ -127,6 +135,36 @@ def btc_z_feature_matrix(frame: pd.DataFrame, side_mode: str) -> np.ndarray:
     pieces: list[Any] = [z]
     if side_mode == "with_side":
         pieces.append(frame["side"].astype(str).str.upper().eq("DOWN").to_numpy(float))
+    return np.column_stack(pieces)
+
+
+def twap_native_spot_gap_feature_matrix(frame: pd.DataFrame, side_mode: str) -> np.ndarray:
+    raw_z = pd.to_numeric(frame["selected_raw_move_dz"], errors="coerce").to_numpy(float)
+    gap_z = pd.to_numeric(frame["selected_raw_minus_twap_move_dz"], errors="coerce").to_numpy(float)
+    pieces: list[Any] = [raw_z, gap_z]
+    if side_mode == "with_side":
+        pieces.append(_side_indicator(frame))
+    return np.column_stack(pieces)
+
+
+def twap_native_spot_z_feature_matrix(frame: pd.DataFrame, side_mode: str) -> np.ndarray:
+    raw_z = pd.to_numeric(frame["selected_raw_move_dz"], errors="coerce").to_numpy(float)
+    pieces: list[Any] = [raw_z]
+    if side_mode == "with_side":
+        pieces.append(_side_indicator(frame))
+    return np.column_stack(pieces)
+
+
+def twap_native_spot_gap_abs_catchup_feature_matrix(frame: pd.DataFrame, side_mode: str) -> np.ndarray:
+    raw_z = pd.to_numeric(frame["selected_raw_move_dz"], errors="coerce").to_numpy(float)
+    gap_z = pd.to_numeric(frame["selected_raw_minus_twap_move_dz"], errors="coerce").to_numpy(float)
+    gap_abs = np.abs(gap_z)
+    tte = pd.to_numeric(frame["canonical_tte_seconds"], errors="coerce").to_numpy(float)
+    tte_scale = np.minimum(1.0, 60.0 / np.clip(tte, 1.0, None))
+    catchup = gap_z * tte_scale
+    pieces: list[Any] = [raw_z, gap_z, gap_abs, catchup]
+    if side_mode == "with_side":
+        pieces.append(_side_indicator(frame))
     return np.column_stack(pieces)
 
 
@@ -323,6 +361,12 @@ class SurfaceModel:
             if not self.momentum_feature:
                 raise ValueError("Momentum feature is required for btc_linear_z_momentum_price_bucket")
             return btc_momentum_feature_matrix(frame, self.side_mode, self.momentum_feature)
+        if self.model_kind == "twap_native_spot_gap_price_bucket":
+            return twap_native_spot_gap_feature_matrix(frame, self.side_mode)
+        if self.model_kind == "twap_native_spot_z_price_bucket":
+            return twap_native_spot_z_feature_matrix(frame, self.side_mode)
+        if self.model_kind == "twap_native_spot_gap_abs_catchup_price_bucket":
+            return twap_native_spot_gap_abs_catchup_feature_matrix(frame, self.side_mode)
         if self.model_kind in STAGEA_PRICE_BUCKET_MODEL_KINDS:
             return stagea_feature_matrix(frame, self.model_kind, self.side_mode, self.stagea_time_scheme)
         return linear_feature_matrix(frame, self.model_kind, self.side_mode)
@@ -345,6 +389,9 @@ class SurfaceModel:
         selected_ask: float,
         side: str,
         side_dz_delta_2s: float | None = None,
+        selected_raw_move_dz: float | None = None,
+        selected_raw_minus_twap_move_dz: float | None = None,
+        canonical_tte_seconds: float | None = None,
         timestamp_utc: Any | None = None,
         timestamp_london: Any | None = None,
     ) -> float | None:
@@ -373,6 +420,36 @@ class SurfaceModel:
             if not math.isfinite(momentum):
                 return None
             data[self.momentum_feature] = [momentum]
+        if self.model_kind == "twap_native_spot_z_price_bucket":
+            try:
+                raw_z = float(selected_raw_move_dz)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(raw_z):
+                return None
+            data["selected_raw_move_dz"] = [raw_z]
+        if self.model_kind == "twap_native_spot_gap_price_bucket":
+            try:
+                raw_z = float(selected_raw_move_dz)
+                gap_z = float(selected_raw_minus_twap_move_dz)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(raw_z) or not math.isfinite(gap_z):
+                return None
+            data["selected_raw_move_dz"] = [raw_z]
+            data["selected_raw_minus_twap_move_dz"] = [gap_z]
+        if self.model_kind == "twap_native_spot_gap_abs_catchup_price_bucket":
+            try:
+                raw_z = float(selected_raw_move_dz)
+                gap_z = float(selected_raw_minus_twap_move_dz)
+                tte = float(canonical_tte_seconds)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(raw_z) or not math.isfinite(gap_z) or not math.isfinite(tte) or tte <= 0.0:
+                return None
+            data["selected_raw_move_dz"] = [raw_z]
+            data["selected_raw_minus_twap_move_dz"] = [gap_z]
+            data["canonical_tte_seconds"] = [tte]
         frame = pd.DataFrame(data)
         value = float(self.predict(frame)[0])
         return min(max(value, 0.0), 1.0)
@@ -394,6 +471,9 @@ class PriceBucketSurfaceModel:
         if model_kind not in {
             "btc_linear_z_price_bucket",
             "btc_linear_z_momentum_price_bucket",
+            "twap_native_spot_z_price_bucket",
+            "twap_native_spot_gap_price_bucket",
+            "twap_native_spot_gap_abs_catchup_price_bucket",
             *STAGEA_PRICE_BUCKET_MODEL_KINDS,
         }:
             raise ValueError(f"Unsupported price-bucket model kind: {model_kind!r}")
@@ -454,6 +534,9 @@ class PriceBucketSurfaceModel:
         selected_ask: float,
         side: str,
         side_dz_delta_2s: float | None = None,
+        selected_raw_move_dz: float | None = None,
+        selected_raw_minus_twap_move_dz: float | None = None,
+        canonical_tte_seconds: float | None = None,
         timestamp_utc: Any | None = None,
         timestamp_london: Any | None = None,
     ) -> float | None:
@@ -468,6 +551,9 @@ class PriceBucketSurfaceModel:
             selected_ask=selected_ask,
             side=side,
             side_dz_delta_2s=side_dz_delta_2s,
+            selected_raw_move_dz=selected_raw_move_dz,
+            selected_raw_minus_twap_move_dz=selected_raw_minus_twap_move_dz,
+            canonical_tte_seconds=canonical_tte_seconds,
             timestamp_utc=timestamp_utc,
             timestamp_london=timestamp_london,
         )

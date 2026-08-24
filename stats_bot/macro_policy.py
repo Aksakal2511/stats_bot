@@ -11,6 +11,12 @@ from typing import Any
 from .continuous_surface import PriceBucketSurfaceModel, SurfaceModel
 from .strategy import EntryDecision, bucket_price, bucket_tte, finite_float
 
+TWAP_NATIVE_RAW_SIGNAL_MODEL_KINDS = {
+    "twap_native_spot_z_price_bucket",
+    "twap_native_spot_gap_price_bucket",
+    "twap_native_spot_gap_abs_catchup_price_bucket",
+}
+
 
 @dataclass(frozen=True)
 class MacroPolicyMatch:
@@ -231,6 +237,15 @@ class MacroLocalPolicy:
         }
         self.price_bucket_entry_edges = self._parse_price_bucket_entry_edges(profile_payload)
         self.dynamic_edge_selector = self._parse_dynamic_edge_selector(profile_payload, path)
+        self.trade_style_display_names = {
+            "continuation": "continuation",
+            "mean_reversion": "mean_reversion",
+            **{
+                str(key).strip().lower(): str(value).strip()
+                for key, value in dict(profile_payload.get("trade_style_display_names") or {}).items()
+                if str(key).strip() and str(value).strip()
+            },
+        }
         self.timed_entry_overrides = [
             self._parse_timed_entry_override(row)
             for row in profile_payload.get("timed_overrides", [])
@@ -809,6 +824,36 @@ class MacroLocalPolicy:
             or edges_by_key.get("GLOBAL")
         )
 
+    def display_trade_style(self, trade_style: str | None) -> str:
+        style = str(trade_style or "").strip().lower()
+        if not style:
+            return "NA"
+        return self.trade_style_display_names.get(style, style)
+
+    @staticmethod
+    def _side_snapshot_value(snapshot: dict[str, Any], side: str, base_name: str) -> float | None:
+        side_key = str(side).lower()
+        return finite_float(snapshot.get(f"{side_key}_{base_name}"))
+
+    def _side_spot_gap_features(
+        self,
+        snapshot: dict[str, Any],
+        side: str,
+        twap_move_dz: float,
+    ) -> tuple[float, float] | None:
+        raw_move_dz = self._side_snapshot_value(snapshot, side, "raw_move_dz")
+        if raw_move_dz is None:
+            local_rv = finite_float(snapshot.get("local_volatility_1h_bps"))
+            tte = finite_float(snapshot.get("canonical_tte_seconds"))
+            signal_bps = self._first_finite(snapshot, "cb_spot_signed_bps_raw", "cb_signed_bps_raw")
+            if local_rv is None or local_rv <= 0.0 or tte is None or signal_bps is None:
+                return None
+            aligned_bps = float(signal_bps) if side == "UP" else -float(signal_bps)
+            denom = max(0.05, float(local_rv) * math.sqrt(max(1.0, float(tte)) / 3600.0))
+            raw_move_dz = aligned_bps / denom
+        gap = float(raw_move_dz) - float(twap_move_dz)
+        return float(raw_move_dz), float(gap)
+
     def _side_signal_value(self, snapshot: dict[str, Any], side: str) -> tuple[float, float] | None:
         local_rv = finite_float(snapshot.get("local_volatility_1h_bps"))
         if local_rv is None or local_rv <= 0.0:
@@ -987,6 +1032,14 @@ class MacroLocalPolicy:
         if signal is None:
             return None
         move_dz, aligned_bps = signal
+        model_kind = str(getattr(model, "model_kind", "") or "")
+        raw_move_dz: float | None = None
+        raw_minus_twap_move_dz: float | None = None
+        if model_kind in TWAP_NATIVE_RAW_SIGNAL_MODEL_KINDS:
+            spot_gap_features = self._side_spot_gap_features(snapshot, side, move_dz)
+            if spot_gap_features is None:
+                return None
+            raw_move_dz, raw_minus_twap_move_dz = spot_gap_features
         momentum_feature = str(getattr(model, "momentum_feature", "") or "")
         momentum_value: float | None = None
         if momentum_feature:
@@ -998,12 +1051,16 @@ class MacroLocalPolicy:
             selected_ask=ask,
             side=side,
             side_dz_delta_2s=momentum_value,
+            selected_raw_move_dz=raw_move_dz,
+            selected_raw_minus_twap_move_dz=raw_minus_twap_move_dz,
+            canonical_tte_seconds=finite_float(snapshot.get("canonical_tte_seconds")),
             timestamp_utc=snapshot.get("timestamp_utc"),
             timestamp_london=snapshot.get("timestamp_london"),
         )
         if value is None:
             return None
-        style = "continuation" if aligned_bps > 1e-12 else "mean_reversion" if aligned_bps < -1e-12 else "neutral"
+        style_signal = raw_move_dz if model_kind in TWAP_NATIVE_RAW_SIGNAL_MODEL_KINDS else aligned_bps
+        style = "continuation" if style_signal > 1e-12 else "mean_reversion" if style_signal < -1e-12 else "neutral"
         mid = finite_float(snapshot.get(f"{side.lower()}_mid"))
         spread = finite_float(snapshot.get(f"{side.lower()}_spread"))
         limit = min(float(ask) + 0.01, float(self.entry["max_price"]))
@@ -1011,6 +1068,10 @@ class MacroLocalPolicy:
         bucket_label = getattr(model, "bucket_label", None)
         if callable(bucket_label):
             price_bucket = str(bucket_label(ask) or "NA")
+        if raw_move_dz is not None:
+            side_key = side.lower()
+            snapshot[f"{side_key}_selected_raw_move_dz"] = float(raw_move_dz)
+            snapshot[f"{side_key}_selected_raw_minus_twap_move_dz"] = float(raw_minus_twap_move_dz)
         model_label = str(branch_cfg.get("label") or self.surface_model_label or "surface")
         policy_level = str(branch_cfg.get("policy_level") or self.surface_policy_level or "surface")
         model_rows = int(branch_cfg.get("training_rows") or self.surface_model_rows or 0)
@@ -1166,6 +1227,13 @@ class MacroLocalPolicy:
                 momentum_value = finite_float(snapshot.get(f"{best_match.side.lower()}_{momentum_feature}"))
                 if momentum_value is not None:
                     snapshot[f"selected_{momentum_feature}"] = momentum_value
+            raw_value = finite_float(snapshot.get(f"{best_match.side.lower()}_selected_raw_move_dz"))
+            gap_value = finite_float(snapshot.get(f"{best_match.side.lower()}_selected_raw_minus_twap_move_dz"))
+            if raw_value is not None:
+                snapshot["selected_raw_move_dz"] = raw_value
+            if gap_value is not None:
+                snapshot["selected_raw_minus_twap_move_dz"] = gap_value
+            snapshot["selected_twap_move_dz"] = best_match.move_z
             return EntryDecision(
                 viable=False,
                 blockers=tuple(dict.fromkeys(blockers)),
@@ -1213,6 +1281,13 @@ class MacroLocalPolicy:
             momentum_value = finite_float(snapshot.get(f"{selected.side.lower()}_{momentum_feature}"))
             if momentum_value is not None:
                 snapshot[f"selected_{momentum_feature}"] = momentum_value
+        raw_value = finite_float(snapshot.get(f"{selected.side.lower()}_selected_raw_move_dz"))
+        gap_value = finite_float(snapshot.get(f"{selected.side.lower()}_selected_raw_minus_twap_move_dz"))
+        if raw_value is not None:
+            snapshot["selected_raw_move_dz"] = raw_value
+        if gap_value is not None:
+            snapshot["selected_raw_minus_twap_move_dz"] = gap_value
+        snapshot["selected_twap_move_dz"] = selected.move_z
         return EntryDecision(
             viable=not blockers,
             blockers=tuple(dict.fromkeys(blockers)),

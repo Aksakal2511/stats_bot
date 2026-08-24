@@ -515,6 +515,10 @@ def compute_live_snapshot(
     )
     analytic_w30_distance_bps = 10000.0 * (latest_spot_close - analytic_w30_anchor) / analytic_w30_anchor
     analytic_w60_distance_bps = 10000.0 * (latest_spot_close - analytic_w60_anchor) / analytic_w60_anchor
+    raw_w60_move_dz: float | None = None
+    if analytic_w60_anchor > 0.0 and local_volatility_1h_bps is not None and local_volatility_1h_bps > 0.0:
+        raw_w60_denom = max(0.05, float(local_volatility_1h_bps) * math.sqrt(max(1.0, float(tte_seconds)) / 3600.0))
+        raw_w60_move_dz = float(analytic_w60_distance_bps / raw_w60_denom)
     analytic_w60_stream_distance_bps = (
         None
         if twap_60_now is None or twap_60_open is None or twap_60_open <= 0.0
@@ -607,6 +611,9 @@ def compute_live_snapshot(
         "cb_signal_price_mode": normalized_signal_mode,
         "cb_spot_signed_bps_raw": float(spot_signed_bps_raw),
         "cb_spot_distance_to_beat_z": float("nan") if spot_distance_z is None else float(spot_distance_z),
+        "raw_move_dz": float("nan") if raw_w60_move_dz is None else float(raw_w60_move_dz),
+        "up_raw_move_dz": float("nan") if raw_w60_move_dz is None else float(raw_w60_move_dz),
+        "down_raw_move_dz": float("nan") if raw_w60_move_dz is None else float(-raw_w60_move_dz),
         "cb_spot_distance_z_delta_2s": (
             float("nan") if spot_distance_z_delta_2s is None else float(spot_distance_z_delta_2s)
         ),

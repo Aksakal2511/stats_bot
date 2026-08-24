@@ -98,8 +98,6 @@ EXECUTION_HEALTH_MIN_SAMPLES = 5
 EXECUTION_HEALTH_WINDOW = 10
 ENTRY_LIFECYCLE_BLOCKING_STATES = {"SUBMITTING", "UNKNOWN", "RESTING", "FILLED"}
 SESSION_STYLE_DRAWDOWN_PER_SHARE_USD = 1.5
-CONTINUATION_OUTER_PRICE_LOW = 0.30
-CONTINUATION_OUTER_PRICE_HIGH = 0.70
 
 
 def _order_status_is_fill_like(status: object | None) -> bool:
@@ -766,6 +764,9 @@ class StatsBot:
                 "analytic_twap_stream_pre_z_w60s",
                 "up_analytic_twap_stream_pre_z_w60s",
                 "down_analytic_twap_stream_pre_z_w60s",
+                "raw_move_dz",
+                "up_raw_move_dz",
+                "down_raw_move_dz",
                 "cb_spot_signed_bps_raw",
                 "cb_signed_bps_raw",
                 "pm_cl_spot_price",
@@ -793,6 +794,8 @@ class StatsBot:
                 "selected_price_bucket",
                 "selected_move_dz",
                 "selected_move_dz_bucket",
+                "selected_raw_move_dz",
+                "selected_raw_minus_twap_move_dz",
                 "up_move_dz",
                 "up_move_dz_bucket",
                 "down_move_dz",
@@ -809,9 +812,6 @@ class StatsBot:
                 "entry_rule_max_tte",
                 "entry_rule_source_family",
                 "entry_rule_source_segment",
-                "continuation_outer_price_selected_price",
-                "continuation_outer_price_low",
-                "continuation_outer_price_high",
             ):
                 row[key] = snapshot.get(key)
 
@@ -1514,6 +1514,9 @@ class StatsBot:
         key_parts = str(position.entry_policy_key_text or "").split("|")
         bps_bucket = key_parts[3] if len(key_parts) > 3 else None
         return str(trade_style_from_bps_bucket(position.held_side, bps_bucket) or "").strip().lower()
+
+    def _trade_style_display(self, trade_style: str | None) -> str:
+        return self.macro_policy.display_trade_style(trade_style) if self.macro_policy is not None else str(trade_style or "NA")
 
     def _maybe_execute_pressure_defence(self, now_utc: datetime, snapshot: dict[str, Any] | None) -> None:
         position = self.active_position
@@ -4968,24 +4971,38 @@ class StatsBot:
             return ("ULTRA_LOW_VOL_HIGH_PRICE_CONT",)
         return ()
 
-    def _continuation_outer_price_entry_blockers(
+    def _twap_lag_cheap_cont_entry_blockers(
         self,
         snapshot: dict[str, Any] | None,
         decision: EntryDecision | None,
     ) -> tuple[str, ...]:
+        if not bool(getattr(self.config, "twap_lag_cheap_cont_guard_enabled", False)):
+            return ()
         if snapshot is None or decision is None or not decision.viable:
             return ()
-        trade_style = str(decision.selected_trade_style or "").strip().lower()
-        if trade_style != "continuation":
-            return ()
         selected_price = finite_float(decision.selected_ask)
-        if selected_price is None:
+        selected_twap_dz = finite_float(snapshot.get("selected_twap_move_dz", snapshot.get("selected_move_dz")))
+        selected_raw_dz = finite_float(snapshot.get("selected_raw_move_dz"))
+        if selected_price is None or selected_twap_dz is None or selected_raw_dz is None:
             return ()
-        if selected_price < CONTINUATION_OUTER_PRICE_LOW or selected_price >= CONTINUATION_OUTER_PRICE_HIGH:
-            snapshot["continuation_outer_price_selected_price"] = selected_price
-            snapshot["continuation_outer_price_low"] = CONTINUATION_OUTER_PRICE_LOW
-            snapshot["continuation_outer_price_high"] = CONTINUATION_OUTER_PRICE_HIGH
-            return ("CONTINUATION_OUTER_PRICE_BLOCK",)
+        max_price = float(getattr(self.config, "twap_lag_cheap_cont_max_price", 0.35))
+        min_twap_dz = float(getattr(self.config, "twap_lag_cheap_cont_min_twap_move_dz", 0.0))
+        max_twap_dz = float(getattr(self.config, "twap_lag_cheap_cont_max_twap_move_dz", 0.50))
+        max_raw_dz = float(getattr(self.config, "twap_lag_cheap_cont_max_raw_move_dz", 0.0))
+        if (
+            selected_price <= max_price + 1e-12
+            and selected_twap_dz > min_twap_dz + 1e-12
+            and selected_twap_dz < max_twap_dz - 1e-12
+            and selected_raw_dz <= max_raw_dz + 1e-12
+        ):
+            snapshot["twap_lag_cheap_cont_selected_price"] = selected_price
+            snapshot["twap_lag_cheap_cont_twap_move_dz"] = selected_twap_dz
+            snapshot["twap_lag_cheap_cont_raw_move_dz"] = selected_raw_dz
+            snapshot["twap_lag_cheap_cont_max_price"] = max_price
+            snapshot["twap_lag_cheap_cont_min_twap_move_dz"] = min_twap_dz
+            snapshot["twap_lag_cheap_cont_max_twap_move_dz"] = max_twap_dz
+            snapshot["twap_lag_cheap_cont_max_raw_move_dz"] = max_raw_dz
+            return ("TWAP_LAG_CHEAP_CONT_BLOCK",)
         return ()
 
     def _record_session_style_guard_closed_trade(
@@ -5051,7 +5068,7 @@ class StatsBot:
                 [
                     *self._low_liquidity_no_signal_entry_blockers(snapshot, decision),
                     *self._ultra_low_vol_entry_blockers(snapshot, decision),
-                    *self._continuation_outer_price_entry_blockers(snapshot, decision),
+                    *self._twap_lag_cheap_cont_entry_blockers(snapshot, decision),
                 ]
             )
         )
@@ -5184,15 +5201,21 @@ class StatsBot:
                     f"vol {vol:.1f}<={max_vol:.1f})"
                 )
             return "ULTRA_LOW_VOL_HIGH_PRICE_CONT"
-        if blocker == "CONTINUATION_OUTER_PRICE_BLOCK":
+        if blocker == "TWAP_LAG_CHEAP_CONT_BLOCK":
             if snapshot is None:
-                return "CONTINUATION_OUTER_PRICE_BLOCK"
-            price = finite_float(snapshot.get("continuation_outer_price_selected_price"))
-            low = finite_float(snapshot.get("continuation_outer_price_low"))
-            high = finite_float(snapshot.get("continuation_outer_price_high"))
-            if None not in (price, low, high):
-                return f"CONTINUATION_OUTER_PRICE_BLOCK (price {price:.2f} < {low:.2f} or >= {high:.2f})"
-            return "CONTINUATION_OUTER_PRICE_BLOCK"
+                return "TWAP_LAG_CHEAP_CONT_BLOCK"
+            price = finite_float(snapshot.get("twap_lag_cheap_cont_selected_price"))
+            twap_dz = finite_float(snapshot.get("twap_lag_cheap_cont_twap_move_dz"))
+            raw_dz = finite_float(snapshot.get("twap_lag_cheap_cont_raw_move_dz"))
+            max_price = finite_float(snapshot.get("twap_lag_cheap_cont_max_price"))
+            max_twap_dz = finite_float(snapshot.get("twap_lag_cheap_cont_max_twap_move_dz"))
+            if None not in (price, twap_dz, raw_dz, max_price, max_twap_dz):
+                return (
+                    "TWAP_LAG_CHEAP_CONT_BLOCK "
+                    f"(price {price:.2f}<={max_price:.2f}, "
+                    f"0<twap_dz {twap_dz:.2f}<{max_twap_dz:.2f}, raw_dz {raw_dz:.2f}<=0)"
+                )
+            return "TWAP_LAG_CHEAP_CONT_BLOCK"
         return blocker
 
     def _format_entry_blockers(
@@ -5293,6 +5316,11 @@ class StatsBot:
                         "down_move_dz_bucket",
                         "selected_move_dz",
                         "selected_move_dz_bucket",
+                        "raw_move_dz",
+                        "up_raw_move_dz",
+                        "down_raw_move_dz",
+                        "selected_raw_move_dz",
+                        "selected_raw_minus_twap_move_dz",
                         "distance_z_delta_2s",
                         "up_side_dz_delta_2s",
                         "down_side_dz_delta_2s",
@@ -5427,6 +5455,11 @@ class StatsBot:
                     snapshot.get("down_move_dz_bucket", "") if snapshot else "",
                     _fmt(snapshot.get("selected_move_dz"), 6, "") if snapshot else "",
                     snapshot.get("selected_move_dz_bucket", "") if snapshot else "",
+                    _fmt(snapshot.get("raw_move_dz"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("up_raw_move_dz"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("down_raw_move_dz"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("selected_raw_move_dz"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("selected_raw_minus_twap_move_dz"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("distance_z_delta_2s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("up_side_dz_delta_2s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("down_side_dz_delta_2s"), 6, "") if snapshot else "",
@@ -5575,11 +5608,11 @@ class StatsBot:
                 lines.append(f"    recovery          : active (anchor=${anchor:.2f}, floor={floor:+.2f})")
         lines.append(f"    wins/losses       : {self.total_wins}/{self.total_losses}")
         lines.append(
-            f"    cont wins/losses  : "
+            f"    C w/l             : "
             f"{self.trade_style_wins['continuation']}/{self.trade_style_losses['continuation']}"
         )
         lines.append(
-            f"    MR wins/losses    : "
+            f"    MR w/l            : "
             f"{self.trade_style_wins['mean_reversion']}/{self.trade_style_losses['mean_reversion']}"
         )
         if self.current_market:
@@ -5605,7 +5638,7 @@ class StatsBot:
                 edge = finite_float(decision.entry_edge_threshold) if decision is not None else None
                 if not style or edge is None:
                     return "NA"
-                style_label = "MR" if style == "mean_reversion" else "C"
+                style_label = self._trade_style_display(style)
                 source = str(snapshot.get("entry_rule_source_family") or "")
                 segment = str(snapshot.get("entry_rule_source_segment") or "")
                 source_label = {
@@ -5762,7 +5795,7 @@ class StatsBot:
                 f"    value / edge      : {_fmt(decision.selected_trade_value)} / "
                 f"{_fmt(decision.selected_policy_edge)} (need {_fmt(decision.entry_edge_threshold)})"
             )
-            lines.append(f"    trade_style       : {decision.selected_trade_style or 'NA'}")
+            lines.append(f"    trade_type        : {self._trade_style_display(decision.selected_trade_style)}")
             policy_support, policy_level = _policy_support_level(snapshot)
             lines.append(
                 f"    support / level   : {policy_support} / {policy_level}"

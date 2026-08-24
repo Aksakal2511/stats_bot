@@ -26,7 +26,7 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_MACRO_POLICY_BUNDLE = (
     REPO_ROOT
     / "strategy"
-    / "btc_w60_stagea_pb_time_nyse_wide_c003_hl120_lifetime_excl_apr29_may18_daytype_included_c08_m08_t75_240_jul25_v1"
+    / "btc_twap60_native_spot_z_asym_wide_mid_c003_c07_m08_t75_240_aug14_aug23_v1"
     / "strategy_manifest.json"
 )
 
@@ -117,6 +117,11 @@ class BotConfig:
     ultra_low_vol_cont_max_vol_bps: float
     ultra_low_vol_cont_min_price: float
     ultra_low_vol_cont_max_abs_move_dz: float
+    twap_lag_cheap_cont_guard_enabled: bool
+    twap_lag_cheap_cont_max_price: float
+    twap_lag_cheap_cont_min_twap_move_dz: float
+    twap_lag_cheap_cont_max_twap_move_dz: float
+    twap_lag_cheap_cont_max_raw_move_dz: float
     policy_no_longer_viable_latch_seconds: float
     live_entry_retry_cooldown_seconds: float
     live_max_entry_attempts_per_window: int
@@ -372,6 +377,14 @@ def build_config(args: argparse.Namespace) -> BotConfig:
             0.0,
             _float_env("STATS_ULTRA_LOW_VOL_CONT_MAX_ABS_MOVE_DZ", 1.25),
         ),
+        twap_lag_cheap_cont_guard_enabled=_bool_env("STATS_TWAP_LAG_CHEAP_CONT_GUARD_ENABLED", False),
+        twap_lag_cheap_cont_max_price=max(
+            0.0,
+            min(1.0, _float_env("STATS_TWAP_LAG_CHEAP_CONT_MAX_PRICE", 0.35)),
+        ),
+        twap_lag_cheap_cont_min_twap_move_dz=_float_env("STATS_TWAP_LAG_CHEAP_CONT_MIN_TWAP_MOVE_DZ", 0.0),
+        twap_lag_cheap_cont_max_twap_move_dz=_float_env("STATS_TWAP_LAG_CHEAP_CONT_MAX_TWAP_MOVE_DZ", 0.50),
+        twap_lag_cheap_cont_max_raw_move_dz=_float_env("STATS_TWAP_LAG_CHEAP_CONT_MAX_RAW_MOVE_DZ", 0.0),
         policy_no_longer_viable_latch_seconds=max(
             0.0,
             _float_env("STATS_POLICY_NO_LONGER_VIABLE_LATCH_SECONDS", 1.5),

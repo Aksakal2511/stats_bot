@@ -1,0 +1,64 @@
+{
+  "schema_version": 3,
+  "policy_type": "continuous_surface",
+  "strategy_id": "btc_twap60_native_spot_z_asym_wide_mid_c003_c07_m08_t75_240_aug14_aug23_v1",
+  "description": "TWAP-native spot_z linear value model segmented by asymmetric_wide_mid PM price buckets.",
+  "created_at_utc": "2026-08-24T14:41:13.295486+00:00",
+  "training_start": "2026-08-14",
+  "training_end": "2026-08-23",
+  "training_segments": [
+    [
+      "2026-08-14",
+      "2026-08-23"
+    ]
+  ],
+  "excluded_training_ranges": [],
+  "signal_source": "coinbase_btc_usd",
+  "signal_feature": "move_dz",
+  "signal_price_mode": "coinbase_analytic_twap_stream_pre_w60s",
+  "settlement_label": "coinbase_twap60_native_stream_outcome",
+  "display_session_width_hours": 4,
+  "entry": {
+    "edge_profile": "spot_z_global_C07_MR08",
+    "continuation_edge": 0.07,
+    "mean_reversion_edge": 0.08,
+    "min_tte": 75,
+    "max_tte": 240,
+    "min_price": 0.2,
+    "max_price": 0.8,
+    "shares": 5,
+    "max_quote_spread": 0.03,
+    "unique_markets": 2652
+  },
+  "model": {
+    "artifact": "surface_model_twap_native_spot_z_asym_wide_mid.pkl",
+    "kind": "twap_native_spot_z_price_bucket",
+    "label": "linear_asymmetric_wide_mid_spot_z_c0.03",
+    "feature_variant": "spot_z",
+    "c_value": 0.03,
+    "day_type_mode": "excluded",
+    "side_mode": "pooled",
+    "policy_level": "ALL|POOLED",
+    "price_bucket_scheme": "asymmetric_wide_mid",
+    "training_rows": 3478735,
+    "bucket_rows": {
+      "p20_30": 574557,
+      "p30_45": 856856,
+      "p45_55": 547467,
+      "p55_70": 860259,
+      "p70_80": 639596
+    }
+  },
+  "guards": {
+    "twap_lag_cheap_cont_block": {
+      "enabled": false,
+      "rule": "selected_price<=0.35 and 0<selected_twap_move_dz<0.50 and selected_raw_move_dz<=0"
+    }
+  },
+  "export_inputs": {
+    "daily_dir": "/Volumes/Kate_DATA/policy_finder/twap/data/combined/pm_events_cb_tick_w60_aug14_20260824",
+    "pm_dead_zone_window_excluded": true,
+    "price_bucket_min_rows": 1000,
+    "price_bucket_min_class": 50
+  }
+}
