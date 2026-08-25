@@ -208,6 +208,64 @@ class DynamicEdgeSelector:
         return None
 
 
+class VolHighContinuationEdgeSelector:
+    def __init__(self, payload: dict[str, Any], *, default_min_tte: int, default_max_tte: int):
+        self.rule_label = str(payload.get("entry_rule_label") or "vol_dynamic_edges")
+        self.default_min_tte = int(default_min_tte)
+        self.default_max_tte = int(default_max_tte)
+        self.high_vol_threshold_bps = float(payload["high_vol_threshold_bps"])
+        self.base_continuation_edge = float(payload["base_continuation_edge"])
+        self.high_vol_continuation_edge = float(payload["high_vol_continuation_edge"])
+        self.mean_reversion_edge = float(payload["mean_reversion_edge"])
+        self.source_family = str(payload.get("source_family") or "vol_high_lower1")
+        self.base_edge_pair = str(payload.get("base_edge_pair") or "C07_M08")
+        self.high_vol_edge_pair = str(payload.get("high_vol_edge_pair") or "C06_M08")
+        self.support = int(payload.get("support") or 0)
+
+    def select(
+        self,
+        *,
+        day_group: str,
+        timestamp_london: Any,
+        local_vol_1h_bps: float | None,
+        trade_style: str,
+        selected_ask: float | None,
+    ) -> DynamicEdgeSelection | None:
+        del day_group, timestamp_london, selected_ask
+        if trade_style not in {"continuation", "mean_reversion"}:
+            return None
+        local_vol = finite_float(local_vol_1h_bps)
+        high_vol = local_vol is not None and local_vol >= self.high_vol_threshold_bps - 1e-12
+        if trade_style == "continuation" and high_vol:
+            edge = self.high_vol_continuation_edge
+            source_segment = "high_vol"
+            edge_pair = self.high_vol_edge_pair
+            vol_bucket = "high"
+        else:
+            edge = self.mean_reversion_edge if trade_style == "mean_reversion" else self.base_continuation_edge
+            source_segment = "base"
+            edge_pair = self.base_edge_pair
+            vol_bucket = "base"
+        return DynamicEdgeSelection(
+            parameters=EntryParameters(
+                edge=edge,
+                min_tte=self.default_min_tte,
+                max_tte=self.default_max_tte,
+            ),
+            rule_label=self.rule_label,
+            source_family=self.source_family,
+            source_segment=source_segment,
+            child_segment=source_segment,
+            fallback_depth=0,
+            support=self.support,
+            edge_pair=edge_pair,
+            contradiction_state="",
+            vol_bucket=vol_bucket,
+            time_segment="",
+            day_group="",
+        )
+
+
 class MacroLocalPolicy:
     def __init__(self, path: Path):
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -511,18 +569,25 @@ class MacroLocalPolicy:
         self,
         profile_payload: dict[str, Any],
         manifest_path: Path,
-    ) -> DynamicEdgeSelector | None:
+    ) -> DynamicEdgeSelector | VolHighContinuationEdgeSelector | None:
         raw = profile_payload.get("dynamic_edge_selector")
         if not isinstance(raw, dict) or not bool(raw.get("enabled", True)):
             return None
+        default_min_tte = int(profile_payload.get("default", {}).get("min_tte", self.entry["min_tte"]))
+        default_max_tte = int(profile_payload.get("default", {}).get("max_tte", self.entry["max_tte"]))
+        selector_kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
+        if selector_kind == "vol_high_lower1_continuation":
+            return VolHighContinuationEdgeSelector(
+                raw,
+                default_min_tte=default_min_tte,
+                default_max_tte=default_max_tte,
+            )
         artifact = Path(str(raw.get("artifact") or ""))
         if not artifact:
             raise ValueError("dynamic_edge_selector requires an artifact path")
         if not artifact.is_absolute():
             artifact = manifest_path.parent / artifact
         payload = json.loads(artifact.read_text(encoding="utf-8"))
-        default_min_tte = int(profile_payload.get("default", {}).get("min_tte", self.entry["min_tte"]))
-        default_max_tte = int(profile_payload.get("default", {}).get("max_tte", self.entry["max_tte"]))
         return DynamicEdgeSelector(
             payload,
             default_min_tte=default_min_tte,

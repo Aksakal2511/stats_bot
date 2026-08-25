@@ -1407,6 +1407,20 @@ class StatsBot:
         coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
         return _fmt(coinbase_bps, 5)
 
+    def _dashboard_twap_signed_bps_text(self, snapshot: dict[str, Any], digits: int = 5) -> str:
+        coinbase_bps = finite_float(snapshot.get("cb_twap_60s_signed_bps_raw"))
+        if coinbase_bps is None:
+            coinbase_bps = finite_float(snapshot.get("cb_twap_signed_bps_raw"))
+        if coinbase_bps is None and "twap" in str(snapshot.get("cb_signal_price_mode") or "").lower():
+            coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
+        return _fmt(coinbase_bps, digits)
+
+    def _dashboard_spot_signed_bps_text(self, snapshot: dict[str, Any], digits: int = 5) -> str:
+        coinbase_bps = finite_float(snapshot.get("cb_spot_signed_bps_raw"))
+        if coinbase_bps is None and "twap" not in str(snapshot.get("cb_signal_price_mode") or "").lower():
+            coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
+        return _fmt(coinbase_bps, digits)
+
     def _dashboard_net_signed_flow_text(self) -> str:
         lookback_seconds = getattr(self.config, "pressure_signed_volume_lookback_seconds", 30)
         rows = self.binance_spot.history_rows()
@@ -5642,6 +5656,7 @@ class StatsBot:
                 source = str(snapshot.get("entry_rule_source_family") or "")
                 segment = str(snapshot.get("entry_rule_source_segment") or "")
                 source_label = {
+                    "vol_high_lower1": "vol",
                     "day_group_time_vol_q4": "vol",
                     "day_group_time_contradiction_vol_q4": "118",
                     "day_group_time_contradiction": "30",
@@ -5714,7 +5729,8 @@ class StatsBot:
                 )
             else:
                 lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
-            lines.append(f"    signed_bps        : {self._dashboard_signed_bps_text(snapshot)}")
+            lines.append(f"    {'signed_bps (TWAP)':<20}: {self._dashboard_twap_signed_bps_text(snapshot)}")
+            lines.append(f"    {'signed_bps (spot)':<20}: {self._dashboard_spot_signed_bps_text(snapshot)}")
             signal_name = str(snapshot.get("policy_signal_name") or "move_z")
             if signal_name not in {"move_z", "move_dz"}:
                 signal_name = "move_z"
@@ -5835,7 +5851,13 @@ class StatsBot:
             lines.append(f"    unrealized_pnl    : {upnl_text}")
             lines.append(f"    entry_cost        : {self.active_position.entry_cost:.4f}")
             lines.append(f"    hold_seconds      : {hold_seconds:.1f}")
-            lines.append(f"    entry_bps         : {self.active_position.entry_bps:+.2f}")
+            entry_snapshot = self.active_position.entry_snapshot or {}
+            lines.append(
+                f"    {'entry_bps (TWAP)':<20}: {self._dashboard_twap_signed_bps_text(entry_snapshot, 2)}"
+            )
+            lines.append(
+                f"    {'entry_bps (spot)':<20}: {self._dashboard_spot_signed_bps_text(entry_snapshot, 2)}"
+            )
             lines.append(f"    entry_edge_thresh : {self.active_position.entry_edge_threshold:.2f}")
             lines.append(f"    exit_policy_mode  : {self.config.exit_policy_mode}")
             if self.config.move_dz_stoploss_enabled:

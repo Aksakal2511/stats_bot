@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "timezone": "UTC",
-  "source": "twap_native_spot_gap_surface_export",
-  "selected_spec": "C07_MR08",
+  "source": "twap_native_spot_z_surface_export",
+  "selected_spec": "ztail0p4_roll15_q0p25_0p75__vol_high_lower1__continuation__base_C07_M08",
   "trade_style_display_names": {
     "continuation": "C",
     "mean_reversion": "MR"
@@ -20,6 +20,21 @@
     },
     "min_tte": 75,
     "max_tte": 240
+  },
+  "dynamic_edge_selector": {
+    "enabled": true,
+    "kind": "vol_high_lower1_continuation",
+    "entry_rule_label": "vol_dynamic_edges",
+    "source_family": "vol_high_lower1",
+    "base_edge_pair": "C07_M08",
+    "high_vol_edge_pair": "C06_M08",
+    "base_continuation_edge": 0.07,
+    "high_vol_continuation_edge": 0.06,
+    "mean_reversion_edge": 0.08,
+    "high_vol_threshold_bps": 61.85814361523389,
+    "support": 3478735,
+    "research_candidate": "ztail0p4_roll15_q0p25_0p75__vol_high_lower1__continuation__base_C07_M08",
+    "notes": "Use base C07/M08, but lower continuation to C06 when local_vol_1h is at/above full-training P75."
   },
   "overrides": {}
 }

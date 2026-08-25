@@ -8,7 +8,7 @@ TWAP-native BTC 5-minute value bundle.
 - Price buckets: `asymmetric_wide_mid`
 - Training data: TWAP-native Telonex/Polymarket + Coinbase event dataset, 2026-08-14..2026-08-23
 - Exclusions: `pm_dead_zone_window = true`, outside TTE 75-240s, outside price 0.20-0.80
-- Edges: C 7%, MR 8%
+- Edges: base C 7%, MR 8%; high-vol continuation C 6% when `local_vol_1h >= 61.85814361523389` bps
 - Training rows: 3,478,735
 - Unique markets: 2,652
 - Bucket rows: {'p20_30': 574557, 'p30_45': 856856, 'p45_55': 547467, 'p55_70': 860259, 'p70_80': 639596}
