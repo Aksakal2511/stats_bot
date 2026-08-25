@@ -477,6 +477,7 @@ class StatsBot:
         self.entry_attempts_by_window: dict[str, int] = {}
         self.entry_lifecycle_by_window: dict[str, str] = {}
         self.entry_attempt_orders_by_window: dict[str, list[PendingEntryOrder]] = {}
+        self.ambiguous_entry_submissions_by_window: dict[str, list[tuple[EntrySubmission, datetime]]] = {}
         self.recent_client_pipeline_ms: collections.deque[float] = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
         self.recent_clob_ack_ms: collections.deque[float] = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
         self.recent_decision_to_response_ms: collections.deque[float] = collections.deque(maxlen=EXECUTION_HEALTH_WINDOW)
@@ -2751,6 +2752,148 @@ class StatsBot:
     def _entry_lifecycle_blocks_entry(self, market_slug: str) -> bool:
         return self._entry_lifecycle_state(market_slug) in ENTRY_LIFECYCLE_BLOCKING_STATES
 
+    @staticmethod
+    def _entry_submit_result_is_ambiguous(result: OrderResult) -> bool:
+        if result.ok or result.order_id:
+            return False
+        message = str(result.message or "").lower()
+        transport_error = ""
+        if result.transport_metrics:
+            transport_error = str(result.transport_metrics.get("transport_error_type") or "").lower()
+        return (
+            str(result.status or "").upper() == "ERROR"
+            and (
+                "request exception" in message
+                or "timeout" in message
+                or "timed out" in message
+                or bool(transport_error)
+            )
+        )
+
+    def _remember_ambiguous_entry_submission(
+        self,
+        submission: EntrySubmission,
+        completed_at_utc: datetime,
+        result: OrderResult,
+    ) -> None:
+        submissions = self.ambiguous_entry_submissions_by_window.setdefault(submission.market_slug, [])
+        cutoff = completed_at_utc - timedelta(seconds=30)
+        submissions[:] = [(item, seen_at) for item, seen_at in submissions if seen_at >= cutoff]
+        submissions.append((submission, completed_at_utc))
+        self._log_event(
+            "maker_entry_ambiguous",
+            "SUBMIT_RESULT_UNKNOWN_AWAITING_USER_WS",
+            {
+                "submission_id": submission.submission_id,
+                "side": submission.policy_side,
+                "price": submission.quote.price,
+                "shares": submission.quote.shares,
+                "target_notional": submission.quote.target_notional,
+                "status": result.status,
+                "message": result.message[:500],
+            },
+        )
+        self._log_latency(
+            "ambiguous_submit_watch",
+            market_slug=submission.market_slug,
+            source="entry_manager",
+            submission_id=submission.submission_id,
+            side=submission.policy_side,
+            limit_price=submission.quote.price,
+            required_edge=submission.quote.required_edge,
+            edge_at_limit=submission.quote.edge_at_limit,
+            detail=(result.message or "")[:240],
+        )
+
+    def _recover_ambiguous_entry_from_user_event(
+        self,
+        received_at: datetime,
+        fields: dict[str, Any],
+        token_id: str,
+    ) -> bool:
+        if self.config.paper_trading or self.active_position is not None:
+            return False
+        market_slug = str(fields.get("market_slug") or "")
+        order_id = str(fields.get("order_id") or "")
+        status = str(fields.get("status") or "").lower()
+        if not market_slug or not order_id:
+            return False
+        if self.current_market is None or self.current_market.slug != market_slug:
+            return False
+        candidates = self.ambiguous_entry_submissions_by_window.get(market_slug) or []
+        if not candidates:
+            return False
+        cutoff = received_at - timedelta(seconds=30)
+        fresh_candidates = [(submission, seen_at) for submission, seen_at in candidates if seen_at >= cutoff]
+        self.ambiguous_entry_submissions_by_window[market_slug] = fresh_candidates
+        if not fresh_candidates:
+            return False
+        matching: list[tuple[EntrySubmission, datetime]] = []
+        for submission, seen_at in fresh_candidates:
+            if token_id and submission.token_id and token_id != submission.token_id:
+                continue
+            matching.append((submission, seen_at))
+        if not matching:
+            return False
+        submission, _seen_at = max(matching, key=lambda item: item[1])
+        if self.pending_entry is not None and self.pending_entry.market_slug == market_slug:
+            pending = self.pending_entry
+            if pending.order_id != order_id:
+                pending.order_id = order_id
+        else:
+            pending = PendingEntryOrder(
+                order_id=order_id,
+                token_id=submission.token_id,
+                side="BUY",
+                price=submission.quote.price,
+                target_shares=submission.quote.shares,
+                created_at_utc=submission.submitted_at_utc,
+                market_slug=submission.market_slug,
+                policy_key_text=submission.policy_key_text,
+                policy_side=submission.policy_side,
+                snapshot=submission.snapshot,
+                target_notional=submission.quote.target_notional,
+                wallet_balance_before=submission.wallet_balance_before,
+            )
+            self.pending_entry = pending
+            self.entry_attempt_orders_by_window.setdefault(submission.market_slug, []).append(pending)
+        self._set_entry_lifecycle_state(submission.market_slug, "RESTING")
+        self._log_event(
+            "maker_entry_recovered",
+            "USER_WS_AFTER_AMBIGUOUS_SUBMIT",
+            {
+                "submission_id": submission.submission_id,
+                "order_id": order_id,
+                "status": status,
+                "side": submission.policy_side,
+                "price": submission.quote.price,
+                "shares": submission.quote.shares,
+            },
+        )
+        self._log_latency(
+            "ambiguous_submit_recovered",
+            market_slug=submission.market_slug,
+            source="user_ws",
+            submission_id=submission.submission_id,
+            order_id=order_id,
+            order_status=status,
+            side=submission.policy_side,
+            limit_price=submission.quote.price,
+            required_edge=submission.quote.required_edge,
+            edge_at_limit=submission.quote.edge_at_limit,
+            detail=str(fields.get("user_event_type") or ""),
+        )
+        if _order_status_is_fill_like(status):
+            self._open_new_live_fill_from_progress(
+                pending,
+                received_at,
+                "USER_WS_AMBIGUOUS_SUBMIT",
+                status,
+                0.0,
+                pending.price,
+            )
+        return True
+
     def _entry_snapshot_with_meta(
         self,
         now_utc: datetime,
@@ -3185,7 +3328,12 @@ class StatsBot:
                 force=True,
             )
             if not result.ok or not result.order_id:
-                self._remember_error(f"Entry submission failed: {result.status} {result.message[:160]}")
+                ambiguous_submit = self._entry_submit_result_is_ambiguous(result)
+                if ambiguous_submit:
+                    self._remember_error(f"Entry submission result unknown: {result.status} {result.message[:160]}")
+                    self._remember_ambiguous_entry_submission(submission, completed, result)
+                else:
+                    self._remember_error(f"Entry submission failed: {result.status} {result.message[:160]}")
                 self._log_event(
                     "fast_entry_failed" if submission.signed_order is not None else "maker_entry_failed",
                     result.status,
@@ -3204,12 +3352,12 @@ class StatsBot:
                     if self._entry_submission is current:
                         self._entry_submission = None
                         self._entry_submission_state = "IDLE"
-                        self._set_entry_lifecycle_state(submission.market_slug, "FAILED")
+                        self._set_entry_lifecycle_state(submission.market_slug, "UNKNOWN" if ambiguous_submit else "FAILED")
                 self._record_decision_journal(
                     completed,
                     submission.snapshot,
                     None,
-                    event_type="submit_failed",
+                    event_type="submit_ambiguous" if ambiguous_submit else "submit_failed",
                     extra={
                         "submission_id": submission.submission_id,
                         "attempt": submission.attempt_count,
@@ -3385,6 +3533,8 @@ class StatsBot:
                     else fields.get("user_event_type", "")
                 ),
             )
+            if event_type == "user_order":
+                self._recover_ambiguous_entry_from_user_event(received_at, fields, token_id)
         if latest_trigger is not None:
             self._last_policy_trigger = latest_trigger
         if reconcile_pending and self.pending_entry is not None:
@@ -5729,8 +5879,8 @@ class StatsBot:
                 )
             else:
                 lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
-            lines.append(f"    {'signed_bps (TWAP)':<20}: {self._dashboard_twap_signed_bps_text(snapshot)}")
-            lines.append(f"    {'signed_bps (spot)':<20}: {self._dashboard_spot_signed_bps_text(snapshot)}")
+            lines.append(f"    {'signed_bps (TWAP)':<18}: {self._dashboard_twap_signed_bps_text(snapshot)}")
+            lines.append(f"    {'signed_bps (spot)':<18}: {self._dashboard_spot_signed_bps_text(snapshot)}")
             signal_name = str(snapshot.get("policy_signal_name") or "move_z")
             if signal_name not in {"move_z", "move_dz"}:
                 signal_name = "move_z"
@@ -5853,10 +6003,10 @@ class StatsBot:
             lines.append(f"    hold_seconds      : {hold_seconds:.1f}")
             entry_snapshot = self.active_position.entry_snapshot or {}
             lines.append(
-                f"    {'entry_bps (TWAP)':<20}: {self._dashboard_twap_signed_bps_text(entry_snapshot, 2)}"
+                f"    {'entry_bps (TWAP)':<18}: {self._dashboard_twap_signed_bps_text(entry_snapshot, 2)}"
             )
             lines.append(
-                f"    {'entry_bps (spot)':<20}: {self._dashboard_spot_signed_bps_text(entry_snapshot, 2)}"
+                f"    {'entry_bps (spot)':<18}: {self._dashboard_spot_signed_bps_text(entry_snapshot, 2)}"
             )
             lines.append(f"    entry_edge_thresh : {self.active_position.entry_edge_threshold:.2f}")
             lines.append(f"    exit_policy_mode  : {self.config.exit_policy_mode}")
