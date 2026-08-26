@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "timezone": "UTC",
+  "source": "twap_native_spot_z_surface_export",
+  "selected_spec": "vol_high_lower1_continuation_base_C07_M09_high_C06_M09",
+  "trade_style_display_names": {
+    "continuation": "C",
+    "mean_reversion": "MR"
+  },
+  "default": {
+    "continuation": {
+      "edge": 0.07,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "mean_reversion": {
+      "edge": 0.09,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "min_tte": 75,
+    "max_tte": 240
+  },
+  "dynamic_edge_selector": {
+    "enabled": true,
+    "kind": "vol_high_lower1_continuation",
+    "entry_rule_label": "vol_dynamic_edges",
+    "source_family": "vol_high_lower1",
+    "base_edge_pair": "C07_M09",
+    "high_vol_edge_pair": "C06_M09",
+    "base_continuation_edge": 0.07,
+    "high_vol_continuation_edge": 0.06,
+    "mean_reversion_edge": 0.09,
+    "high_vol_threshold_bps": 63.22645537172167,
+    "support": 4043021,
+    "research_candidate": "DYN_VOLHIGH_C06_M09_BASE_C07_M09",
+    "notes": "Use base C07/M09, but lower continuation to C06 when local_vol_1h is at/above full-training P75 from Aug14-Aug24."
+  },
+  "overrides": {}
+}

@@ -26,7 +26,7 @@ DEFAULT_LOG_DIR = REPO_ROOT / "logs"
 DEFAULT_MACRO_POLICY_BUNDLE = (
     REPO_ROOT
     / "strategy"
-    / "btc_twap60_native_spot_z_asym_wide_mid_c003_c07_m08_t75_240_aug14_aug23_v1"
+    / "btc_twap60_native_spot_z_asym_wide_mid_c003_c07_m09_highvol_c06_m09_t75_240_aug14_aug24_v1"
     / "strategy_manifest.json"
 )
 
