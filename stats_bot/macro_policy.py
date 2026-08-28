@@ -217,6 +217,9 @@ class VolHighContinuationEdgeSelector:
         self.base_continuation_edge = float(payload["base_continuation_edge"])
         self.high_vol_continuation_edge = float(payload["high_vol_continuation_edge"])
         self.mean_reversion_edge = float(payload["mean_reversion_edge"])
+        self.high_vol_mean_reversion_edge = finite_float(payload.get("high_vol_mean_reversion_edge"))
+        if self.high_vol_mean_reversion_edge is None:
+            self.high_vol_mean_reversion_edge = self.mean_reversion_edge
         self.source_family = str(payload.get("source_family") or "vol_high_lower1")
         self.base_edge_pair = str(payload.get("base_edge_pair") or "C07_M08")
         self.high_vol_edge_pair = str(payload.get("high_vol_edge_pair") or "C06_M08")
@@ -236,8 +239,12 @@ class VolHighContinuationEdgeSelector:
             return None
         local_vol = finite_float(local_vol_1h_bps)
         high_vol = local_vol is not None and local_vol >= self.high_vol_threshold_bps - 1e-12
-        if trade_style == "continuation" and high_vol:
-            edge = self.high_vol_continuation_edge
+        if high_vol:
+            edge = (
+                self.high_vol_continuation_edge
+                if trade_style == "continuation"
+                else self.high_vol_mean_reversion_edge
+            )
             source_segment = "high_vol"
             edge_pair = self.high_vol_edge_pair
             vol_bucket = "high"
@@ -246,6 +253,77 @@ class VolHighContinuationEdgeSelector:
             source_segment = "base"
             edge_pair = self.base_edge_pair
             vol_bucket = "base"
+        return DynamicEdgeSelection(
+            parameters=EntryParameters(
+                edge=edge,
+                min_tte=self.default_min_tte,
+                max_tte=self.default_max_tte,
+            ),
+            rule_label=self.rule_label,
+            source_family=self.source_family,
+            source_segment=source_segment,
+            child_segment=source_segment,
+            fallback_depth=0,
+            support=self.support,
+            edge_pair=edge_pair,
+            contradiction_state="",
+            vol_bucket=vol_bucket,
+            time_segment="",
+            day_group="",
+        )
+
+
+class VolThreeZoneEdgeSelector:
+    def __init__(self, payload: dict[str, Any], *, default_min_tte: int, default_max_tte: int):
+        self.rule_label = str(payload.get("entry_rule_label") or "vol_three_zone_edges")
+        self.default_min_tte = int(default_min_tte)
+        self.default_max_tte = int(default_max_tte)
+        self.low_vol_threshold_bps = float(payload["low_vol_threshold_bps"])
+        self.high_vol_threshold_bps = float(payload["high_vol_threshold_bps"])
+        if self.low_vol_threshold_bps > self.high_vol_threshold_bps:
+            raise ValueError("vol_three_zone dynamic selector requires low_vol_threshold_bps <= high_vol_threshold_bps")
+        self.low_continuation_edge = float(payload["low_vol_continuation_edge"])
+        self.low_mean_reversion_edge = float(payload["low_vol_mean_reversion_edge"])
+        self.mid_continuation_edge = float(payload["mid_vol_continuation_edge"])
+        self.mid_mean_reversion_edge = float(payload["mid_vol_mean_reversion_edge"])
+        self.high_continuation_edge = float(payload["high_vol_continuation_edge"])
+        self.high_mean_reversion_edge = float(payload["high_vol_mean_reversion_edge"])
+        self.source_family = str(payload.get("source_family") or "vol_p25_p75_three_zone")
+        self.low_edge_pair = str(payload.get("low_vol_edge_pair") or "")
+        self.mid_edge_pair = str(payload.get("mid_vol_edge_pair") or "")
+        self.high_edge_pair = str(payload.get("high_vol_edge_pair") or "")
+        self.support = int(payload.get("support") or 0)
+
+    def select(
+        self,
+        *,
+        day_group: str,
+        timestamp_london: Any,
+        local_vol_1h_bps: float | None,
+        trade_style: str,
+        selected_ask: float | None,
+    ) -> DynamicEdgeSelection | None:
+        del day_group, timestamp_london, selected_ask
+        if trade_style not in {"continuation", "mean_reversion"}:
+            return None
+        local_vol = finite_float(local_vol_1h_bps)
+        if local_vol is None:
+            return None
+        if local_vol <= self.low_vol_threshold_bps + 1e-12:
+            edge = self.low_mean_reversion_edge if trade_style == "mean_reversion" else self.low_continuation_edge
+            source_segment = "low_vol"
+            edge_pair = self.low_edge_pair
+            vol_bucket = "low"
+        elif local_vol >= self.high_vol_threshold_bps - 1e-12:
+            edge = self.high_mean_reversion_edge if trade_style == "mean_reversion" else self.high_continuation_edge
+            source_segment = "high_vol"
+            edge_pair = self.high_edge_pair
+            vol_bucket = "high"
+        else:
+            edge = self.mid_mean_reversion_edge if trade_style == "mean_reversion" else self.mid_continuation_edge
+            source_segment = "mid_vol"
+            edge_pair = self.mid_edge_pair
+            vol_bucket = "mid"
         return DynamicEdgeSelection(
             parameters=EntryParameters(
                 edge=edge,
@@ -569,7 +647,7 @@ class MacroLocalPolicy:
         self,
         profile_payload: dict[str, Any],
         manifest_path: Path,
-    ) -> DynamicEdgeSelector | VolHighContinuationEdgeSelector | None:
+    ) -> DynamicEdgeSelector | VolHighContinuationEdgeSelector | VolThreeZoneEdgeSelector | None:
         raw = profile_payload.get("dynamic_edge_selector")
         if not isinstance(raw, dict) or not bool(raw.get("enabled", True)):
             return None
@@ -578,6 +656,12 @@ class MacroLocalPolicy:
         selector_kind = str(raw.get("kind") or raw.get("type") or "").strip().lower()
         if selector_kind == "vol_high_lower1_continuation":
             return VolHighContinuationEdgeSelector(
+                raw,
+                default_min_tte=default_min_tte,
+                default_max_tte=default_max_tte,
+            )
+        if selector_kind in {"vol_three_zone", "vol_p25_p75_three_zone"}:
+            return VolThreeZoneEdgeSelector(
                 raw,
                 default_min_tte=default_min_tte,
                 default_max_tte=default_max_tte,

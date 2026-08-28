@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from stats_bot.coinbase import CoinbaseFeed
 from stats_bot.continuous_surface import price_bucket_label
-from stats_bot.macro_policy import MacroLocalPolicy
+from stats_bot.macro_policy import MacroLocalPolicy, VolHighContinuationEdgeSelector, VolThreeZoneEdgeSelector
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -272,6 +272,111 @@ def test_dynamic_edge_selector_handles_mean_reversion_edges() -> None:
     assert p30_decision.selected_trade_style == "mean_reversion"
     assert p30_decision.entry_edge_threshold == 0.08
     assert p30_snapshot["selected_price_bucket"] == "p30_40"
+
+
+def test_vol_high_selector_can_lower_mean_reversion_edge() -> None:
+    selector = VolHighContinuationEdgeSelector(
+        {
+            "entry_rule_label": "vol_dynamic_edges",
+            "base_edge_pair": "C08_M09",
+            "high_vol_edge_pair": "C07_M08",
+            "base_continuation_edge": 0.08,
+            "high_vol_continuation_edge": 0.07,
+            "mean_reversion_edge": 0.09,
+            "high_vol_mean_reversion_edge": 0.08,
+            "high_vol_threshold_bps": 63.69,
+            "support": 123,
+        },
+        default_min_tte=75,
+        default_max_tte=240,
+    )
+
+    continuation = selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=70.0,
+        trade_style="continuation",
+        selected_ask=0.45,
+    )
+    mean_reversion = selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=70.0,
+        trade_style="mean_reversion",
+        selected_ask=0.45,
+    )
+
+    assert continuation is not None
+    assert continuation.parameters.edge == 0.07
+    assert continuation.edge_pair == "C07_M08"
+    assert mean_reversion is not None
+    assert mean_reversion.parameters.edge == 0.08
+    assert mean_reversion.edge_pair == "C07_M08"
+
+
+def test_vol_three_zone_selector_applies_low_mid_high_edges() -> None:
+    selector = VolThreeZoneEdgeSelector(
+        {
+            "entry_rule_label": "vol_three_zone_edges",
+            "source_family": "vol_p25_p75_three_zone",
+            "low_vol_threshold_bps": 28.27233270544888,
+            "high_vol_threshold_bps": 62.53779300295343,
+            "low_vol_edge_pair": "C09_M09",
+            "mid_vol_edge_pair": "C07_M09",
+            "high_vol_edge_pair": "C05_M09",
+            "low_vol_continuation_edge": 0.09,
+            "low_vol_mean_reversion_edge": 0.09,
+            "mid_vol_continuation_edge": 0.07,
+            "mid_vol_mean_reversion_edge": 0.09,
+            "high_vol_continuation_edge": 0.05,
+            "high_vol_mean_reversion_edge": 0.09,
+            "support": 4887816,
+        },
+        default_min_tte=75,
+        default_max_tte=240,
+    )
+
+    low = selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=20.0,
+        trade_style="continuation",
+        selected_ask=0.45,
+    )
+    mid = selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=40.0,
+        trade_style="continuation",
+        selected_ask=0.45,
+    )
+    high_mr = selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=70.0,
+        trade_style="mean_reversion",
+        selected_ask=0.45,
+    )
+
+    assert low is not None
+    assert low.parameters.edge == 0.09
+    assert low.edge_pair == "C09_M09"
+    assert low.vol_bucket == "low"
+    assert mid is not None
+    assert mid.parameters.edge == 0.07
+    assert mid.edge_pair == "C07_M09"
+    assert mid.vol_bucket == "mid"
+    assert high_mr is not None
+    assert high_mr.parameters.edge == 0.09
+    assert high_mr.edge_pair == "C05_M09"
+    assert high_mr.vol_bucket == "high"
+    assert selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=None,
+        trade_style="continuation",
+        selected_ask=0.45,
+    ) is None
 
 
 def test_sparse_dynamic_child_segment_falls_back_to_day_time_table() -> None:

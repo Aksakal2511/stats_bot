@@ -319,6 +319,13 @@ def _required_limit_edge_for_execution_health(status: str, base_required_edge: f
     return base_required_edge
 
 
+def _floor_price_to_tick(price: float, tick_size: float) -> float:
+    if tick_size <= 0:
+        tick_size = 0.01
+    decimals = max(0, min(4, len(str(tick_size).split(".")[-1].rstrip("0")) if "." in str(tick_size) else 0))
+    return round(max(0.001, min(0.999, math.floor((price + 1e-12) / tick_size) * tick_size)), decimals)
+
+
 def _execution_health_text(
     client_pipeline_ms: collections.deque[float],
     clob_ack_ms: collections.deque[float],
@@ -1422,6 +1429,13 @@ class StatsBot:
             coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
         return _fmt(coinbase_bps, digits)
 
+    def _dashboard_style_z_text(self, snapshot: dict[str, Any] | None, digits: int = 3) -> str:
+        if snapshot is None:
+            return "spot NA | twap NA"
+        spot_z = finite_float(snapshot.get("selected_raw_move_dz"))
+        twap_z = finite_float(snapshot.get("selected_twap_move_dz", snapshot.get("selected_move_dz")))
+        return f"spot {_fmt(spot_z, digits)} | twap {_fmt(twap_z, digits)}"
+
     def _dashboard_net_signed_flow_text(self) -> str:
         lookback_seconds = getattr(self.config, "pressure_signed_volume_lookback_seconds", 30)
         rows = self.binance_spot.history_rows()
@@ -1532,6 +1546,16 @@ class StatsBot:
 
     def _trade_style_display(self, trade_style: str | None) -> str:
         return self.macro_policy.display_trade_style(trade_style) if self.macro_policy is not None else str(trade_style or "NA")
+
+    def _trade_style_display_with_source(self, trade_style: str | None, snapshot: dict[str, Any] | None) -> str:
+        style = self._trade_style_display(trade_style)
+        if snapshot is None:
+            return style
+        if finite_float(snapshot.get("selected_raw_move_dz")) is not None:
+            return f"{style} (spot_z)"
+        if "twap" in str(snapshot.get("cb_signal_price_mode") or "").lower():
+            return f"{style} (twap_z)"
+        return style
 
     def _maybe_execute_pressure_defence(self, now_utc: datetime, snapshot: dict[str, Any] | None) -> None:
         position = self.active_position
@@ -2678,10 +2702,6 @@ class StatsBot:
             getattr(self, "recent_clob_ack_ms", collections.deque(maxlen=EXECUTION_HEALTH_WINDOW))
         )
         base_tolerance_ticks = _entry_tolerance_ticks_for_execution_health(health_status)
-        tolerated = ask + (base_tolerance_ticks * tick)
-        price = round_price(min(tolerated, active_max_entry), tick)
-        if price + 1e-12 < ask:
-            return None
         trade_value = finite_float(decision.selected_trade_value)
         base_required_edge = self._required_entry_edge_at_fill(now_utc, decision)
         if trade_value is None or base_required_edge is None:
@@ -2690,11 +2710,24 @@ class StatsBot:
         required_edge_at_limit = _required_limit_edge_for_execution_health(health_status, base_required_edge)
         if edge_at_ask + 1e-12 < required_edge_at_limit:
             return None
+        limit_mode = str(getattr(self.config, "entry_limit_price_mode", "tolerance") or "tolerance").strip().lower()
+        if limit_mode == "edge_preserving":
+            max_catchup_ticks = max(0, int(getattr(self.config, "entry_edge_preserving_max_catchup_ticks", 0) or 0))
+            buffer_ticks = max(0.0, float(getattr(self.config, "entry_edge_preserving_buffer_ticks", 0.0) or 0.0))
+            max_valid_limit = min(active_max_entry, trade_value - required_edge_at_limit - buffer_ticks * tick)
+            max_catchup_limit = ask + (max_catchup_ticks * tick)
+            price = _floor_price_to_tick(min(max_valid_limit, max_catchup_limit), tick)
+            tolerance_ticks = max(0, int(round((price - ask) / tick)))
+        else:
+            tolerated = ask + (base_tolerance_ticks * tick)
+            price = round_price(min(tolerated, active_max_entry), tick)
+            tolerance_ticks = base_tolerance_ticks
+        if price + 1e-12 < ask:
+            return None
         edge_at_limit = trade_value - price
         if edge_at_limit + 1e-12 < required_edge_at_limit:
             return None
-        tolerance_ticks = base_tolerance_ticks
-        if bool(getattr(self.config, "surplus_adaptive_entry_enabled", False)):
+        if limit_mode != "edge_preserving" and bool(getattr(self.config, "surplus_adaptive_entry_enabled", False)):
             min_surplus = finite_float(getattr(self.config, "surplus_adaptive_min_edge_surplus", 0.015))
             if min_surplus is None:
                 min_surplus = 0.015
@@ -3091,7 +3124,30 @@ class StatsBot:
         execution_mode = "paper_fast_limit_async" if self.config.paper_trading else "presigned_fast_limit_async"
         if quote is not None and not self.config.paper_trading:
             signed_order = self._presign_pop(market.slug, decision.selected_side, quote.price, quote.shares)
+            if signed_order is None and bool(getattr(self.config, "entry_on_demand_signed_fallback_enabled", False)):
+                try:
+                    signed_order = self.pm.create_signed_buy_order(
+                        token_id=self._selected_token_id(decision.selected_side),
+                        price=quote.price,
+                        shares=quote.shares,
+                        market=market,
+                    )
+                    execution_mode = "ondemand_signed_fast_limit_async"
+                except Exception as exc:
+                    self._remember_error(f"On-demand signed entry failed: {exc}")
         if quote is None or (signed_order is None and not self.config.paper_trading):
+            if bool(getattr(self.config, "entry_disable_maker_fallback", False)):
+                self._log_event(
+                    "entry_skipped",
+                    "SKIPPED_FAST_LIMIT_UNAVAILABLE",
+                    {
+                        "market_slug": market.slug,
+                        "side": decision.selected_side,
+                        "quote_available": int(quote is not None),
+                        "signed_order_available": int(signed_order is not None),
+                    },
+                )
+                return
             price, spread_ticks, book = self._maker_quote(decision.selected_side)
             if price is None:
                 return
@@ -3752,6 +3808,16 @@ class StatsBot:
             fast_quote = self._fast_entry_quote(now_utc, snapshot, decision) if self._presigned_entries_available() else None
             if fast_quote is not None:
                 signed_order = self._presign_pop(market.slug, decision.selected_side, fast_quote.price, fast_quote.shares)
+                if signed_order is None and bool(getattr(self.config, "entry_on_demand_signed_fallback_enabled", False)):
+                    try:
+                        signed_order = self.pm.create_signed_buy_order(
+                            token_id=self._selected_token_id(decision.selected_side),
+                            price=fast_quote.price,
+                            shares=fast_quote.shares,
+                            market=market,
+                        )
+                    except Exception as exc:
+                        self._remember_error(f"On-demand signed entry failed: {exc}")
                 if signed_order is not None:
                     snapshot_with_meta = self._entry_snapshot_with_meta(
                         now_utc,
@@ -3866,8 +3932,20 @@ class StatsBot:
                             result.status.lower(),
                             result.matched_shares,
                             fill_price,
-                        )
+                    )
                     return
+            if bool(getattr(self.config, "entry_disable_maker_fallback", False)):
+                self._log_event(
+                    "entry_skipped",
+                    "SKIPPED_FAST_LIMIT_UNAVAILABLE",
+                    {
+                        "market_slug": market.slug,
+                        "side": decision.selected_side,
+                        "quote_available": int(fast_quote is not None),
+                        "signed_order_available": 0,
+                    },
+                )
+                return
             # The fallback maker path still benefits from a fresh balance snapshot because
             # it is not latency-sensitive in the same way as a marketable pre-signed order.
             wallet_balance_before = self._refresh_wallet_balance(force=True)
@@ -5169,6 +5247,30 @@ class StatsBot:
             return ("TWAP_LAG_CHEAP_CONT_BLOCK",)
         return ()
 
+    def _mr_raw_twap_aligned_entry_blockers(
+        self,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision | None,
+    ) -> tuple[str, ...]:
+        if not bool(getattr(self.config, "mr_raw_twap_aligned_block_enabled", False)):
+            return ()
+        if snapshot is None or decision is None or not decision.viable:
+            return ()
+        trade_style = str(decision.selected_trade_style or "").strip().lower()
+        if trade_style != "mean_reversion":
+            return ()
+        raw_dz = finite_float(snapshot.get("selected_raw_move_dz"))
+        twap_dz = finite_float(snapshot.get("selected_twap_move_dz", snapshot.get("selected_move_dz")))
+        if raw_dz is None or twap_dz is None:
+            return ()
+        if abs(raw_dz) <= 1e-12 or abs(twap_dz) <= 1e-12:
+            return ()
+        if raw_dz * twap_dz > 0.0:
+            snapshot["mr_raw_twap_aligned_raw_move_dz"] = raw_dz
+            snapshot["mr_raw_twap_aligned_twap_move_dz"] = twap_dz
+            return ("MR_RAW_TWAP_ALIGNED_BLOCK",)
+        return ()
+
     def _record_session_style_guard_closed_trade(
         self,
         position: OpenPosition,
@@ -5233,6 +5335,7 @@ class StatsBot:
                     *self._low_liquidity_no_signal_entry_blockers(snapshot, decision),
                     *self._ultra_low_vol_entry_blockers(snapshot, decision),
                     *self._twap_lag_cheap_cont_entry_blockers(snapshot, decision),
+                    *self._mr_raw_twap_aligned_entry_blockers(snapshot, decision),
                 ]
             )
         )
@@ -5380,6 +5483,14 @@ class StatsBot:
                     f"0<twap_dz {twap_dz:.2f}<{max_twap_dz:.2f}, raw_dz {raw_dz:.2f}<=0)"
                 )
             return "TWAP_LAG_CHEAP_CONT_BLOCK"
+        if blocker == "MR_RAW_TWAP_ALIGNED_BLOCK":
+            if snapshot is None:
+                return "MR_RAW_TWAP_ALIGNED_BLOCK"
+            raw_dz = finite_float(snapshot.get("mr_raw_twap_aligned_raw_move_dz"))
+            twap_dz = finite_float(snapshot.get("mr_raw_twap_aligned_twap_move_dz"))
+            if raw_dz is not None and twap_dz is not None:
+                return f"MR_RAW_TWAP_ALIGNED_BLOCK (spot_z {raw_dz:+.3f}, twap_z {twap_dz:+.3f})"
+            return "MR_RAW_TWAP_ALIGNED_BLOCK"
         return blocker
 
     def _format_entry_blockers(
@@ -5806,6 +5917,7 @@ class StatsBot:
                 source = str(snapshot.get("entry_rule_source_family") or "")
                 segment = str(snapshot.get("entry_rule_source_segment") or "")
                 source_label = {
+                    "vol_p25_p75_three_zone": "vol",
                     "vol_high_lower1": "vol",
                     "day_group_time_vol_q4": "vol",
                     "day_group_time_contradiction_vol_q4": "118",
@@ -5881,6 +5993,8 @@ class StatsBot:
                 lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
             lines.append(f"    {'signed_bps (TWAP)':<18}: {self._dashboard_twap_signed_bps_text(snapshot)}")
             lines.append(f"    {'signed_bps (spot)':<18}: {self._dashboard_spot_signed_bps_text(snapshot)}")
+            if decision is not None and decision.selected_side:
+                lines.append(f"    {'style_z':<18}: {self._dashboard_style_z_text(snapshot)}")
             signal_name = str(snapshot.get("policy_signal_name") or "move_z")
             if signal_name not in {"move_z", "move_dz"}:
                 signal_name = "move_z"
@@ -5961,7 +6075,7 @@ class StatsBot:
                 f"    value / edge      : {_fmt(decision.selected_trade_value)} / "
                 f"{_fmt(decision.selected_policy_edge)} (need {_fmt(decision.entry_edge_threshold)})"
             )
-            lines.append(f"    trade_type        : {self._trade_style_display(decision.selected_trade_style)}")
+            lines.append(f"    trade_type        : {self._trade_style_display_with_source(decision.selected_trade_style, snapshot)}")
             policy_support, policy_level = _policy_support_level(snapshot)
             lines.append(
                 f"    support / level   : {policy_support} / {policy_level}"
@@ -5992,21 +6106,24 @@ class StatsBot:
             if finite_float(current) is not None:
                 upnl_text = f"{(float(current) - self.active_position.avg_entry_price) * self.active_position.shares:+.4f}"
             hold_seconds = (now_utc - self.active_position.entry_time_utc).total_seconds()
+            entry_snapshot = self.active_position.entry_snapshot or {}
             lines.append("")
             lines.append("  POSITION")
             lines.append(f"    side              : {side}")
+            lines.append(
+                f"    entry_type        : "
+                f"{self._trade_style_display_with_source(self._position_trade_style(self.active_position), entry_snapshot)}"
+            )
             lines.append(f"    shares            : {self.active_position.shares:.4f}")
             lines.append(f"    entry_price       : {self.active_position.avg_entry_price:.4f}")
             lines.append(f"    current_bid       : {current_text}")
             lines.append(f"    unrealized_pnl    : {upnl_text}")
             lines.append(f"    entry_cost        : {self.active_position.entry_cost:.4f}")
             lines.append(f"    hold_seconds      : {hold_seconds:.1f}")
-            entry_snapshot = self.active_position.entry_snapshot or {}
+            lines.append(f"    {'entry_z':<18}: {self._dashboard_style_z_text(entry_snapshot)}")
             lines.append(
-                f"    {'entry_bps (TWAP)':<18}: {self._dashboard_twap_signed_bps_text(entry_snapshot, 2)}"
-            )
-            lines.append(
-                f"    {'entry_bps (spot)':<18}: {self._dashboard_spot_signed_bps_text(entry_snapshot, 2)}"
+                f"    {'entry_bps':<18}: TWAP {self._dashboard_twap_signed_bps_text(entry_snapshot, 2)} | "
+                f"PMspot {self._dashboard_spot_signed_bps_text(entry_snapshot, 2)}"
             )
             lines.append(f"    entry_edge_thresh : {self.active_position.entry_edge_threshold:.2f}")
             lines.append(f"    exit_policy_mode  : {self.config.exit_policy_mode}")
@@ -6099,10 +6216,18 @@ class StatsBot:
         dynamic_selector = getattr(self.macro_policy, "dynamic_edge_selector", None)
         timed_edges = getattr(self.macro_policy, "timed_entry_overrides", [])
         if dynamic_selector is not None:
-            log.info(
-                "  entry edges : support>=%d dynamic selector, vol/time fallback -> day/time",
-                int(getattr(dynamic_selector, "support_threshold", 0)),
-            )
+            if hasattr(dynamic_selector, "low_vol_threshold_bps") and hasattr(dynamic_selector, "high_vol_threshold_bps"):
+                log.info(
+                    "  entry edges : local-vol three-zone C/MR (%s; <=%.2fbps, >=%.2fbps)",
+                    self.macro_policy.strategy_id,
+                    float(getattr(dynamic_selector, "low_vol_threshold_bps")),
+                    float(getattr(dynamic_selector, "high_vol_threshold_bps")),
+                )
+            else:
+                log.info(
+                    "  entry edges : support>=%d dynamic selector, vol/time fallback -> day/time",
+                    int(getattr(dynamic_selector, "support_threshold", 0)),
+                )
         elif timed_edges:
             log.info(
                 "  entry edges : conservative dynamic day-type/time table (%d bands, %s fallback)",

@@ -104,6 +104,11 @@ class BotConfig:
     entry_resting_max_age_seconds: float
     entry_stale_quote_max_ticks: int
     entry_stale_quote_grace_seconds: float
+    entry_limit_price_mode: str
+    entry_edge_preserving_max_catchup_ticks: int
+    entry_edge_preserving_buffer_ticks: float
+    entry_disable_maker_fallback: bool
+    entry_on_demand_signed_fallback_enabled: bool
     surplus_adaptive_entry_enabled: bool
     surplus_adaptive_min_edge_surplus: float
     surplus_adaptive_step_edge_surplus: float
@@ -122,6 +127,7 @@ class BotConfig:
     twap_lag_cheap_cont_min_twap_move_dz: float
     twap_lag_cheap_cont_max_twap_move_dz: float
     twap_lag_cheap_cont_max_raw_move_dz: float
+    mr_raw_twap_aligned_block_enabled: bool
     policy_no_longer_viable_latch_seconds: float
     live_entry_retry_cooldown_seconds: float
     live_max_entry_attempts_per_window: int
@@ -343,6 +349,11 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         entry_resting_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_RESTING_MAX_AGE_SECONDS", 3.0)),
         entry_stale_quote_max_ticks=max(0, _int_env("STATS_ENTRY_STALE_QUOTE_MAX_TICKS", 2)),
         entry_stale_quote_grace_seconds=max(0.0, _float_env("STATS_ENTRY_STALE_QUOTE_GRACE_SECONDS", 0.4)),
+        entry_limit_price_mode=str(os.getenv("STATS_ENTRY_LIMIT_PRICE_MODE", "tolerance") or "tolerance").strip().lower(),
+        entry_edge_preserving_max_catchup_ticks=max(0, _int_env("STATS_ENTRY_EDGE_PRESERVING_MAX_CATCHUP_TICKS", 3)),
+        entry_edge_preserving_buffer_ticks=max(0.0, _float_env("STATS_ENTRY_EDGE_PRESERVING_BUFFER_TICKS", 0.0)),
+        entry_disable_maker_fallback=_bool_env("STATS_ENTRY_DISABLE_MAKER_FALLBACK", False),
+        entry_on_demand_signed_fallback_enabled=_bool_env("STATS_ENTRY_ON_DEMAND_SIGNED_FALLBACK_ENABLED", False),
         surplus_adaptive_entry_enabled=_bool_env("STATS_SURPLUS_ADAPTIVE_ENTRY_ENABLED", False),
         surplus_adaptive_min_edge_surplus=max(0.0, _float_env("STATS_SURPLUS_ADAPTIVE_MIN_EDGE_SURPLUS", 0.015)),
         surplus_adaptive_step_edge_surplus=max(0.0001, _float_env("STATS_SURPLUS_ADAPTIVE_STEP_EDGE_SURPLUS", 0.010)),
@@ -385,6 +396,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         twap_lag_cheap_cont_min_twap_move_dz=_float_env("STATS_TWAP_LAG_CHEAP_CONT_MIN_TWAP_MOVE_DZ", 0.0),
         twap_lag_cheap_cont_max_twap_move_dz=_float_env("STATS_TWAP_LAG_CHEAP_CONT_MAX_TWAP_MOVE_DZ", 0.50),
         twap_lag_cheap_cont_max_raw_move_dz=_float_env("STATS_TWAP_LAG_CHEAP_CONT_MAX_RAW_MOVE_DZ", 0.0),
+        mr_raw_twap_aligned_block_enabled=_bool_env("STATS_MR_RAW_TWAP_ALIGNED_BLOCK_ENABLED", False),
         policy_no_longer_viable_latch_seconds=max(
             0.0,
             _float_env("STATS_POLICY_NO_LONGER_VIABLE_LATCH_SECONDS", 1.5),

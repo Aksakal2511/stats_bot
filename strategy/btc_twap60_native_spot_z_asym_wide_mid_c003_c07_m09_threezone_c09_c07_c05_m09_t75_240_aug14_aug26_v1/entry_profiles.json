@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "timezone": "UTC",
+  "source": "twap_native_spot_z_surface_export",
+  "selected_spec": "vol_p25_p75_three_zone_low_C09_M09_mid_C07_M09_high_C05_M09",
+  "trade_style_display_names": {
+    "continuation": "C",
+    "mean_reversion": "MR"
+  },
+  "default": {
+    "continuation": {
+      "edge": 0.07,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "mean_reversion": {
+      "edge": 0.09,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "min_tte": 75,
+    "max_tte": 240
+  },
+  "overrides": {},
+  "dynamic_edge_selector": {
+    "enabled": true,
+    "kind": "vol_p25_p75_three_zone",
+    "entry_rule_label": "vol_three_zone_edges",
+    "source_family": "vol_p25_p75_three_zone",
+    "low_vol_threshold_bps": 28.27233270544888,
+    "high_vol_threshold_bps": 62.53779300295343,
+    "low_vol_edge_pair": "C09_M09",
+    "mid_vol_edge_pair": "C07_M09",
+    "high_vol_edge_pair": "C05_M09",
+    "low_vol_continuation_edge": 0.09,
+    "low_vol_mean_reversion_edge": 0.09,
+    "mid_vol_continuation_edge": 0.07,
+    "mid_vol_mean_reversion_edge": 0.09,
+    "high_vol_continuation_edge": 0.05,
+    "high_vol_mean_reversion_edge": 0.09,
+    "support": 4887816,
+    "research_candidate": "local_vol_p25_p75_c_only_three_zone_base_C07_M09"
+  }
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import threading
 from collections import Counter, deque
 from datetime import datetime, timedelta, timezone
@@ -1233,6 +1234,143 @@ def test_surplus_adaptive_fast_quote_caps_high_surplus_at_two_extra_ticks() -> N
     assert quote.tolerance_ticks == 3
     assert round(quote.edge_at_limit, 6) == 0.06
     assert round(quote.required_edge, 6) == 0.04
+
+
+def test_edge_preserving_fast_quote_spends_available_surplus_to_configured_cap() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        min_entry_price=0.15,
+        max_entry_price=0.80,
+        weekend_min_entry_price=0.15,
+        weekend_max_entry_price=0.80,
+        stake_mode="min_order_size",
+        stake_usd=5.0,
+        min_order_size_fallback=5.0,
+        dust_share_threshold=0.01,
+        entry_limit_price_mode="edge_preserving",
+        entry_edge_preserving_max_catchup_ticks=8,
+        entry_edge_preserving_buffer_ticks=0.0,
+        surplus_adaptive_entry_enabled=True,
+        surplus_adaptive_min_edge_surplus=0.015,
+        surplus_adaptive_step_edge_surplus=0.010,
+        surplus_adaptive_extra_ticks=2,
+    )
+    market_start = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=market_start,
+        market_end_utc=market_start + timedelta(seconds=300),
+        tick_size=0.01,
+        min_order_size=5.0,
+    )
+    bot.recent_clob_ack_ms = deque([180.0] * 10, maxlen=10)
+    bot._side_book = lambda side: BookSnapshot(
+        bid=0.29,
+        ask=0.30,
+        mid=0.295,
+        spread=0.01,
+        bid_depth_total=10,
+        ask_depth_total=10,
+        best_bid_depth=5,
+        best_ask_depth=5,
+        captured_at_utc=market_start,
+    )
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("all", "p30_45", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.29,
+        selected_ask=0.30,
+        selected_mid=0.295,
+        selected_spread=0.01,
+        selected_trade_value=0.405,
+        selected_policy_edge=0.105,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.07,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+
+    quote = bot._fast_entry_quote(market_start + timedelta(seconds=120), {"day_type": "weekday"}, decision)
+
+    assert quote is not None
+    assert quote.price == 0.33
+    assert quote.tolerance_ticks == 3
+    assert round(quote.edge_at_limit, 6) == 0.075
+    assert round(quote.required_edge, 6) == 0.07
+
+
+def test_edge_preserving_fast_quote_respects_catchup_cap() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(
+        min_entry_price=0.15,
+        max_entry_price=0.80,
+        weekend_min_entry_price=0.15,
+        weekend_max_entry_price=0.80,
+        stake_mode="min_order_size",
+        stake_usd=5.0,
+        min_order_size_fallback=5.0,
+        dust_share_threshold=0.01,
+        entry_limit_price_mode="edge_preserving",
+        entry_edge_preserving_max_catchup_ticks=4,
+        entry_edge_preserving_buffer_ticks=0.0,
+    )
+    market_start = datetime(2026, 8, 26, 12, 0, tzinfo=timezone.utc)
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=market_start,
+        market_end_utc=market_start + timedelta(seconds=300),
+        tick_size=0.01,
+        min_order_size=5.0,
+    )
+    bot.recent_clob_ack_ms = deque([180.0] * 10, maxlen=10)
+    bot._side_book = lambda side: BookSnapshot(
+        bid=0.29,
+        ask=0.30,
+        mid=0.295,
+        spread=0.01,
+        bid_depth_total=10,
+        ask_depth_total=10,
+        best_bid_depth=5,
+        best_ask_depth=5,
+        captured_at_utc=market_start,
+    )
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("all", "p30_45", "UP"),
+        policy_record=None,
+        selected_side="UP",
+        selected_bid=0.29,
+        selected_ask=0.30,
+        selected_mid=0.295,
+        selected_spread=0.01,
+        selected_trade_value=0.50,
+        selected_policy_edge=0.20,
+        selected_trade_style="continuation",
+        entry_edge_threshold=0.07,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+
+    quote = bot._fast_entry_quote(market_start + timedelta(seconds=120), {"day_type": "weekday"}, decision)
+
+    assert quote is not None
+    assert quote.price == 0.34
+    assert quote.tolerance_ticks == 4
+    assert round(quote.edge_at_limit, 6) == 0.16
 
 
 def _pressure_defence_bot(*, result: OrderResult, paper_trading: bool = False, order_progress: list[object | None] | None = None):
@@ -2548,6 +2686,45 @@ def test_ultra_low_vol_guard_allows_strong_or_higher_vol_continuation() -> None:
         {"selected_move_dz": 1.00, "local_volatility_1h_bps": 10.01},
         decision,
     ) == ()
+
+
+def test_mr_raw_twap_aligned_guard_blocks_only_aligned_mean_reversion() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(mr_raw_twap_aligned_block_enabled=True)
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("strategy", "surface", "p30_45", "DOWN"),
+        policy_record=None,
+        selected_side="DOWN",
+        selected_bid=0.34,
+        selected_ask=0.35,
+        selected_mid=0.345,
+        selected_spread=0.01,
+        selected_trade_value=0.44,
+        selected_policy_edge=0.09,
+        selected_trade_style="mean_reversion",
+        entry_edge_threshold=0.08,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+
+    aligned_snapshot = {"selected_raw_move_dz": 0.20, "selected_twap_move_dz": 0.05}
+    assert bot._mr_raw_twap_aligned_entry_blockers(aligned_snapshot, decision) == ("MR_RAW_TWAP_ALIGNED_BLOCK",)
+    assert aligned_snapshot["mr_raw_twap_aligned_raw_move_dz"] == 0.20
+    assert aligned_snapshot["mr_raw_twap_aligned_twap_move_dz"] == 0.05
+
+    assert bot._mr_raw_twap_aligned_entry_blockers(
+        {"selected_raw_move_dz": -0.20, "selected_twap_move_dz": 0.05},
+        decision,
+    ) == ()
+    assert bot._mr_raw_twap_aligned_entry_blockers(
+        {"selected_raw_move_dz": 0.0, "selected_twap_move_dz": 0.05},
+        decision,
+    ) == ()
+
+    continuation = dataclasses.replace(decision, selected_trade_style="continuation")
+    assert bot._mr_raw_twap_aligned_entry_blockers(aligned_snapshot, continuation) == ()
 
 
 def test_drawdown_guard_normalises_losses_by_share_count() -> None:
