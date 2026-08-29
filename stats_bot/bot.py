@@ -5914,18 +5914,24 @@ class StatsBot:
                 if not style or edge is None:
                     return "NA"
                 style_label = self._trade_style_display(style)
+                def _fmt_edge_cents(value: float) -> str:
+                    cents = round(float(value) * 100.0, 2)
+                    if abs(cents - round(cents)) < 1e-9:
+                        return f"{int(round(cents))}c"
+                    return f"{cents:.2f}".rstrip("0").rstrip(".") + "c"
                 source = str(snapshot.get("entry_rule_source_family") or "")
                 segment = str(snapshot.get("entry_rule_source_segment") or "")
                 source_label = {
                     "vol_p25_p75_three_zone": "vol",
                     "vol_high_lower1": "vol",
+                    "style_bounded_monotonic_surface": "field",
                     "day_group_time_vol_q4": "vol",
                     "day_group_time_contradiction_vol_q4": "118",
                     "day_group_time_contradiction": "30",
                     "day_group_time": "15",
                 }.get(source, "")
                 if not source_label or not segment:
-                    return f"{style_label}={edge * 100:.0f}c"
+                    return f"{style_label}={_fmt_edge_cents(edge)}"
                 parts = [
                     part.replace("_", "-")
                     .replace("cheap-continuation", "cheapC")
@@ -5936,7 +5942,7 @@ class StatsBot:
                     if part
                 ]
                 cleaned = "/".join(parts)
-                return f"{style_label}={edge * 100:.0f}c | {source_label} {cleaned}"
+                return f"{style_label}={_fmt_edge_cents(edge)} | {source_label} {cleaned}"
 
             selected_profile = (
                 mr_profile

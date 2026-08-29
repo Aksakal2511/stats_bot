@@ -8,7 +8,12 @@ from zoneinfo import ZoneInfo
 
 from stats_bot.coinbase import CoinbaseFeed
 from stats_bot.continuous_surface import price_bucket_label
-from stats_bot.macro_policy import MacroLocalPolicy, VolHighContinuationEdgeSelector, VolThreeZoneEdgeSelector
+from stats_bot.macro_policy import (
+    MacroLocalPolicy,
+    StyleAwareBoundedSurfaceEdgeSelector,
+    VolHighContinuationEdgeSelector,
+    VolThreeZoneEdgeSelector,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -377,6 +382,70 @@ def test_vol_three_zone_selector_applies_low_mid_high_edges() -> None:
         trade_style="continuation",
         selected_ask=0.45,
     ) is None
+
+
+def test_style_field_selector_applies_inverse_c_and_mr_surfaces() -> None:
+    selector = StyleAwareBoundedSurfaceEdgeSelector(
+        {
+            "entry_rule_label": "style_field_edges",
+            "source_family": "style_bounded_monotonic_surface",
+            "c_edge_min_cents": 5.0,
+            "c_edge_max_cents": 10.0,
+            "mr_edge_min_cents": 7.5,
+            "mr_edge_max_cents": 10.0,
+            "price_weight": 0.5,
+            "vol_weight": 2.0,
+            "interaction_weight": 0.0,
+            "price_power": 1.0,
+            "vol_power": 1.0,
+            "price_low": 0.20,
+            "price_high": 0.80,
+            "vol_low_threshold_bps": 20.0,
+            "vol_high_threshold_bps": 80.0,
+            "support": 12345,
+        },
+        default_min_tte=75,
+        default_max_tte=240,
+    )
+
+    low_price_low_vol_c = selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=20.0,
+        trade_style="continuation",
+        selected_ask=0.20,
+    )
+    low_price_low_vol_mr = selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=20.0,
+        trade_style="mean_reversion",
+        selected_ask=0.20,
+    )
+    high_price_high_vol_c = selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=80.0,
+        trade_style="continuation",
+        selected_ask=0.80,
+    )
+    high_price_high_vol_mr = selector.select(
+        day_group="weekday",
+        timestamp_london=datetime(2026, 8, 26, 12, 0, tzinfo=LONDON),
+        local_vol_1h_bps=80.0,
+        trade_style="mean_reversion",
+        selected_ask=0.80,
+    )
+
+    assert low_price_low_vol_c is not None
+    assert low_price_low_vol_c.parameters.edge == 0.10
+    assert low_price_low_vol_c.vol_bucket == "low"
+    assert low_price_low_vol_mr is not None
+    assert low_price_low_vol_mr.parameters.edge == 0.075
+    assert high_price_high_vol_c is not None
+    assert high_price_high_vol_c.parameters.edge == 0.05
+    assert high_price_high_vol_mr is not None
+    assert high_price_high_vol_mr.parameters.edge == 0.10
 
 
 def test_sparse_dynamic_child_segment_falls_back_to_day_time_table() -> None:

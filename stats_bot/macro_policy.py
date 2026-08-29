@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .continuous_surface import PriceBucketSurfaceModel, SurfaceModel
+from .continuous_surface import CappedLinearPriceBucketSurfaceModel, PriceBucketSurfaceModel, SurfaceModel
 from .strategy import EntryDecision, bucket_price, bucket_tte, finite_float
 
 TWAP_NATIVE_RAW_SIGNAL_MODEL_KINDS = {
@@ -344,6 +344,108 @@ class VolThreeZoneEdgeSelector:
         )
 
 
+class StyleAwareBoundedSurfaceEdgeSelector:
+    def __init__(self, payload: dict[str, Any], *, default_min_tte: int, default_max_tte: int):
+        self.rule_label = str(payload.get("entry_rule_label") or "style_field_edges")
+        self.default_min_tte = int(default_min_tte)
+        self.default_max_tte = int(default_max_tte)
+        self.c_edge_min = float(payload["c_edge_min_cents"]) / 100.0
+        self.c_edge_max = float(payload["c_edge_max_cents"]) / 100.0
+        self.mr_edge_min = float(payload["mr_edge_min_cents"]) / 100.0
+        self.mr_edge_max = float(payload["mr_edge_max_cents"]) / 100.0
+        self.price_weight = float(payload["price_weight"])
+        self.vol_weight = float(payload["vol_weight"])
+        self.interaction_weight = float(payload.get("interaction_weight", 0.0))
+        self.price_power = float(payload.get("price_power", 1.0))
+        self.vol_power = float(payload.get("vol_power", 1.0))
+        self.price_low = float(payload.get("price_low", 0.20))
+        self.price_high = float(payload.get("price_high", 0.80))
+        self.vol_low_threshold_bps = float(payload["vol_low_threshold_bps"])
+        self.vol_high_threshold_bps = float(payload["vol_high_threshold_bps"])
+        self.source_family = str(payload.get("source_family") or "style_bounded_monotonic_surface")
+        self.support = int(payload.get("support") or 0)
+        if self.price_low >= self.price_high:
+            raise ValueError("style field selector requires price_low < price_high")
+        if self.vol_low_threshold_bps >= self.vol_high_threshold_bps:
+            raise ValueError("style field selector requires vol_low_threshold_bps < vol_high_threshold_bps")
+        if self.price_weight + self.vol_weight + self.interaction_weight <= 0.0:
+            raise ValueError("style field selector requires positive total weight")
+
+    @staticmethod
+    def _score_between(value: float | None, low: float, high: float) -> float:
+        numeric = finite_float(value)
+        if numeric is None:
+            return 0.5
+        denom = float(high) - float(low)
+        if not math.isfinite(denom) or denom <= 1e-12:
+            return 0.5
+        return min(max((numeric - float(low)) / denom, 0.0), 1.0)
+
+    @staticmethod
+    def _edge_pair_label(c_edge: float, mr_edge: float) -> str:
+        def fmt(edge: float) -> str:
+            cents = round(edge * 100.0, 2)
+            if abs(cents - round(cents)) < 1e-9:
+                return f"{int(round(cents)):02d}"
+            return f"{cents:.2f}".rstrip("0").rstrip(".").replace(".", "p")
+
+        return f"C{fmt(c_edge)}_M{fmt(mr_edge)}"
+
+    def select(
+        self,
+        *,
+        day_group: str,
+        timestamp_london: Any,
+        local_vol_1h_bps: float | None,
+        trade_style: str,
+        selected_ask: float | None,
+    ) -> DynamicEdgeSelection | None:
+        del day_group, timestamp_london
+        if trade_style not in {"continuation", "mean_reversion"}:
+            return None
+        price_score = 1.0 - self._score_between(selected_ask, self.price_low, self.price_high)
+        vol_score = 1.0 - self._score_between(local_vol_1h_bps, self.vol_low_threshold_bps, self.vol_high_threshold_bps)
+        price_term = price_score ** self.price_power
+        vol_term = vol_score ** self.vol_power
+        interaction_term = price_term * vol_term
+        score = (
+            self.price_weight * price_term
+            + self.vol_weight * vol_term
+            + self.interaction_weight * interaction_term
+        ) / (self.price_weight + self.vol_weight + self.interaction_weight)
+        score = min(max(score, 0.0), 1.0)
+        c_edge = self.c_edge_min + (self.c_edge_max - self.c_edge_min) * score
+        mr_edge = self.mr_edge_min + (self.mr_edge_max - self.mr_edge_min) * (1.0 - score)
+        edge = c_edge if trade_style == "continuation" else mr_edge
+        local_vol = finite_float(local_vol_1h_bps)
+        if local_vol is None:
+            vol_bucket = "unknown"
+        elif local_vol <= self.vol_low_threshold_bps + 1e-12:
+            vol_bucket = "low"
+        elif local_vol >= self.vol_high_threshold_bps - 1e-12:
+            vol_bucket = "high"
+        else:
+            vol_bucket = "mid"
+        return DynamicEdgeSelection(
+            parameters=EntryParameters(
+                edge=edge,
+                min_tte=self.default_min_tte,
+                max_tte=self.default_max_tte,
+            ),
+            rule_label=self.rule_label,
+            source_family=self.source_family,
+            source_segment="",
+            child_segment="",
+            fallback_depth=0,
+            support=self.support,
+            edge_pair=self._edge_pair_label(c_edge, mr_edge),
+            contradiction_state="",
+            vol_bucket=vol_bucket,
+            time_segment="",
+            day_group="",
+        )
+
+
 class MacroLocalPolicy:
     def __init__(self, path: Path):
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -647,7 +749,7 @@ class MacroLocalPolicy:
         self,
         profile_payload: dict[str, Any],
         manifest_path: Path,
-    ) -> DynamicEdgeSelector | VolHighContinuationEdgeSelector | VolThreeZoneEdgeSelector | None:
+    ) -> DynamicEdgeSelector | VolHighContinuationEdgeSelector | VolThreeZoneEdgeSelector | StyleAwareBoundedSurfaceEdgeSelector | None:
         raw = profile_payload.get("dynamic_edge_selector")
         if not isinstance(raw, dict) or not bool(raw.get("enabled", True)):
             return None
@@ -662,6 +764,12 @@ class MacroLocalPolicy:
             )
         if selector_kind in {"vol_three_zone", "vol_p25_p75_three_zone"}:
             return VolThreeZoneEdgeSelector(
+                raw,
+                default_min_tte=default_min_tte,
+                default_max_tte=default_max_tte,
+            )
+        if selector_kind in {"style_bounded_monotonic_surface", "style_field_edges"}:
+            return StyleAwareBoundedSurfaceEdgeSelector(
                 raw,
                 default_min_tte=default_min_tte,
                 default_max_tte=default_max_tte,
@@ -900,7 +1008,7 @@ class MacroLocalPolicy:
         snapshot["active_edge_trade_style"] = match.trade_style
         snapshot["active_edge_price_bucket"] = match.price_bucket
         snapshot["active_edge_cents"] = (
-            round(float(parameters.edge) * 100.0)
+            round(float(parameters.edge) * 100.0, 2)
             if math.isfinite(float(parameters.edge))
             else ""
         )

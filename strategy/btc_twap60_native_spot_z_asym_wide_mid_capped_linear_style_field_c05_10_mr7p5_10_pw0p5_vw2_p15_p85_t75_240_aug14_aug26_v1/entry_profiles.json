@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "timezone": "UTC",
+  "source": "twap_native_surface_export",
+  "selected_spec": "style_field_c05_10_mr7p5_10_pw0p5_vw2_linear_p15_p85",
+  "trade_style_display_names": {
+    "continuation": "C",
+    "mean_reversion": "MR"
+  },
+  "default": {
+    "continuation": {
+      "edge": 0.07,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "mean_reversion": {
+      "edge": 0.09,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "min_tte": 75,
+    "max_tte": 240
+  },
+  "overrides": {},
+  "dynamic_edge_selector": {
+    "enabled": true,
+    "kind": "style_bounded_monotonic_surface",
+    "entry_rule_label": "style_field_edges",
+    "source_family": "style_bounded_monotonic_surface",
+    "c_edge_min_cents": 5.0,
+    "c_edge_max_cents": 10.0,
+    "mr_edge_min_cents": 7.5,
+    "mr_edge_max_cents": 10.0,
+    "price_weight": 0.5,
+    "vol_weight": 2.0,
+    "interaction_weight": 0.0,
+    "price_power": 1.0,
+    "vol_power": 1.0,
+    "price_low": 0.2,
+    "price_high": 0.8,
+    "vol_low_quantile": 0.15,
+    "vol_high_quantile": 0.85,
+    "vol_low_threshold_bps": 20.31062374711017,
+    "vol_high_threshold_bps": 70.55032073049054,
+    "vol_reference_blend_weight": 0.5,
+    "support": 4887816,
+    "research_candidate": "style_bounded_c05_10_mr7p5_10_pw0p5_vw2_linear_p15_p85_capped_linear"
+  }
+}

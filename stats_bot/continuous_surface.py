@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.preprocessing import SplineTransformer, StandardScaler
 
 
@@ -455,6 +455,45 @@ class SurfaceModel:
         return min(max(value, 0.0), 1.0)
 
 
+class CappedLinearSurfaceModel(SurfaceModel):
+    def __init__(
+        self,
+        *,
+        model_kind: str,
+        side_mode: str,
+        c_value: float,
+        alpha: float = 1.0,
+        spline_z_basis: int = 7,
+        spline_p_basis: int = 6,
+        spline_penalty: float = 10.0,
+        momentum_feature: str = "",
+        stagea_time_scheme: str = "current",
+    ) -> None:
+        super().__init__(
+            model_kind=model_kind,
+            side_mode=side_mode,
+            c_value=c_value,
+            spline_z_basis=spline_z_basis,
+            spline_p_basis=spline_p_basis,
+            spline_penalty=spline_penalty,
+            momentum_feature=momentum_feature,
+            stagea_time_scheme=stagea_time_scheme,
+        )
+        self.alpha = float(alpha)
+        self.model = Ridge(alpha=self.alpha)
+
+    def fit(self, frame: pd.DataFrame, weights: np.ndarray) -> "CappedLinearSurfaceModel":
+        x = self._feature_matrix(frame, fit=True)
+        y = pd.to_numeric(frame["side_win"], errors="coerce").to_numpy(float)
+        self.rows = int(len(frame))
+        self.model.fit(x, y, sample_weight=weights)
+        return self
+
+    def predict(self, frame: pd.DataFrame) -> np.ndarray:
+        x = self._feature_matrix(frame, fit=False)
+        return np.clip(self.model.predict(x), 0.001, 0.999)
+
+
 class PriceBucketSurfaceModel:
     def __init__(
         self,
@@ -557,3 +596,64 @@ class PriceBucketSurfaceModel:
             timestamp_utc=timestamp_utc,
             timestamp_london=timestamp_london,
         )
+
+
+class CappedLinearPriceBucketSurfaceModel(PriceBucketSurfaceModel):
+    def __init__(
+        self,
+        *,
+        model_kind: str,
+        side_mode: str,
+        c_value: float,
+        price_bucket_scheme: str = "asymmetric",
+        momentum_feature: str = "side_dz_delta_2s",
+        price_bucket_min_rows: int = 5000,
+        price_bucket_min_class: int = 100,
+        stagea_time_scheme: str = "current",
+        alpha: float = 1.0,
+    ) -> None:
+        super().__init__(
+            model_kind=model_kind,
+            side_mode=side_mode,
+            c_value=c_value,
+            price_bucket_scheme=price_bucket_scheme,
+            momentum_feature=momentum_feature,
+            price_bucket_min_rows=price_bucket_min_rows,
+            price_bucket_min_class=price_bucket_min_class,
+            stagea_time_scheme=stagea_time_scheme,
+        )
+        self.alpha = float(alpha)
+
+    def fit(self, frame: pd.DataFrame, weights: np.ndarray) -> "CappedLinearPriceBucketSurfaceModel":
+        if len(frame) != len(weights):
+            raise ValueError("Training frame and weights length mismatch")
+        labels = frame["selected_ask"].map(lambda value: self.bucket_label(value))
+        total_rows = 0
+        for _low, _high, label in PRICE_BUCKET_SCHEMES[self.price_bucket_scheme]:
+            bucket_mask = labels.eq(label).to_numpy()
+            part = frame.loc[bucket_mask].copy()
+            if len(part) < self.price_bucket_min_rows:
+                continue
+            outcomes = pd.to_numeric(part["side_win"], errors="coerce")
+            counts = outcomes.value_counts()
+            if (
+                int(counts.get(0.0, 0)) < self.price_bucket_min_class
+                or int(counts.get(1.0, 0)) < self.price_bucket_min_class
+            ):
+                continue
+            part_weights = np.asarray(weights[bucket_mask], dtype=float)
+            model = CappedLinearSurfaceModel(
+                model_kind=self.model_kind,
+                side_mode=self.side_mode,
+                c_value=self.c_value,
+                momentum_feature=self.momentum_feature,
+                stagea_time_scheme=self.stagea_time_scheme,
+                alpha=self.alpha,
+            ).fit(part.reset_index(drop=True), part_weights)
+            self.bucket_models[label] = model
+            self.bucket_rows[label] = int(len(part))
+            total_rows += int(len(part))
+        self.rows = total_rows
+        if not self.bucket_models:
+            raise RuntimeError("No price buckets had enough support to train.")
+        return self
