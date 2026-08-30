@@ -6222,7 +6222,18 @@ class StatsBot:
         dynamic_selector = getattr(self.macro_policy, "dynamic_edge_selector", None)
         timed_edges = getattr(self.macro_policy, "timed_entry_overrides", [])
         if dynamic_selector is not None:
-            if hasattr(dynamic_selector, "low_vol_threshold_bps") and hasattr(dynamic_selector, "high_vol_threshold_bps"):
+            if getattr(dynamic_selector, "source_family", "") == "style_bounded_monotonic_surface":
+                log.info(
+                    "  entry edges : style-aware price/vol field (%s; C %.2f-%.2fc, MR %.2f-%.2fc, vol %.2f-%.2fbps)",
+                    self.macro_policy.strategy_id,
+                    float(getattr(dynamic_selector, "c_edge_min", 0.0)) * 100.0,
+                    float(getattr(dynamic_selector, "c_edge_max", 0.0)) * 100.0,
+                    float(getattr(dynamic_selector, "mr_edge_min", 0.0)) * 100.0,
+                    float(getattr(dynamic_selector, "mr_edge_max", 0.0)) * 100.0,
+                    float(getattr(dynamic_selector, "vol_low_threshold_bps", 0.0)),
+                    float(getattr(dynamic_selector, "vol_high_threshold_bps", 0.0)),
+                )
+            elif hasattr(dynamic_selector, "low_vol_threshold_bps") and hasattr(dynamic_selector, "high_vol_threshold_bps"):
                 log.info(
                     "  entry edges : local-vol three-zone C/MR (%s; <=%.2fbps, >=%.2fbps)",
                     self.macro_policy.strategy_id,

@@ -362,6 +362,10 @@ class StyleAwareBoundedSurfaceEdgeSelector:
         self.price_high = float(payload.get("price_high", 0.80))
         self.vol_low_threshold_bps = float(payload["vol_low_threshold_bps"])
         self.vol_high_threshold_bps = float(payload["vol_high_threshold_bps"])
+        self.mr_surface_mode = str(payload.get("mr_surface_mode") or "inverse_c").strip().lower()
+        self.mr_price_weight = float(payload.get("mr_price_weight", self.price_weight))
+        self.mr_vol_weight = float(payload.get("mr_vol_weight", self.vol_weight))
+        self.mr_interaction_weight = float(payload.get("mr_interaction_weight", self.interaction_weight))
         self.source_family = str(payload.get("source_family") or "style_bounded_monotonic_surface")
         self.support = int(payload.get("support") or 0)
         if self.price_low >= self.price_high:
@@ -370,6 +374,15 @@ class StyleAwareBoundedSurfaceEdgeSelector:
             raise ValueError("style field selector requires vol_low_threshold_bps < vol_high_threshold_bps")
         if self.price_weight + self.vol_weight + self.interaction_weight <= 0.0:
             raise ValueError("style field selector requires positive total weight")
+        if self.mr_price_weight + self.mr_vol_weight + self.mr_interaction_weight <= 0.0:
+            raise ValueError("style field selector requires positive total MR weight")
+        if self.mr_surface_mode not in {
+            "inverse_c",
+            "price_flip_vol_inverse",
+            "price_flip_vol_neutral",
+            "price_flip_vol_same",
+        }:
+            raise ValueError(f"Unknown style field MR surface mode: {self.mr_surface_mode!r}")
 
     @staticmethod
     def _score_between(value: float | None, low: float, high: float) -> float:
@@ -414,8 +427,28 @@ class StyleAwareBoundedSurfaceEdgeSelector:
             + self.interaction_weight * interaction_term
         ) / (self.price_weight + self.vol_weight + self.interaction_weight)
         score = min(max(score, 0.0), 1.0)
+        inverse_vol_term = 1.0 - vol_term
+        if self.mr_surface_mode == "inverse_c":
+            mr_score = 1.0 - score
+        else:
+            if self.mr_surface_mode == "price_flip_vol_inverse":
+                mr_price_term = price_term
+                mr_vol_term = inverse_vol_term
+            elif self.mr_surface_mode == "price_flip_vol_neutral":
+                mr_price_term = price_term
+                mr_vol_term = 0.0
+            else:
+                mr_price_term = price_term
+                mr_vol_term = vol_term
+            mr_interaction_term = mr_price_term * mr_vol_term
+            mr_score = (
+                self.mr_price_weight * mr_price_term
+                + self.mr_vol_weight * mr_vol_term
+                + self.mr_interaction_weight * mr_interaction_term
+            ) / (self.mr_price_weight + self.mr_vol_weight + self.mr_interaction_weight)
+            mr_score = min(max(mr_score, 0.0), 1.0)
         c_edge = self.c_edge_min + (self.c_edge_max - self.c_edge_min) * score
-        mr_edge = self.mr_edge_min + (self.mr_edge_max - self.mr_edge_min) * (1.0 - score)
+        mr_edge = self.mr_edge_min + (self.mr_edge_max - self.mr_edge_min) * mr_score
         edge = c_edge if trade_style == "continuation" else mr_edge
         local_vol = finite_float(local_vol_1h_bps)
         if local_vol is None:
