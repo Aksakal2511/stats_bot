@@ -457,7 +457,19 @@ def compute_live_snapshot(
         "coinbase_analytic_twap_stream_pre_w60s",
         "coinbase_twap_stream_analytic_pre_w60s",
     }
-    if is_discrete_twap_signal or is_analytic_w30_signal or is_analytic_w60_signal or is_analytic_w60_stream_signal:
+    is_spot_vs_twap60_open_signal = normalized_signal_mode in {
+        "spot_vs_twap60_open",
+        "coinbase_spot_vs_twap60_open",
+        "coinbase_spot_vs_twap60_open_spot_z",
+    }
+    needs_twap_context = (
+        is_discrete_twap_signal
+        or is_analytic_w30_signal
+        or is_analytic_w60_signal
+        or is_analytic_w60_stream_signal
+        or is_spot_vs_twap60_open_signal
+    )
+    if needs_twap_context:
         twap_now, twap_now_staleness = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=now_utc)
         twap_open, twap_open_staleness = _discrete_ffill_twap(rows_by_ts=btc_rows, target_utc=market_start_utc)
         twap_60_now, twap_60_now_staleness = _discrete_ffill_twap(
@@ -481,6 +493,13 @@ def compute_live_snapshot(
             signal_max_staleness_seconds = max(
                 value for value in (twap_now_staleness, twap_open_staleness) if value is not None
             )
+        elif is_spot_vs_twap60_open_signal:
+            normalized_signal_mode = "coinbase_spot_vs_twap60_open_spot_z"
+            if twap_60_open is None or twap_60_open <= 0.0:
+                return None
+            signal_close = latest_spot_close
+            signal_anchor = float(twap_60_open)
+            signal_max_staleness_seconds = twap_60_open_staleness
         else:
             normalized_signal_mode = (
                 "coinbase_analytic_twap_stream_pre_w60s"

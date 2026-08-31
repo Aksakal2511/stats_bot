@@ -5997,6 +5997,8 @@ class StatsBot:
                 )
             else:
                 lines.append(f"    btc_close_1s      : {_fmt(snapshot.get('cb_close_1s'), 2)}")
+            if "spot_vs_twap60_open" in signal_price_mode:
+                lines.append(f"    {'signed_bps (model)':<18}: {self._dashboard_signed_bps_text(snapshot)}")
             lines.append(f"    {'signed_bps (TWAP)':<18}: {self._dashboard_twap_signed_bps_text(snapshot)}")
             lines.append(f"    {'signed_bps (spot)':<18}: {self._dashboard_spot_signed_bps_text(snapshot)}")
             if decision is not None and decision.selected_side:
@@ -6127,10 +6129,18 @@ class StatsBot:
             lines.append(f"    entry_cost        : {self.active_position.entry_cost:.4f}")
             lines.append(f"    hold_seconds      : {hold_seconds:.1f}")
             lines.append(f"    {'entry_z':<18}: {self._dashboard_style_z_text(entry_snapshot)}")
-            lines.append(
-                f"    {'entry_bps':<18}: TWAP {self._dashboard_twap_signed_bps_text(entry_snapshot, 2)} | "
-                f"PMspot {self._dashboard_spot_signed_bps_text(entry_snapshot, 2)}"
-            )
+            entry_signal_price_mode = str(entry_snapshot.get("cb_signal_price_mode") or "spot") if entry_snapshot else "spot"
+            if "spot_vs_twap60_open" in entry_signal_price_mode:
+                lines.append(
+                    f"    {'entry_bps':<18}: model {self._dashboard_signed_bps_text(entry_snapshot, 2)} | "
+                    f"TWAP {self._dashboard_twap_signed_bps_text(entry_snapshot, 2)} | "
+                    f"spot {self._dashboard_spot_signed_bps_text(entry_snapshot, 2)}"
+                )
+            else:
+                lines.append(
+                    f"    {'entry_bps':<18}: TWAP {self._dashboard_twap_signed_bps_text(entry_snapshot, 2)} | "
+                    f"spot {self._dashboard_spot_signed_bps_text(entry_snapshot, 2)}"
+                )
             lines.append(f"    entry_edge_thresh : {self.active_position.entry_edge_threshold:.2f}")
             lines.append(f"    exit_policy_mode  : {self.config.exit_policy_mode}")
             if self.config.move_dz_stoploss_enabled:

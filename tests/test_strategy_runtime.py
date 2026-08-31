@@ -318,6 +318,66 @@ def test_analytic_w60_signal_uses_coinbase_w60_open_anchor() -> None:
     assert down_signal > 0.0
 
 
+def test_spot_z_signal_uses_coinbase_w60_open_anchor_and_keeps_twap_diagnostics() -> None:
+    start = datetime(2026, 8, 14, 8, 25, tzinfo=timezone.utc)
+    now = start + timedelta(seconds=100)
+    end = start + timedelta(seconds=300)
+    btc_rows = []
+    for offset in range(-60, 101):
+        ts = start + timedelta(seconds=offset)
+        price = 101.0 if offset < 0 else 100.5
+        btc_rows.append(
+            {
+                "timestamp_utc": ts,
+                "open_1s": price,
+                "high_1s": price,
+                "low_1s": price,
+                "close_1s": price,
+                "volume_1s": 1.0,
+            }
+        )
+    pm_rows = [
+        {
+            "timestamp_utc": now,
+            "up_bid": 0.30,
+            "up_ask": 0.31,
+            "up_mid": 0.305,
+            "up_spread": 0.01,
+            "down_bid": 0.69,
+            "down_ask": 0.70,
+            "down_mid": 0.695,
+            "down_spread": 0.01,
+        }
+    ]
+    snapshot = compute_live_snapshot(
+        btc_history=btc_rows,
+        pm_history=pm_rows,
+        now_utc=now,
+        market_start_utc=start,
+        market_end_utc=end,
+        window_open_btc_price=100.0,
+        volatility_edges=VolatilityEdges(1, 0.0, 0.0, {}),
+        market_slug="test",
+        local_volatility_1h_bps=40.0,
+        local_volatility_status="ready",
+        signal_price_mode="coinbase_spot_vs_twap60_open_spot_z",
+    )
+    assert snapshot is not None
+    expected_signal_bps = 10_000.0 * (100.5 - 101.0) / 101.0
+    expected_spot_bps = 10_000.0 * (100.5 - 100.0) / 100.0
+
+    assert snapshot["cb_signal_price_mode"] == "coinbase_spot_vs_twap60_open_spot_z"
+    assert snapshot["cb_signal_price"] == pytest.approx(100.5)
+    assert snapshot["cb_price_to_beat_anchor"] == pytest.approx(101.0)
+    assert snapshot["cb_spot_price_to_beat_anchor"] == pytest.approx(100.0)
+    assert snapshot["cb_signed_bps_raw"] == pytest.approx(expected_signal_bps)
+    assert snapshot["cb_spot_signed_bps_raw"] == pytest.approx(expected_spot_bps)
+    assert snapshot["cb_twap_60s_signed_bps_raw"] == pytest.approx(expected_signal_bps)
+    assert snapshot["raw_move_dz"] == pytest.approx(
+        expected_signal_bps / (40.0 * math.sqrt(200.0 / 3600.0))
+    )
+
+
 def test_analytic_w60_stream_signal_uses_current_coinbase_w60_twap() -> None:
     start = datetime(2026, 8, 14, 8, 25, tzinfo=timezone.utc)
     now = start + timedelta(seconds=100)

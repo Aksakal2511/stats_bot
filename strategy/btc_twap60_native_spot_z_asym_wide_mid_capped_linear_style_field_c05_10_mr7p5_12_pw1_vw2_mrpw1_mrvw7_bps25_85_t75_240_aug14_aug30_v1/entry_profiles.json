@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "timezone": "UTC",
+  "source": "twap_native_surface_export",
+  "selected_spec": "style_field_c05_10_mr7p5_12_pw1_vw2_mrpw1_mrvw7_linear_bps25_85",
+  "trade_style_display_names": {
+    "continuation": "C",
+    "mean_reversion": "MR"
+  },
+  "default": {
+    "continuation": {
+      "edge": 0.07,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "mean_reversion": {
+      "edge": 0.09,
+      "min_tte": 75,
+      "max_tte": 240
+    },
+    "min_tte": 75,
+    "max_tte": 240
+  },
+  "overrides": {},
+  "dynamic_edge_selector": {
+    "enabled": true,
+    "kind": "style_bounded_monotonic_surface",
+    "entry_rule_label": "style_field_edges",
+    "source_family": "style_bounded_monotonic_surface",
+    "c_edge_min_cents": 5.0,
+    "c_edge_max_cents": 10.0,
+    "mr_edge_min_cents": 7.5,
+    "mr_edge_max_cents": 12.0,
+    "price_weight": 1.0,
+    "vol_weight": 2.0,
+    "interaction_weight": 0.0,
+    "mr_surface_mode": "price_flip_vol_inverse",
+    "mr_price_weight": 1.0,
+    "mr_vol_weight": 7.0,
+    "mr_interaction_weight": 0.0,
+    "price_power": 1.0,
+    "vol_power": 1.0,
+    "price_low": 0.2,
+    "price_high": 0.8,
+    "vol_low_threshold_bps": 25.0,
+    "vol_high_threshold_bps": 85.0,
+    "vol_anchor_mode": "fixed_bps",
+    "support": 5962759,
+    "research_candidate": "STYLEBOUNDSURF_C5_10__MR7p5_12__pw1__vw2__iw0__mrmode_price_flip_vol_inverse__mrpw1__mrvw7__mriw0__linear__BPS25_85"
+  }
+}
