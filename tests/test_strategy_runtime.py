@@ -30,7 +30,15 @@ from stats_bot.binance import BinanceTickerFeed
 from stats_bot.features import compute_live_snapshot
 from stats_bot.macro_policy import MacroLocalPolicy
 from stats_bot.models import OpenPosition, PendingEntryOrder
-from stats_bot.polymarket import BookSnapshot, MarketInfo, MarketResolution, OrderResult, SignedBuyOrder
+from stats_bot.polymarket import (
+    BookSnapshot,
+    MarketInfo,
+    MarketResolution,
+    OrderResult,
+    SignedBuyOrder,
+    _extract_avg_price,
+    _extract_matched,
+)
 from stats_bot.strategy import (
     EntryDecision,
     EntryEdgeThreshold,
@@ -78,6 +86,76 @@ def test_submission_fill_attempt_counts_counts_filled_windows_and_retries() -> N
         {"window-a": 1, "window-b": 2, "window-c": 0},
         {"window-a": 1, "window-b": 3, "window-c": 1},
     ) == (2, 5)
+
+
+def test_matched_buy_response_uses_exchange_amounts_for_size_and_price() -> None:
+    response = {
+        "status": "matched",
+        "takingAmount": "5",
+        "makingAmount": "2.7",
+    }
+    assert _extract_matched(response) == pytest.approx(5.0)
+    price, source = _extract_avg_price(response, 0.58)
+    assert price == pytest.approx(0.54)
+    assert source == "makingAmount/takingAmount"
+
+
+def test_immediate_live_entry_accounts_for_taker_fee() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(paper_trading=False, dust_share_threshold=1e-6)
+    now = datetime(2026, 9, 30, 8, 26, 20, tzinfo=timezone.utc)
+    bot.current_market = MarketInfo(
+        slug="btc-updown-5m-fee-test",
+        market_id="1",
+        condition_id="condition",
+        question="test",
+        token_up="up",
+        token_down="down",
+        market_start_utc=now - timedelta(seconds=120),
+        market_end_utc=now + timedelta(seconds=180),
+        tick_size=.01,
+        min_order_size=5.0,
+        fee_rate=.07,
+    )
+    pending = PendingEntryOrder(
+        order_id="0xfee",
+        token_id="up",
+        side="BUY",
+        price=.58,
+        target_shares=5.0,
+        created_at_utc=now,
+        market_slug=bot.current_market.slug,
+        policy_key_text="frozen|continuation",
+        policy_side="UP",
+        snapshot={
+            "cb_signed_bps_raw": 1.0,
+            "day_type": "weekday",
+            "session_bucket": "EUROPE_MIDDAY",
+            "entry_edge_threshold": .025,
+            "entry_bps_threshold": 0.0,
+        },
+        wallet_balance_before=100.0,
+    )
+    bot.pending_entry = pending
+    bot.active_position = None
+    bot.balance = 100.0
+    bot.wallet_balance_live = 100.0
+    bot.entry_fills_by_window = {}
+    bot.entry_lifecycle_by_window = {}
+    bot._log_event = lambda *_args, **_kwargs: None
+    bot._log_latency = lambda *_args, **_kwargs: None
+    bot._record_decision_journal = lambda *_args, **_kwargs: None
+
+    assert bot._open_new_live_fill_from_progress(
+        pending, now, "ASYNC_ORDER_POST", "matched", 5.0, .54
+    )
+    fee = 5.0 * .07 * .54 * .46
+    assert bot.active_position is not None
+    assert bot.active_position.avg_entry_price == pytest.approx(.54)
+    assert bot.active_position.entry_cost == pytest.approx(2.7 + fee)
+    assert bot.active_position.extra["entry_fee"] == pytest.approx(fee)
+    assert bot.balance == pytest.approx(100.0 - 2.7 - fee)
+    assert bot.wallet_balance_live == pytest.approx(100.0 - 2.7 - fee)
 
 
 def test_execution_health_warms_until_five_posts() -> None:
@@ -1007,7 +1085,7 @@ def test_fast_presigned_quote_requires_edge_at_signed_limit() -> None:
     assert round(strong.edge_at_limit, 6) == 0.11
 
 
-def test_fast_presigned_quote_bumps_required_edge_by_execution_health() -> None:
+def test_fast_presigned_quote_keeps_frozen_edge_across_execution_health() -> None:
     bot = object.__new__(StatsBot)
     bot.config = type(
         "Config",
@@ -1074,7 +1152,7 @@ def test_fast_presigned_quote_bumps_required_edge_by_execution_health() -> None:
     assert degraded.price == 0.43
     assert round(degraded.edge_at_ask, 6) == 0.08
     assert round(degraded.edge_at_limit, 6) == 0.07
-    assert round(degraded.required_edge, 6) == 0.06
+    assert round(degraded.required_edge, 6) == 0.05
 
     bot.recent_clob_ack_ms = deque([900.0, 920.0, 930.0, 940.0, 950.0], maxlen=10)
     poor = bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, decision)
@@ -1084,13 +1162,13 @@ def test_fast_presigned_quote_bumps_required_edge_by_execution_health() -> None:
     assert poor.price == 0.43
     assert round(poor.edge_at_ask, 6) == 0.08
     assert round(poor.edge_at_limit, 6) == 0.07
-    assert round(poor.required_edge, 6) == 0.07
+    assert round(poor.required_edge, 6) == 0.05
 
     degraded_only = EntryDecision(**{**decision.__dict__, "selected_trade_value": 0.495, "selected_policy_edge": 0.075})
     bot.recent_clob_ack_ms = deque([500.0, 520.0, 530.0, 540.0, 550.0], maxlen=10)
     assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, degraded_only) is not None
     bot.recent_clob_ack_ms = deque([900.0, 920.0, 930.0, 940.0, 950.0], maxlen=10)
-    assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, degraded_only) is None
+    assert bot._fast_entry_quote(market_start + timedelta(seconds=60), {"day_type": "weekday"}, degraded_only) is not None
 
 
 def test_surplus_adaptive_fast_quote_spends_one_tick_only_with_spare_edge() -> None:
@@ -2787,6 +2865,38 @@ def test_mr_raw_twap_aligned_guard_blocks_only_aligned_mean_reversion() -> None:
     assert bot._mr_raw_twap_aligned_entry_blockers(aligned_snapshot, continuation) == ()
 
 
+def test_disable_mean_reversion_entries_blocks_only_mean_reversion() -> None:
+    bot = object.__new__(StatsBot)
+    bot.config = SimpleNamespace(disable_mean_reversion_entries=True)
+    decision = EntryDecision(
+        viable=True,
+        blockers=(),
+        policy_key=("strategy", "surface", "p30_45", "DOWN"),
+        policy_record=None,
+        selected_side="DOWN",
+        selected_bid=0.34,
+        selected_ask=0.35,
+        selected_mid=0.345,
+        selected_spread=0.01,
+        selected_trade_value=0.44,
+        selected_policy_edge=0.09,
+        selected_trade_style="mean_reversion",
+        entry_edge_threshold=0.08,
+        entry_session_enabled=True,
+        threshold_bps=0.0,
+    )
+
+    snapshot: dict[str, object] = {}
+    assert bot._mean_reversion_disabled_entry_blockers(snapshot, decision) == ("MR_DISABLED",)
+    assert snapshot["mr_disabled_trade_style"] == "mean_reversion"
+
+    continuation = dataclasses.replace(decision, selected_trade_style="continuation")
+    assert bot._mean_reversion_disabled_entry_blockers({}, continuation) == ()
+
+    bot.config = SimpleNamespace(disable_mean_reversion_entries=False)
+    assert bot._mean_reversion_disabled_entry_blockers({}, decision) == ()
+
+
 def test_drawdown_guard_normalises_losses_by_share_count() -> None:
     assert normalised_5_share_pnl(-7.0, 10.0) == -3.5
     assert normalised_5_share_pnl(-5.6, 8.0) == -3.5
@@ -4089,7 +4199,7 @@ def test_pending_fast_limit_cancels_and_retries_when_ask_stale_for_grace_period(
     bot._manage_pending_entry(started + timedelta(milliseconds=501), {}, decision)
 
     assert cancelled == ["ENTRY_STALE_QUOTE_DISTANCE"]
-    assert requested == [True]
+    assert requested == [False]
 
 
 def test_pending_maker_order_uses_same_stale_ask_retry_mechanics() -> None:
@@ -4167,7 +4277,7 @@ def test_pending_maker_order_uses_same_stale_ask_retry_mechanics() -> None:
     bot._manage_pending_entry(started + timedelta(milliseconds=450), {}, decision)
 
     assert cancelled == ["ENTRY_STALE_QUOTE_DISTANCE"]
-    assert requested == [True]
+    assert requested == [False]
 
 
 def test_pending_entry_keeps_ask_within_two_ticks_and_resets_stale_timer() -> None:

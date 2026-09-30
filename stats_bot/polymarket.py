@@ -282,6 +282,10 @@ def _extract_matched(resp: object) -> float:
             value = finite_float(resp.get(key))
             if value is not None:
                 return max(0.0, value)
+        if _extract_status(resp) in {"MATCHED", "FILLED"}:
+            value = finite_float(resp.get("takingAmount"))
+            if value is not None:
+                return max(0.0, value)
         return 0.0
     for key in keys:
         value = finite_float(getattr(resp, key, None))
@@ -306,6 +310,10 @@ def _extract_avg_price(resp: object, fallback: float | None) -> tuple[float | No
             value = finite_float(resp.get(key))
             if value is not None:
                 return value, key
+        taking = finite_float(resp.get("takingAmount"))
+        making = finite_float(resp.get("makingAmount"))
+        if taking is not None and making is not None and taking > 0.0:
+            return making / taking, "makingAmount/takingAmount"
         value = finite_float(resp.get("price"))
         if value is not None:
             return value, "price"

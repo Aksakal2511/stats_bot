@@ -1,0 +1,40 @@
+{
+  "strategy_version": "btc5m_v1_aug14_sep14",
+  "training_start": "2026-08-14",
+  "training_end": "2026-09-14",
+  "holdout_used_for_fit": false,
+  "source_git_commit": "unavailable",
+  "feature_version": "stage19_twap_dz_vol_1h_stage18_bps_path",
+  "lambda": 10000,
+  "isotonic_provenance": "/Volumes/Kate_DATA/policy_finder/twap/data/artifacts/gcp_returned/stage23_locked_holdout/stage23_locked_holdout_sep15_18_btc_20260928/cache/final_model_fit_manifest.json",
+  "residual_branch_definitions": [
+    "BPS15_BPS60",
+    "BPS15_ACCEL",
+    "BASE_ONLY"
+  ],
+  "detector_reference_provenance": "/Volumes/Kate_DATA/policy_finder/twap/data/artifacts/gcp_returned/stage26_regime_guard_btc/twap/data/artifacts/stage26_regime_guard_btc/historical_reference_distributions.parquet",
+  "artifact_hashes": {
+    "final_strategy.json": "a0ade096b9ee0d71087bb51b0f8c83ccb05d63394fb7674472430f7c6c58571a"
+  },
+  "source_hashes": {
+    "/Volumes/Kate_DATA/policy_finder/twap/data/artifacts/twap_native_base_side_rows_spot_z_aug14_sep14_official_t60_220_20260915/base_side_rows.parquet": "faff0c6ec0b7adbcecf0455f0eb6f94b01c026fe92948f240f90a78f65d0eaa2",
+    "/Volumes/Kate_DATA/policy_finder/twap/data/artifacts/gcp_returned/stage23_locked_holdout/stage23_locked_holdout_sep15_18_btc_20260928/cache/final_model_fit_manifest.json": "2381d61aa1e4eda12c704f002aa907c9190925117a478ce4629e06b3b66af873",
+    "/Volumes/Kate_DATA/policy_finder/twap/data/artifacts/gcp_returned/stage23_locked_holdout/stage23_locked_holdout_sep15_18_btc_20260928/cache/frozen_holdout_predictions.parquet": "bade8f7451c04346632ed0c9b2b02fee6be513d46892b9c638586d87199da49a",
+    "/Volumes/Kate_DATA/policy_finder/twap/data/artifacts/gcp_returned/stage26_regime_guard_btc/twap/data/artifacts/stage26_regime_guard_btc/historical_reference_distributions.parquet": "cfe0c29ce0985b6d0916332188ee4693ff5a647244dbc2a34f496d6fce26af90"
+  },
+  "parity_validation": {
+    "rows": 925844,
+    "p_raw_max_abs": 2.1466162181127402e-13,
+    "p0_max_abs": 1.5234442041212048e-09,
+    "p_final_max_abs": 1.5296769961814505e-09,
+    "branch_mismatches": 0,
+    "holdout_used_for_fit": false,
+    "tolerances": {
+      "p_raw_atol": 5e-12,
+      "p0_atol": 2e-09,
+      "p_final_atol": 2e-09,
+      "branch_mismatches": 0
+    }
+  },
+  "creation_timestamp": "2026-09-29T09:39:07.968967+00:00"
+}

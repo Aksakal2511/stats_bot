@@ -1,6 +1,10 @@
 .env
 logs/
 analysis/
+state/
+twap/
+live_run_audit_*.md
+live_run_audit_*_data/
 __pycache__/
 .pytest_cache/
 *.pyc

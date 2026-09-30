@@ -26,6 +26,7 @@ PM_FIELDS = (
     "up_ask",
     "up_mid",
     "up_spread",
+    "up_book_age_ms",
     "up_bid_depth_total",
     "up_ask_depth_total",
     "up_best_bid_depth",
@@ -34,10 +35,71 @@ PM_FIELDS = (
     "down_ask",
     "down_mid",
     "down_spread",
+    "down_book_age_ms",
     "down_bid_depth_total",
     "down_ask_depth_total",
     "down_best_bid_depth",
     "down_best_ask_depth",
+)
+
+
+def _ols_path_slope(values: list[float], start_lag: int, end_lag: int) -> float:
+    y = values[start_lag : end_lag + 1]
+    x = [-float(lag) for lag in range(start_lag, end_lag + 1)]
+    x_mean = sum(x) / len(x)
+    y_mean = sum(y) / len(y)
+    numerator = sum((xx - x_mean) * (yy - y_mean) for xx, yy in zip(x, y))
+    denominator = sum((xx - x_mean) ** 2 for xx in x)
+    return numerator / denominator
+
+
+def _canonical_bps_path_features(
+    merged_rows: list[dict[str, Any]],
+    now_utc: datetime,
+    anchor: float,
+) -> dict[str, float | bool]:
+    """Exact Stage18 as-of BPS OLS path features for the current timestamp."""
+    times: list[datetime] = []
+    levels: list[float] = []
+    for row in merged_rows:
+        timestamp = _coerce_timestamp(row.get("timestamp_utc"))
+        close = finite_float(row.get("close_1s"))
+        if timestamp is not None and close is not None:
+            times.append(timestamp)
+            levels.append(10_000.0 * (close / anchor - 1.0))
+    path: list[float] = []
+    for lag in range(61):
+        target = now_utc - timedelta(seconds=lag)
+        position = bisect.bisect_right(times, target) - 1
+        path.append(levels[position] if position >= 0 else float("nan"))
+    available15 = bool(times and times[0] <= now_utc - timedelta(seconds=15) and all(math.isfinite(x) for x in path[:16]))
+    available60 = bool(times and times[0] <= now_utc - timedelta(seconds=60) and all(math.isfinite(x) for x in path))
+    bps15 = 15.0 * _ols_path_slope(path, 0, 15) if available15 else float("nan")
+    bps60 = 60.0 * _ols_path_slope(path, 0, 60) if available60 else float("nan")
+    accel = (
+        _ols_path_slope(path, 0, 5) - _ols_path_slope(path, 5, 15)
+        if available15
+        else float("nan")
+    )
+    return {
+        "up_BPS_15": bps15,
+        "up_BPS_60": bps60,
+        "up_BPS_ACCEL_5_15": accel,
+        "up_BPS_15__available": available15,
+        "up_BPS_60__available": available60,
+        "up_BPS_ACCEL_5_15__available": available15,
+        "down_BPS_15": -bps15,
+        "down_BPS_60": -bps60,
+        "down_BPS_ACCEL_5_15": -accel,
+        "down_BPS_15__available": available15,
+        "down_BPS_60__available": available60,
+        "down_BPS_ACCEL_5_15__available": available15,
+    }
+PM_RAW_FIELDS = (
+    "up_book_source",
+    "up_book_captured_at_utc",
+    "down_book_source",
+    "down_book_captured_at_utc",
 )
 
 
@@ -87,8 +149,8 @@ def _coerce_rows(table: Any) -> list[dict[str, Any]]:
     return [row for row in table if isinstance(row, dict)]
 
 
-def _prepare_history(table: Any, fields: tuple[str, ...]) -> dict[datetime, dict[str, float]]:
-    rows_by_ts: dict[datetime, dict[str, float]] = {}
+def _prepare_history(table: Any, fields: tuple[str, ...], raw_fields: tuple[str, ...] = ()) -> dict[datetime, dict[str, Any]]:
+    rows_by_ts: dict[datetime, dict[str, Any]] = {}
     for raw in _coerce_rows(table):
         ts = _coerce_timestamp(raw.get("timestamp_utc"))
         if ts is None:
@@ -96,6 +158,10 @@ def _prepare_history(table: Any, fields: tuple[str, ...]) -> dict[datetime, dict
         normalized: dict[str, float] = {}
         for field in fields:
             value = finite_float(raw.get(field))
+            if value is not None:
+                normalized[field] = value
+        for field in raw_fields:
+            value = raw.get(field)
             if value is not None:
                 normalized[field] = value
         rows_by_ts[ts] = normalized
@@ -365,7 +431,7 @@ def compute_live_snapshot(
         return None
 
     btc_rows = _prepare_history(btc_history, BTC_FIELDS)
-    pm_rows = _prepare_history(pm_history, PM_FIELDS)
+    pm_rows = _prepare_history(pm_history, PM_FIELDS, PM_RAW_FIELDS)
     if not btc_rows or not pm_rows:
         return None
 
@@ -538,6 +604,19 @@ def compute_live_snapshot(
     if analytic_w60_anchor > 0.0 and local_volatility_1h_bps is not None and local_volatility_1h_bps > 0.0:
         raw_w60_denom = max(0.05, float(local_volatility_1h_bps) * math.sqrt(max(1.0, float(tte_seconds)) / 3600.0))
         raw_w60_move_dz = float(analytic_w60_distance_bps / raw_w60_denom)
+    raw_w60_delta_by_horizon: dict[int, float | None] = {}
+    for horizon_seconds in (15, 35, 40):
+        _raw_z, raw_delta = _distance_z_delta(
+            merged_rows,
+            now_utc=now_utc,
+            market_end_utc=market_end_utc,
+            latest_close=latest_spot_close,
+            anchor=analytic_w60_anchor,
+            local_volatility_1h_bps=local_volatility_1h_bps,
+            current_tte_seconds=float(tte_seconds),
+            seconds=horizon_seconds,
+        )
+        raw_w60_delta_by_horizon[horizon_seconds] = raw_delta
     analytic_w60_stream_distance_bps = (
         None
         if twap_60_now is None or twap_60_open is None or twap_60_open <= 0.0
@@ -589,6 +668,7 @@ def compute_live_snapshot(
     else:
         distance_z_delta_2s = spot_distance_z_delta_2s
     signed_bps_bucket = bucket_signed_bps(signed_bps_raw)
+    bps_path_features = _canonical_bps_path_features(merged_rows, now_utc, float(open_price))
     tte_bucket = bucket_tte(tte_seconds)
     volatility_bucket = (
         bucket_volatility(volatility_smoothed_raw, day_type, session_bucket, volatility_edges)
@@ -633,6 +713,33 @@ def compute_live_snapshot(
         "raw_move_dz": float("nan") if raw_w60_move_dz is None else float(raw_w60_move_dz),
         "up_raw_move_dz": float("nan") if raw_w60_move_dz is None else float(raw_w60_move_dz),
         "down_raw_move_dz": float("nan") if raw_w60_move_dz is None else float(-raw_w60_move_dz),
+        "raw_delta_15s": (
+            float("nan") if raw_w60_delta_by_horizon[15] is None else float(raw_w60_delta_by_horizon[15])
+        ),
+        "raw_delta_35s": (
+            float("nan") if raw_w60_delta_by_horizon[35] is None else float(raw_w60_delta_by_horizon[35])
+        ),
+        "raw_delta_40s": (
+            float("nan") if raw_w60_delta_by_horizon[40] is None else float(raw_w60_delta_by_horizon[40])
+        ),
+        "up_raw_delta_15s": (
+            float("nan") if raw_w60_delta_by_horizon[15] is None else float(raw_w60_delta_by_horizon[15])
+        ),
+        "up_raw_delta_35s": (
+            float("nan") if raw_w60_delta_by_horizon[35] is None else float(raw_w60_delta_by_horizon[35])
+        ),
+        "up_raw_delta_40s": (
+            float("nan") if raw_w60_delta_by_horizon[40] is None else float(raw_w60_delta_by_horizon[40])
+        ),
+        "down_raw_delta_15s": (
+            float("nan") if raw_w60_delta_by_horizon[15] is None else float(-raw_w60_delta_by_horizon[15])
+        ),
+        "down_raw_delta_35s": (
+            float("nan") if raw_w60_delta_by_horizon[35] is None else float(-raw_w60_delta_by_horizon[35])
+        ),
+        "down_raw_delta_40s": (
+            float("nan") if raw_w60_delta_by_horizon[40] is None else float(-raw_w60_delta_by_horizon[40])
+        ),
         "cb_spot_distance_z_delta_2s": (
             float("nan") if spot_distance_z_delta_2s is None else float(spot_distance_z_delta_2s)
         ),
@@ -737,6 +844,9 @@ def compute_live_snapshot(
         "up_ask": up_ask if up_ask is not None else float("nan"),
         "up_mid": up_mid,
         "up_spread": up_spread,
+        "up_book_source": latest.get("up_book_source"),
+        "up_book_captured_at_utc": latest.get("up_book_captured_at_utc"),
+        "up_book_age_ms": val("up_book_age_ms"),
         "up_ask_bucket": up_ask_bucket,
         "up_bid_depth_total": val("up_bid_depth_total"),
         "up_ask_depth_total": val("up_ask_depth_total"),
@@ -746,10 +856,14 @@ def compute_live_snapshot(
         "down_ask": down_ask if down_ask is not None else float("nan"),
         "down_mid": down_mid,
         "down_spread": down_spread,
+        "down_book_source": latest.get("down_book_source"),
+        "down_book_captured_at_utc": latest.get("down_book_captured_at_utc"),
+        "down_book_age_ms": val("down_book_age_ms"),
         "down_ask_bucket": down_ask_bucket,
         "down_bid_depth_total": val("down_bid_depth_total"),
         "down_ask_depth_total": val("down_ask_depth_total"),
         "down_best_bid_depth": val("down_best_bid_depth"),
         "down_best_ask_depth": val("down_best_ask_depth"),
         "yes_no_spread": yes_no_spread,
+        **bps_path_features,
     }

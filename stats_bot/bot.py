@@ -21,8 +21,8 @@ from .binance import BinanceTickerFeed, adverse_signed_volume, adverse_z
 from .coinbase import CoinbaseFeed
 from .config import REPO_ROOT, BotConfig, build_config, parse_args
 from .features import compute_live_snapshot, compute_twap_provider_diagnostics
+from .final_strategy import FinalBtc5mStrategy
 from .guards import DrawdownGuard, BpsYesGuard, SessionStyleDrawdownGuard
-from .macro_policy import MacroLocalPolicy
 from .models import HedgeLeg, OpenPosition, PendingEntryOrder, RuntimeEvent
 from .polymarket import BookSnapshot, MarketInfo, OrderResult, PolymarketClient, SignedBuyOrder, WINDOW_SECONDS, round_price
 from .polymarket_ref import PolymarketReferenceFeed, polymarket_twap_subscribe_message
@@ -312,10 +312,10 @@ def _entry_tolerance_ticks_for_execution_health(status: str) -> int:
 
 
 def _required_limit_edge_for_execution_health(status: str, base_required_edge: float) -> float:
-    if status == "Poor":
-        return base_required_edge + POOR_ENTRY_EDGE_BUMP
-    if status == "Degraded":
-        return base_required_edge + DEGRADED_ENTRY_EDGE_BUMP
+    # Execution health remains observable, but the frozen strategy requires a
+    # literal C2.5 at every latency/health state.  The previous +1c/+2c bumps
+    # were an untested dynamic-edge policy, not an order-safety mechanism.
+    del status
     return base_required_edge
 
 
@@ -358,9 +358,12 @@ class StatsBot:
     def __init__(self, config: BotConfig):
         self.config = config
         t0 = time.time()
-        log.info("  init: loading macro/local production policy...")
-        self.macro_policy = MacroLocalPolicy(config.macro_policy_bundle)
-        log.info(f"  init: macro/local policy loaded in {time.time() - t0:.2f}s")
+        log.info("  init: loading frozen BTC5m final strategy...")
+        self.macro_policy = FinalBtc5mStrategy(
+            config.macro_policy_bundle,
+            config.final_strategy_state_file,
+        )
+        log.info(f"  init: frozen strategy loaded in {time.time() - t0:.2f}s")
         expected = self.macro_policy.entry
         configured_shape = (
             config.min_entry_price,
@@ -378,14 +381,31 @@ class StatsBot:
             float(expected["max_price"]),
             int(expected["min_tte"]),
             int(expected["max_tte"]),
-            45,
+            0,
         )
         if configured_shape != tested_shape:
             raise ValueError(f"Runtime entry shape {configured_shape} does not match frozen policy {tested_shape}")
-        if config.stake_mode not in {"min_order_size", "ladder_shares"} or config.min_order_size_fallback != float(expected["shares"]):
-            raise ValueError(
-                f"{self.macro_policy.strategy_id} requires a 5-share fallback-compatible stake mode"
-            )
+        if config.stake_mode != "ladder_shares" or config.min_order_size_fallback != float(expected["shares"]):
+            raise ValueError(f"{self.macro_policy.strategy_id} requires the existing ladder_shares mode with 5-share fallback")
+        incompatible = {
+            "exit_policy_mode": config.exit_policy_mode != "hold_to_resolution",
+            "peak_drawdown_kill_usd": config.peak_drawdown_kill_usd != 0.0,
+            "observe_first_window": config.observe_first_window,
+            "entry_signal_persistence_seconds": config.entry_signal_persistence_seconds != 0.0,
+            "move_dz_stoploss_enabled": config.move_dz_stoploss_enabled,
+            "pressure_defence_enabled": config.pressure_defence_enabled,
+            "bps_yes_guard_enabled": config.bps_yes_guard_enabled,
+            "session_style_drawdown_guard_enabled": config.session_style_drawdown_guard_enabled,
+            "low_liquidity_no_signal_guard_enabled": config.low_liquidity_no_signal_guard_enabled,
+            "ultra_low_vol_guard_enabled": config.ultra_low_vol_guard_enabled,
+            "twap_lag_cheap_cont_guard_enabled": config.twap_lag_cheap_cont_guard_enabled,
+            "mr_raw_twap_aligned_block_enabled": config.mr_raw_twap_aligned_block_enabled,
+            "cheap_low_vol_guard_enabled": config.cheap_low_vol_guard_enabled,
+            "c_weak_momentum_low_vol_guard_enabled": config.c_weak_momentum_low_vol_guard_enabled,
+        }
+        active_incompatible = [name for name, active in incompatible.items() if active]
+        if active_incompatible:
+            raise ValueError("Final strategy forbids active legacy strategy controls: " + ", ".join(active_incompatible))
         t0 = time.time()
         if config.exit_policy_mode == "hold_to_resolution":
             log.info("  init: legacy exit-policy support skipped (hold_to_resolution)...")
@@ -775,6 +795,15 @@ class StatsBot:
                 "raw_move_dz",
                 "up_raw_move_dz",
                 "down_raw_move_dz",
+                "raw_delta_15s",
+                "raw_delta_35s",
+                "raw_delta_40s",
+                "up_raw_delta_15s",
+                "up_raw_delta_35s",
+                "up_raw_delta_40s",
+                "down_raw_delta_15s",
+                "down_raw_delta_35s",
+                "down_raw_delta_40s",
                 "cb_spot_signed_bps_raw",
                 "cb_signed_bps_raw",
                 "pm_cl_spot_price",
@@ -788,10 +817,24 @@ class StatsBot:
                 "up_ask",
                 "up_mid",
                 "up_spread",
+                "up_book_source",
+                "up_book_captured_at_utc",
+                "up_book_age_ms",
+                "up_bid_depth_total",
+                "up_ask_depth_total",
+                "up_best_bid_depth",
+                "up_best_ask_depth",
                 "down_bid",
                 "down_ask",
                 "down_mid",
                 "down_spread",
+                "down_book_source",
+                "down_book_captured_at_utc",
+                "down_book_age_ms",
+                "down_bid_depth_total",
+                "down_ask_depth_total",
+                "down_best_bid_depth",
+                "down_best_ask_depth",
                 "policy_signal_name",
                 "up_policy_value",
                 "up_policy_edge",
@@ -804,6 +847,9 @@ class StatsBot:
                 "selected_move_dz_bucket",
                 "selected_raw_move_dz",
                 "selected_raw_minus_twap_move_dz",
+                "selected_raw_delta_15s",
+                "selected_raw_delta_35s",
+                "selected_raw_delta_40s",
                 "up_move_dz",
                 "up_move_dz_bucket",
                 "down_move_dz",
@@ -820,6 +866,47 @@ class StatsBot:
                 "entry_rule_max_tte",
                 "entry_rule_source_family",
                 "entry_rule_source_segment",
+                "entry_rule_score",
+                "entry_rule_vol_score",
+                "entry_rule_momentum_score",
+                "entry_rule_c_edge",
+                "entry_rule_mr_edge",
+                "entry_rule_momentum_feature",
+                "entry_rule_momentum_value",
+                "TWAP_DZ",
+                "selected_twap_dz",
+                "p_base_raw",
+                "p_base_iso",
+                "BPS_15",
+                "BPS_60",
+                "BPS_ACCEL_5_15",
+                "BPS_15__available",
+                "BPS_60__available",
+                "BPS_ACCEL_5_15__available",
+                "bps_branch",
+                "p_final",
+                "model_edge",
+                "model_edge_at_limit",
+                "C_required",
+                "detector_id",
+                "detector_status",
+                "detector_state",
+                "detector_value",
+                "detector_q20",
+                "detector_q30",
+                "detector_unique_markets",
+                "detector_recovery_hits",
+                "detector_recovery_required",
+                "detector_armed",
+                "detector_last_transition",
+                "detector_last_transition_at_utc",
+                "p15_pause_active",
+                "p15_pause_until_utc",
+                "p15_pause_remaining_seconds",
+                "p15_counterfactual_blocked_opportunities",
+                "p15_counterfactual_opportunity",
+                "p15_counterfactual_intended_ladder_shares",
+                "p15_counterfactual_model_state",
             ):
                 row[key] = snapshot.get(key)
 
@@ -843,6 +930,18 @@ class StatsBot:
                     "threshold_bps": decision.threshold_bps,
                 }
             )
+            selected_prefix = str(decision.selected_side or "").lower()
+            if selected_prefix in {"up", "down"} and snapshot is not None:
+                for suffix in (
+                    "book_source",
+                    "book_captured_at_utc",
+                    "book_age_ms",
+                    "bid_depth_total",
+                    "ask_depth_total",
+                    "best_bid_depth",
+                    "best_ask_depth",
+                ):
+                    row[f"selected_{suffix}"] = snapshot.get(f"{selected_prefix}_{suffix}")
         else:
             row.update({"policy_matched": 0, "entry_viable": 0, "entry_blockers": ["NO_DECISION"]})
 
@@ -1135,8 +1234,8 @@ class StatsBot:
                 f"  entry=pre-signed GTC fast limit when ready; fallback maker @ best_ask-1tick"
                 f"  exit_policy={self.config.exit_policy_mode}"
             )
-            if self.config.observe_first_window and self.current_window_ts == self.startup_window_ts:
-                log.info("  startup_guard=OBSERVE_FIRST_WINDOW")
+            if self.current_window_ts == self.startup_window_ts:
+                log.info("  startup_guard=WAIT_FOR_NEXT_5M_BOUNDARY (no model evaluation or entries)")
             log.info(LINE)
             self._start_presign_ladder()
         else:
@@ -1151,12 +1250,17 @@ class StatsBot:
         down = self.pm.get_order_book_snapshot(market.token_down)
         if up.mid is None or down.mid is None:
             return
+        up_book_age_ms = max(0.0, (now_utc - up.captured_at_utc).total_seconds() * 1000.0)
+        down_book_age_ms = max(0.0, (now_utc - down.captured_at_utc).total_seconds() * 1000.0)
         row = {
             "timestamp_utc": now_utc,
             "up_bid": up.bid,
             "up_ask": up.ask,
             "up_mid": up.mid,
             "up_spread": up.spread,
+            "up_book_source": up.source,
+            "up_book_captured_at_utc": up.captured_at_utc,
+            "up_book_age_ms": up_book_age_ms,
             "up_bid_depth_total": up.bid_depth_total,
             "up_ask_depth_total": up.ask_depth_total,
             "up_best_bid_depth": up.best_bid_depth,
@@ -1165,6 +1269,9 @@ class StatsBot:
             "down_ask": down.ask,
             "down_mid": down.mid,
             "down_spread": down.spread,
+            "down_book_source": down.source,
+            "down_book_captured_at_utc": down.captured_at_utc,
+            "down_book_age_ms": down_book_age_ms,
             "down_bid_depth_total": down.bid_depth_total,
             "down_ask_depth_total": down.ask_depth_total,
             "down_best_bid_depth": down.best_bid_depth,
@@ -1177,6 +1284,29 @@ class StatsBot:
     def _build_snapshot(self, now_utc: datetime) -> dict[str, Any] | None:
         if self.current_market is None:
             return None
+        local_rv, local_rv_status, local_rv_age = self.coinbase.local_volatility_1h_bps(now_utc)
+        if self.current_window_ts is not None and self.current_window_ts == self.startup_window_ts:
+            latest_pm = next(reversed(self.pm_rows.values()), {}) if self.pm_rows else {}
+            return {
+                "timestamp_utc": now_utc,
+                "canonical_window_id": self.current_market.slug,
+                "market_start_utc": self.current_market.market_start_utc,
+                "market_end_utc": self.current_market.market_end_utc,
+                "canonical_tte_seconds": max(
+                    0.0,
+                    (self.current_market.market_end_utc - now_utc).total_seconds(),
+                ),
+                "elapsed_seconds_since_market_start": max(
+                    0.0,
+                    (now_utc - self.current_market.market_start_utc).total_seconds(),
+                ),
+                "local_volatility_1h_bps": local_rv,
+                "local_volatility_status": local_rv_status,
+                "local_volatility_age_minutes": local_rv_age,
+                "startup_window_warmup": True,
+                "C_required": .025,
+                **latest_pm,
+            }
         signal_price_mode = str(getattr(self.macro_policy, "signal_price_mode", "spot") or "spot").strip().lower()
         if self.window_open_btc_price is None and "twap" not in signal_price_mode:
             return None
@@ -1185,7 +1315,6 @@ class StatsBot:
             window_open_btc_price = finite_float(getattr(self.coinbase, "price", None))
         if window_open_btc_price is None or window_open_btc_price <= 0.0:
             return None
-        local_rv, local_rv_status, local_rv_age = self.coinbase.local_volatility_1h_bps(now_utc)
         snapshot = compute_live_snapshot(
             btc_history=self.coinbase.history_rows(),
             pm_history=list(self.pm_rows.values()),
@@ -1411,9 +1540,9 @@ class StatsBot:
             ),
         }
 
-    def _dashboard_signed_bps_text(self, snapshot: dict[str, Any]) -> str:
+    def _dashboard_signed_bps_text(self, snapshot: dict[str, Any], digits: int = 5) -> str:
         coinbase_bps = finite_float(snapshot.get("cb_signed_bps_raw"))
-        return _fmt(coinbase_bps, 5)
+        return _fmt(coinbase_bps, digits)
 
     def _dashboard_twap_signed_bps_text(self, snapshot: dict[str, Any], digits: int = 5) -> str:
         coinbase_bps = finite_float(snapshot.get("cb_twap_60s_signed_bps_raw"))
@@ -2597,6 +2726,9 @@ class StatsBot:
         threshold = finite_float(decision.entry_edge_threshold)
         if threshold is None:
             return None
+        if str(getattr(decision, "selected_trade_style", "") or "").strip().lower() == "mean_reversion":
+            buffer = finite_float(getattr(self.config, "entry_mr_edge_buffer", 0.005))
+            threshold += max(0.0, buffer if buffer is not None else 0.005)
         return threshold
 
     def _pending_entry_still_has_edge(
@@ -2618,7 +2750,7 @@ class StatsBot:
                 trade_value = finite_float(snapshot.get(f"{pending.policy_side.lower()}_policy_value"))
         required_edge = finite_float(pending.snapshot.get("entry_required_edge_at_limit"))
         if required_edge is None:
-            required_edge = finite_float(decision.entry_edge_threshold)
+            required_edge = self._required_entry_edge_at_fill(datetime.now(timezone.utc), decision)
         if trade_value is None or required_edge is None:
             return False, trade_value, required_edge
         edge_at_pending_price = trade_value - float(pending.price)
@@ -2766,6 +2898,68 @@ class StatsBot:
             execution_health_status=health_status,
             tolerance_ticks=tolerance_ticks,
         )
+
+    def _entry_pre_submit_ask_revalidation_ok(
+        self,
+        now_utc: datetime,
+        snapshot: dict[str, Any],
+        decision: EntryDecision,
+        quote: FastEntryQuote,
+        *,
+        execution_mode: str,
+    ) -> bool:
+        if self.config.paper_trading:
+            return True
+        if not bool(getattr(self.config, "entry_pre_submit_ask_revalidation_enabled", False)):
+            return True
+        market = self.current_market
+        side = decision.selected_side
+        if market is None or not side:
+            return True
+        fresh_book = self._side_book(side)
+        fresh_ask = finite_float(fresh_book.ask)
+        if fresh_ask is None:
+            return True
+        tick = market.tick_size if market.tick_size > 0 else 0.01
+        slack_ticks = max(0, int(getattr(self.config, "entry_pre_submit_ask_revalidation_slack_ticks", 0) or 0))
+        max_allowed_ask = quote.price + slack_ticks * tick
+        if fresh_ask <= max_allowed_ask + 1e-12:
+            return True
+        fresh_bid = finite_float(fresh_book.bid)
+        quote_age_ms = max(0.0, (datetime.now(tz=timezone.utc) - quote.book.captured_at_utc).total_seconds() * 1000.0)
+        fresh_age_ms = max(0.0, (datetime.now(tz=timezone.utc) - fresh_book.captured_at_utc).total_seconds() * 1000.0)
+        fields = {
+            "market_slug": market.slug,
+            "side": side,
+            "execution_mode": execution_mode,
+            "limit_price": quote.price,
+            "original_ask": quote.book.ask,
+            "fresh_bid": fresh_bid,
+            "fresh_ask": fresh_ask,
+            "max_allowed_ask": round(max_allowed_ask, 6),
+            "slack_ticks": slack_ticks,
+            "original_book_age_ms": round(quote_age_ms, 3),
+            "fresh_book_age_ms": round(fresh_age_ms, 3),
+            "fresh_book_source": fresh_book.source,
+            "fresh_best_bid_depth": fresh_book.best_bid_depth,
+            "fresh_best_ask_depth": fresh_book.best_ask_depth,
+            "fresh_bid_depth_total": fresh_book.bid_depth_total,
+            "fresh_ask_depth_total": fresh_book.ask_depth_total,
+            "edge_at_limit": quote.edge_at_limit,
+            "required_edge_at_limit": quote.required_edge,
+            "entry_tolerance_ticks": quote.tolerance_ticks,
+        }
+        self.last_entry_attempt_time_by_window[market.slug] = now_utc
+        self._log_event("entry_skipped", "SKIPPED_PRE_SUBMIT_ASK_REVALIDATION", fields)
+        self._record_decision_journal(
+            now_utc,
+            snapshot,
+            decision,
+            event_type="pre_submit_ask_revalidation_block",
+            extra=fields,
+            force=True,
+        )
+        return False
 
     def _live_retry_cooldown_remaining(self, market_slug: str, now_utc: datetime) -> float:
         last_attempt = self.last_entry_attempt_time_by_window.get(market_slug)
@@ -3094,7 +3288,7 @@ class StatsBot:
         if self.config.paper_trading and self.config.paper_fill_model != "fast_limit":
             self._place_entry(now_utc, snapshot, decision)
             return
-        if self.config.observe_first_window and self.current_window_ts == self.startup_window_ts:
+        if self.current_window_ts == self.startup_window_ts:
             return
         if not self._can_enter_after_cooldown(market.slug, now_utc):
             return
@@ -3123,6 +3317,8 @@ class StatsBot:
         signed_order = None
         execution_mode = "paper_fast_limit_async" if self.config.paper_trading else "presigned_fast_limit_async"
         if quote is not None and not self.config.paper_trading:
+            if not self._entry_pre_submit_ask_revalidation_ok(now_utc, snapshot, decision, quote, execution_mode=execution_mode):
+                return
             signed_order = self._presign_pop(market.slug, decision.selected_side, quote.price, quote.shares)
             if signed_order is None and bool(getattr(self.config, "entry_on_demand_signed_fallback_enabled", False)):
                 try:
@@ -3763,7 +3959,7 @@ class StatsBot:
             return
         if getattr(self, "peak_drawdown_kill_active", False):
             return
-        if self.config.observe_first_window and self.current_window_ts == self.startup_window_ts:
+        if self.current_window_ts == self.startup_window_ts:
             return
         if not self._can_enter_after_cooldown(market.slug, now_utc):
             return
@@ -3807,6 +4003,14 @@ class StatsBot:
             wallet_balance_before = finite_float(self.wallet_balance_live)
             fast_quote = self._fast_entry_quote(now_utc, snapshot, decision) if self._presigned_entries_available() else None
             if fast_quote is not None:
+                if not self._entry_pre_submit_ask_revalidation_ok(
+                    now_utc,
+                    snapshot,
+                    decision,
+                    fast_quote,
+                    execution_mode="presigned_fast_limit",
+                ):
+                    return
                 signed_order = self._presign_pop(market.slug, decision.selected_side, fast_quote.price, fast_quote.shares)
                 if signed_order is None and bool(getattr(self.config, "entry_on_demand_signed_fallback_enabled", False)):
                     try:
@@ -4192,10 +4396,20 @@ class StatsBot:
             return False
         delta = matched - pending.matched_shares_seen
         pending.matched_shares_seen = matched
+        entry_fee = 0.0
+        if not self.config.paper_trading and context in {"ASYNC_ORDER_POST", "ORDER_POST"}:
+            entry_fee = self._polymarket_taker_fee(delta, price)
         self._log_event(
             "maker_entry_fill_reconciled",
             context,
-            {"order_id": pending.order_id, "status": status, "matched": matched, "delta": delta, "price": price},
+            {
+                "order_id": pending.order_id,
+                "status": status,
+                "matched": matched,
+                "delta": delta,
+                "price": price,
+                "entry_fee": entry_fee,
+            },
         )
         self._log_latency(
             "fill_reconciled",
@@ -4207,7 +4421,7 @@ class StatsBot:
             limit_price=pending.price,
             detail=f"matched={matched:.6f};delta={delta:.6f};fill_price={price:.6f}",
         )
-        self._open_position_from_entry(pending, delta, price, now_utc)
+        self._open_position_from_entry(pending, delta, price, now_utc, entry_fee=entry_fee)
         self.pending_entry = None
         return True
 
@@ -4261,6 +4475,7 @@ class StatsBot:
         *,
         filled_shares: float,
         fill_price: float,
+        entry_fee: float = 0.0,
     ) -> None:
         if self.config.paper_trading or getattr(self, "wallet_balance_live", None) is None:
             return
@@ -4268,22 +4483,37 @@ class StatsBot:
         wallet_before = finite_float(pending.wallet_balance_before)
         if wallet_before is not None:
             cumulative_shares = max(float(pending.matched_shares_seen or 0.0), float(filled_shares))
-            expected_after = wallet_before - cumulative_shares * float(fill_price)
+            expected_after = wallet_before - cumulative_shares * float(fill_price) - float(entry_fee)
         else:
             expected_after = finite_float(getattr(self, "balance", None))
         if expected_after is not None and self.wallet_balance_live > expected_after:
             self.wallet_balance_live = max(0.0, float(expected_after))
 
-    def _open_position_from_entry(self, pending: PendingEntryOrder, filled_shares: float, fill_price: float, now_utc: datetime) -> None:
+    def _open_position_from_entry(
+        self,
+        pending: PendingEntryOrder,
+        filled_shares: float,
+        fill_price: float,
+        now_utc: datetime,
+        *,
+        entry_fee: float = 0.0,
+    ) -> None:
         market = self.current_market
         if market is None:
             return
         filled_shares = max(0.0, filled_shares)
         if filled_shares <= self.config.dust_share_threshold:
             return
-        cost = filled_shares * fill_price
+        gross_cost = filled_shares * fill_price
+        entry_fee = max(0.0, float(entry_fee))
+        cost = gross_cost + entry_fee
         self.balance -= cost
-        self._sync_live_wallet_after_known_entry_fill(pending, filled_shares=filled_shares, fill_price=fill_price)
+        self._sync_live_wallet_after_known_entry_fill(
+            pending,
+            filled_shares=filled_shares,
+            fill_price=fill_price,
+            entry_fee=entry_fee,
+        )
         self.entry_fills_by_window[market.slug] = int(self.entry_fills_by_window.get(market.slug, 0)) + 1
         self._set_entry_lifecycle_state(market.slug, "FILLED")
         if (
@@ -4293,11 +4523,16 @@ class StatsBot:
             and self.active_position.held_side == pending.policy_side
         ):
             position = self.active_position
+            existing_gross = float(position.extra.get("entry_gross_cost", position.avg_entry_price * position.shares))
+            total_gross = existing_gross + gross_cost
             total_cost = position.entry_cost + cost
             total_shares = position.shares + filled_shares
             position.shares = total_shares
             position.entry_cost = total_cost
-            position.avg_entry_price = total_cost / total_shares if total_shares > 0 else fill_price
+            position.avg_entry_price = total_gross / total_shares if total_shares > 0 else fill_price
+            position.extra["entry_gross_cost"] = total_gross
+            position.extra["entry_fee"] = float(position.extra.get("entry_fee", 0.0)) + entry_fee
+            position.extra["original_entry_cost"] = total_cost
             self._log_event(
                 "entry_filled",
                 f"ENTRY FILLED ADDITIONAL {pending.policy_side}",
@@ -4306,6 +4541,8 @@ class StatsBot:
                     "shares": filled_shares,
                     "avg_entry_price": position.avg_entry_price,
                     "cost": cost,
+                    "gross_cost": gross_cost,
+                    "entry_fee": entry_fee,
                     "total_shares": position.shares,
                     "total_cost": position.entry_cost,
                 },
@@ -4321,6 +4558,8 @@ class StatsBot:
                     "fill_price": fill_price,
                     "filled_shares": filled_shares,
                     "entry_cost": cost,
+                    "entry_gross_cost": gross_cost,
+                    "entry_fee": entry_fee,
                     "total_shares": position.shares,
                     "total_cost": position.entry_cost,
                 },
@@ -4345,6 +4584,11 @@ class StatsBot:
             entry_bps_threshold=float(pending.snapshot.get("entry_bps_threshold")),
             entry_policy_key_text=pending.policy_key_text,
             entry_snapshot=dict(pending.snapshot),
+            extra={
+                "entry_gross_cost": gross_cost,
+                "entry_fee": entry_fee,
+                "original_entry_cost": cost,
+            },
         )
         self._log_event(
             "entry_filled",
@@ -4354,6 +4598,8 @@ class StatsBot:
                 "shares": filled_shares,
                 "avg_entry_price": fill_price,
                 "cost": cost,
+                "gross_cost": gross_cost,
+                "entry_fee": entry_fee,
                 "entry_bps": self.active_position.entry_bps,
                 "entry_edge_threshold": self.active_position.entry_edge_threshold,
                 "exit_bps_threshold": self.active_position.entry_bps_threshold,
@@ -4370,6 +4616,8 @@ class StatsBot:
                 "fill_price": fill_price,
                 "filled_shares": filled_shares,
                 "entry_cost": cost,
+                "entry_gross_cost": gross_cost,
+                "entry_fee": entry_fee,
                 "entry_edge_threshold": self.active_position.entry_edge_threshold,
                 "entry_bps_threshold": self.active_position.entry_bps_threshold,
             },
@@ -4434,6 +4682,11 @@ class StatsBot:
             force=True,
         )
         self.pending_entry = None
+        # Start retry finality from the cancel acknowledgement, not the original
+        # submission. Late fills can surface immediately after cancellation.
+        if not hasattr(self, "last_entry_attempt_time_by_window"):
+            self.last_entry_attempt_time_by_window = {}
+        self.last_entry_attempt_time_by_window[pending.market_slug] = now_utc
         self._set_entry_lifecycle_state(pending.market_slug, "CANCELLED")
 
     def _manage_pending_entry(self, now_utc: datetime, snapshot: dict[str, Any] | None, decision: EntryDecision | None) -> None:
@@ -4567,7 +4820,10 @@ class StatsBot:
                 and self.active_position is None
                 and self.entry_fills_by_window.get(pending.market_slug, 0) == 0
             ):
-                self._request_entry(now_utc, snapshot, decision, ignore_retry_cooldown=True)
+                # A cancel acknowledgement can race a final fill. Respect the
+                # configured retry cooldown so user/order reconciliation can
+                # observe that fill before another order is submitted.
+                self._request_entry(now_utc, snapshot, decision)
             return
         execution_mode = str(pending.snapshot.get("entry_execution_mode") or "maker_post_only")
         if execution_mode.startswith("presigned_fast_limit"):
@@ -4746,6 +5002,9 @@ class StatsBot:
                         "hedge_fee",
                         "hedge_trigger_source",
                         "hedge_trigger_z",
+                        "entry_gross_cost",
+                        "entry_fee",
+                        "entry_total_cost",
                     ]
                 )
             writer.writerow(
@@ -4780,6 +5039,9 @@ class StatsBot:
                     f"{position.hedge_leg.fee:.6f}" if position.hedge_leg else "",
                     position.hedge_leg.trigger_source if position.hedge_leg else "",
                     f"{position.hedge_leg.trigger_z:.6f}" if position.hedge_leg else "",
+                    f"{float(position.extra.get('entry_gross_cost', position.avg_entry_price * position.exited_shares_accumulated)):.6f}",
+                    f"{float(position.extra.get('entry_fee', 0.0)):.6f}",
+                    f"{float(position.extra.get('original_entry_cost', position.avg_entry_price * position.exited_shares_accumulated)):.6f}",
                 ]
             )
         self._log_event(
@@ -5271,6 +5533,76 @@ class StatsBot:
             return ("MR_RAW_TWAP_ALIGNED_BLOCK",)
         return ()
 
+    def _mean_reversion_disabled_entry_blockers(
+        self,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision | None,
+    ) -> tuple[str, ...]:
+        if not bool(getattr(self.config, "disable_mean_reversion_entries", False)):
+            return ()
+        if decision is None or not decision.viable:
+            return ()
+        trade_style = str(decision.selected_trade_style or "").strip().lower()
+        if trade_style != "mean_reversion":
+            return ()
+        if snapshot is not None:
+            snapshot["mr_disabled_trade_style"] = trade_style
+        return ("MR_DISABLED",)
+
+    def _cheap_low_vol_entry_blockers(
+        self,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision | None,
+    ) -> tuple[str, ...]:
+        if not bool(getattr(self.config, "cheap_low_vol_guard_enabled", False)):
+            return ()
+        if snapshot is None or decision is None or not decision.viable:
+            return ()
+        selected_price = finite_float(decision.selected_ask)
+        local_vol = finite_float(snapshot.get("local_volatility_1h_bps"))
+        if selected_price is None or local_vol is None:
+            return ()
+        max_price = float(getattr(self.config, "cheap_low_vol_max_price", 0.35))
+        max_vol_bps = float(getattr(self.config, "cheap_low_vol_max_vol_bps", 20.0))
+        if selected_price <= max_price + 1e-12 and local_vol <= max_vol_bps + 1e-12:
+            snapshot["cheap_low_vol_guard_selected_price"] = selected_price
+            snapshot["cheap_low_vol_guard_local_vol_bps"] = local_vol
+            snapshot["cheap_low_vol_guard_max_price"] = max_price
+            snapshot["cheap_low_vol_guard_max_vol_bps"] = max_vol_bps
+            return ("CHEAP_LOW_VOL",)
+        return ()
+
+    def _c_weak_momentum_low_vol_entry_blockers(
+        self,
+        snapshot: dict[str, Any] | None,
+        decision: EntryDecision | None,
+    ) -> tuple[str, ...]:
+        if not bool(getattr(self.config, "c_weak_momentum_low_vol_guard_enabled", False)):
+            return ()
+        if snapshot is None or decision is None or not decision.viable:
+            return ()
+        trade_style = str(decision.selected_trade_style or "").strip().lower()
+        if trade_style != "continuation":
+            return ()
+        local_vol = finite_float(snapshot.get("local_volatility_1h_bps"))
+        if local_vol is None:
+            return ()
+        max_vol_bps = float(getattr(self.config, "c_weak_momentum_low_vol_max_vol_bps", 30.0))
+        horizon_seconds = int(getattr(self.config, "c_weak_momentum_low_vol_delta_seconds", 35))
+        max_abs_delta = float(getattr(self.config, "c_weak_momentum_low_vol_abs_delta_max", 0.05))
+        selected_delta = finite_float(snapshot.get(f"selected_raw_delta_{horizon_seconds}s"))
+        if selected_delta is None:
+            return ()
+        if local_vol <= max_vol_bps + 1e-12 and abs(selected_delta) < max_abs_delta - 1e-12:
+            snapshot["c_weak_mom_low_vol_guard_delta_seconds"] = horizon_seconds
+            snapshot["c_weak_mom_low_vol_guard_selected_delta"] = selected_delta
+            snapshot["c_weak_mom_low_vol_guard_abs_delta"] = abs(selected_delta)
+            snapshot["c_weak_mom_low_vol_guard_max_abs_delta"] = max_abs_delta
+            snapshot["c_weak_mom_low_vol_guard_local_vol_bps"] = local_vol
+            snapshot["c_weak_mom_low_vol_guard_max_vol_bps"] = max_vol_bps
+            return ("C_WEAK_MOMENTUM_LOW_VOL",)
+        return ()
+
     def _record_session_style_guard_closed_trade(
         self,
         position: OpenPosition,
@@ -5318,36 +5650,50 @@ class StatsBot:
             )
 
     def _entry_decision_with_guard(self, now_utc: datetime, snapshot: dict[str, Any] | None) -> EntryDecision | None:
+        if snapshot is not None and bool(snapshot.get("startup_window_warmup")):
+            snapshot.update(self.macro_policy.pause_guard.snapshot_fields(now_utc))
+            snapshot.update({
+                "C_required": .025,
+                "entry_rule_mr_edge": 99.0,
+                "startup_window_status": "WAITING_FOR_NEXT_5M_BOUNDARY",
+            })
+            self.last_guard_blocker = "STARTUP_WINDOW_WARMUP"
+            return EntryDecision(
+                viable=False,
+                blockers=("STARTUP_WINDOW_WARMUP",),
+                policy_key=None,
+                policy_record=None,
+                selected_side=None,
+                selected_bid=None,
+                selected_ask=None,
+                selected_mid=None,
+                selected_spread=None,
+                selected_trade_value=None,
+                selected_policy_edge=None,
+                selected_trade_style=None,
+                entry_edge_threshold=.025,
+                entry_session_enabled=False,
+                threshold_bps=0.0,
+            )
         decision = self.macro_policy.evaluate(snapshot, start_block_seconds=self.config.entry_start_block_seconds)
         self.last_guard_blocker = None
-        if getattr(self, "peak_drawdown_kill_active", False):
-            self.last_guard_blocker = "PEAK_DRAWDOWN_KILL"
-            decision = self._entry_decision_with_blockers(decision, ("PEAK_DRAWDOWN_KILL",))
-        bps_yes_guard_enabled = bool(getattr(self.config, "bps_yes_guard_enabled", True))
-        if bps_yes_guard_enabled:
-            active, reason = self.guard.update_entry_guard(now_utc=now_utc, snapshot=snapshot)
-            if active and reason:
-                self.last_guard_blocker = reason
-                decision = self._entry_decision_with_blockers(decision, (reason,))
-        liquidity_regime_blockers = tuple(
-            dict.fromkeys(
-                [
-                    *self._low_liquidity_no_signal_entry_blockers(snapshot, decision),
-                    *self._ultra_low_vol_entry_blockers(snapshot, decision),
-                    *self._twap_lag_cheap_cont_entry_blockers(snapshot, decision),
-                    *self._mr_raw_twap_aligned_entry_blockers(snapshot, decision),
-                ]
-            )
-        )
-        if liquidity_regime_blockers:
-            self.last_guard_blocker = liquidity_regime_blockers[0]
-            decision = self._entry_decision_with_blockers(decision, liquidity_regime_blockers)
-        session_style_blockers, effective_entry_edge = self._session_style_entry_blockers(now_utc, snapshot, decision)
-        if decision is not None and effective_entry_edge is not None:
-            decision = self._entry_decision_with_entry_threshold(decision, effective_entry_edge)
-        if session_style_blockers:
-            self.last_guard_blocker = session_style_blockers[0]
-            decision = self._entry_decision_with_blockers(decision, session_style_blockers)
+        if decision is not None and "P15_PAUSE" in decision.blockers:
+            self.last_guard_blocker = "P15_PAUSE"
+            if snapshot is not None:
+                intended = self._ladder_stake_decision() if self.config.stake_mode == "ladder_shares" else None
+                snapshot["p15_counterfactual_intended_ladder_shares"] = (
+                    intended.target_shares if intended is not None else None
+                )
+                snapshot["p15_counterfactual_model_state"] = {
+                    "side": decision.selected_side,
+                    "twap_dz": snapshot.get("TWAP_DZ"),
+                    "p_base_raw": snapshot.get("p_base_raw"),
+                    "p_base_iso": snapshot.get("p_base_iso"),
+                    "bps_branch": snapshot.get("bps_branch"),
+                    "p_final": snapshot.get("p_final"),
+                    "model_edge": snapshot.get("model_edge"),
+                    "c_required": .025,
+                }
         return decision
 
     def _update_peak_drawdown_kill(self, now_utc: datetime) -> None:
@@ -5491,6 +5837,32 @@ class StatsBot:
             if raw_dz is not None and twap_dz is not None:
                 return f"MR_RAW_TWAP_ALIGNED_BLOCK (spot_z {raw_dz:+.3f}, twap_z {twap_dz:+.3f})"
             return "MR_RAW_TWAP_ALIGNED_BLOCK"
+        if blocker == "MR_DISABLED":
+            return "MR_DISABLED"
+        if blocker == "CHEAP_LOW_VOL":
+            if snapshot is None:
+                return "CHEAP_LOW_VOL"
+            price = finite_float(snapshot.get("cheap_low_vol_guard_selected_price"))
+            vol = finite_float(snapshot.get("cheap_low_vol_guard_local_vol_bps"))
+            max_price = finite_float(snapshot.get("cheap_low_vol_guard_max_price"))
+            max_vol = finite_float(snapshot.get("cheap_low_vol_guard_max_vol_bps"))
+            if None not in (price, vol, max_price, max_vol):
+                return f"CHEAP_LOW_VOL (price {price:.2f}<={max_price:.2f}, vol {vol:.1f}<={max_vol:.1f})"
+            return "CHEAP_LOW_VOL"
+        if blocker == "C_WEAK_MOMENTUM_LOW_VOL":
+            if snapshot is None:
+                return "C_WEAK_MOMENTUM_LOW_VOL"
+            delta_seconds = snapshot.get("c_weak_mom_low_vol_guard_delta_seconds")
+            delta = finite_float(snapshot.get("c_weak_mom_low_vol_guard_selected_delta"))
+            max_abs_delta = finite_float(snapshot.get("c_weak_mom_low_vol_guard_max_abs_delta"))
+            vol = finite_float(snapshot.get("c_weak_mom_low_vol_guard_local_vol_bps"))
+            max_vol = finite_float(snapshot.get("c_weak_mom_low_vol_guard_max_vol_bps"))
+            if None not in (delta, max_abs_delta, vol, max_vol):
+                return (
+                    "C_WEAK_MOMENTUM_LOW_VOL "
+                    f"(d{delta_seconds}s {delta:+.3f}, |d|<{max_abs_delta:.3f}, vol {vol:.1f}<={max_vol:.1f})"
+                )
+            return "C_WEAK_MOMENTUM_LOW_VOL"
         return blocker
 
     def _format_entry_blockers(
@@ -5509,6 +5881,8 @@ class StatsBot:
         self.last_cadence_second_written = second
         pressure_detail = self.last_pressure_defence if self.active_position is not None else {}
         twap_diag = self._chainlink_twap_diagnostics(now_utc, snapshot)
+        coinbase_rows = self.coinbase.history_rows()
+        latest_coinbase_bar = coinbase_rows[-1] if coinbase_rows else {}
         write_header = not self.cadence_log_path.exists() or self.cadence_log_path.stat().st_size == 0
         with self.cadence_log_path.open("a", newline="", encoding="utf-8") as handle:
             writer = csv.writer(handle)
@@ -5594,8 +5968,20 @@ class StatsBot:
                         "raw_move_dz",
                         "up_raw_move_dz",
                         "down_raw_move_dz",
+                        "raw_delta_15s",
+                        "raw_delta_35s",
+                        "raw_delta_40s",
+                        "up_raw_delta_15s",
+                        "up_raw_delta_35s",
+                        "up_raw_delta_40s",
+                        "down_raw_delta_15s",
+                        "down_raw_delta_35s",
+                        "down_raw_delta_40s",
                         "selected_raw_move_dz",
                         "selected_raw_minus_twap_move_dz",
+                        "selected_raw_delta_15s",
+                        "selected_raw_delta_35s",
+                        "selected_raw_delta_40s",
                         "distance_z_delta_2s",
                         "up_side_dz_delta_2s",
                         "down_side_dz_delta_2s",
@@ -5610,6 +5996,15 @@ class StatsBot:
                         "policy_support",
                         "policy_unique_markets",
                         "policy_level",
+                        "entry_rule_name",
+                        "entry_rule_source_family",
+                        "entry_rule_score",
+                        "entry_rule_vol_score",
+                        "entry_rule_momentum_score",
+                        "entry_rule_c_edge",
+                        "entry_rule_mr_edge",
+                        "entry_rule_momentum_feature",
+                        "entry_rule_momentum_value",
                         "entry_blockers",
                         "bps_yes_guard_blocker",
                         "session_style_guard_key",
@@ -5650,6 +6045,33 @@ class StatsBot:
                         "wallet_balance_live",
                         "realized_pnl",
                         "window_errors",
+                        "strategy_version",
+                        "p_base_raw_frozen",
+                        "p_base_iso_frozen",
+                        "p_final_up",
+                        "p_final_down",
+                        "selected_p_final",
+                        "BPS15",
+                        "BPS60",
+                        "BPS_ACCEL_5_15",
+                        "BPS15_available",
+                        "BPS60_available",
+                        "BPS_ACCEL_5_15_available",
+                        "BPS_branch",
+                        "model_edge_frozen",
+                        "C_required_frozen",
+                        "detector_value_frozen",
+                        "detector_state_frozen",
+                        "detector_armed_frozen",
+                        "detector_recovery_progress",
+                        "detector_last_transition_frozen",
+                        "detector_last_transition_at_utc",
+                        "P15_active",
+                        "P15_pause_start_utc",
+                        "P15_pause_end_utc",
+                        "P15_counterfactual_count",
+                        "BPS_source_bar_utc",
+                        "BPS_source_close_1s",
                     ]
                 )
             writer.writerow(
@@ -5733,8 +6155,20 @@ class StatsBot:
                     _fmt(snapshot.get("raw_move_dz"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("up_raw_move_dz"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("down_raw_move_dz"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("raw_delta_15s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("raw_delta_35s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("raw_delta_40s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("up_raw_delta_15s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("up_raw_delta_35s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("up_raw_delta_40s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("down_raw_delta_15s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("down_raw_delta_35s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("down_raw_delta_40s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("selected_raw_move_dz"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("selected_raw_minus_twap_move_dz"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("selected_raw_delta_15s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("selected_raw_delta_35s"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("selected_raw_delta_40s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("distance_z_delta_2s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("up_side_dz_delta_2s"), 6, "") if snapshot else "",
                     _fmt(snapshot.get("down_side_dz_delta_2s"), 6, "") if snapshot else "",
@@ -5749,6 +6183,15 @@ class StatsBot:
                     snapshot.get("policy_support", "") if snapshot else "",
                     snapshot.get("policy_unique_markets", "") if snapshot else "",
                     snapshot.get("policy_level", "") if snapshot else "",
+                    snapshot.get("entry_rule_name", "") if snapshot else "",
+                    snapshot.get("entry_rule_source_family", "") if snapshot else "",
+                    _fmt(snapshot.get("entry_rule_score"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("entry_rule_vol_score"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("entry_rule_momentum_score"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("entry_rule_c_edge"), 6, "") if snapshot else "",
+                    _fmt(snapshot.get("entry_rule_mr_edge"), 6, "") if snapshot else "",
+                    snapshot.get("entry_rule_momentum_feature", "") if snapshot else "",
+                    _fmt(snapshot.get("entry_rule_momentum_value"), 6, "") if snapshot else "",
                     "|".join(decision.blockers) if decision else "",
                     self.last_guard_blocker or "",
                     snapshot.get("session_style_guard_key", "") if snapshot else "",
@@ -5793,10 +6236,249 @@ class StatsBot:
                     f"{self.wallet_balance_live:.6f}" if self.wallet_balance_live is not None else "",
                     f"{self.realized_pnl:.6f}",
                     " || ".join(self.window_errors),
+                    getattr(self.macro_policy, "strategy_id", ""),
+                    _fmt(snapshot.get("p_base_raw"), 9, "") if snapshot else "",
+                    _fmt(snapshot.get("p_base_iso"), 9, "") if snapshot else "",
+                    _fmt(snapshot.get("up_p_final"), 9, "") if snapshot else "",
+                    _fmt(snapshot.get("down_p_final"), 9, "") if snapshot else "",
+                    _fmt(snapshot.get("p_final"), 9, "") if snapshot else "",
+                    _fmt(snapshot.get("BPS_15"), 9, "") if snapshot else "",
+                    _fmt(snapshot.get("BPS_60"), 9, "") if snapshot else "",
+                    _fmt(snapshot.get("BPS_ACCEL_5_15"), 9, "") if snapshot else "",
+                    int(bool(snapshot.get("BPS_15__available"))) if snapshot else "",
+                    int(bool(snapshot.get("BPS_60__available"))) if snapshot else "",
+                    int(bool(snapshot.get("BPS_ACCEL_5_15__available"))) if snapshot else "",
+                    snapshot.get("bps_branch", "") if snapshot else "",
+                    _fmt(snapshot.get("model_edge"), 9, "") if snapshot else "",
+                    _fmt(snapshot.get("C_required"), 9, "") if snapshot else "",
+                    _fmt(snapshot.get("detector_value"), 9, "") if snapshot else "",
+                    snapshot.get("detector_state", "") if snapshot else "",
+                    int(bool(snapshot.get("detector_armed"))) if snapshot else "",
+                    (
+                        f"{snapshot.get('detector_recovery_hits', 0)}/"
+                        f"{snapshot.get('detector_recovery_required', 3)}"
+                        if snapshot else ""
+                    ),
+                    snapshot.get("detector_last_transition", "") if snapshot else "",
+                    _iso(snapshot.get("detector_last_transition_at_utc")) if snapshot else "",
+                    int(bool(snapshot.get("p15_pause_active"))) if snapshot else "",
+                    (
+                        _iso(snapshot.get("p15_pause_until_utc") - timedelta(minutes=15))
+                        if snapshot and isinstance(snapshot.get("p15_pause_until_utc"), datetime)
+                        else ""
+                    ),
+                    _iso(snapshot.get("p15_pause_until_utc")) if snapshot else "",
+                    snapshot.get("p15_counterfactual_blocked_opportunities", "") if snapshot else "",
+                    _iso(latest_coinbase_bar.get("timestamp_utc")),
+                    _fmt(latest_coinbase_bar.get("close_1s"), 9, ""),
                 ]
             )
 
     def _dashboard(self, now_utc: datetime, snapshot: dict[str, Any] | None, decision: EntryDecision | None, exit_decision: ExitDecision | None) -> None:
+        del exit_decision
+        if self.last_dashboard_at is not None:
+            if (now_utc - self.last_dashboard_at).total_seconds() < self.config.status_interval_seconds:
+                return
+        self.last_dashboard_at = now_utc
+        self._refresh_wallet_balance()
+        mode = "paper" if self.config.paper_trading else "live"
+        market = self.current_market
+        stake = self._ladder_stake_decision() if self.config.stake_mode == "ladder_shares" else None
+        pending = self.pending_entry
+        balance = self.balance if self.config.paper_trading or self.wallet_balance_live is None else self.wallet_balance_live
+
+        def row(label: str, value: object) -> str:
+            return f"    {label:<18}: {value}"
+
+        def cents(value: object) -> str:
+            number = finite_float(value)
+            return "NA" if number is None else f"{number * 100.0:.3f}c"
+
+        lines = [LINE2, "  STATS BOT"]
+        lines.append(row("mode", mode))
+        lines.append(row("execution_mode", self.config.execution_mode))
+        lines.append(row("strategy", f"{self.macro_policy.strategy_id} (frozen {self.macro_policy.training_end})"))
+        lines.append(row("stake_mode", self.config.stake_mode))
+        if stake is not None:
+            stake_reason = f" ({stake.reason})" if stake.reason else ""
+            lines.append(row("target_shares", f"{stake.target_shares:.0f}{stake_reason}"))
+        if self.config.paper_trading:
+            lines.append(row("paper_balance", f"${balance:.2f}"))
+        else:
+            cash_wallet = finite_float(self.wallet_balance_live)
+            strategy_equity = finite_float(self.balance)
+            claimable_estimate = (
+                max(0.0, strategy_equity - cash_wallet)
+                if cash_wallet is not None and strategy_equity is not None
+                else None
+            )
+            lines.append(row("cash_wallet", "NA" if cash_wallet is None else f"${cash_wallet:.2f}"))
+            lines.append(row("claimable_est", "NA" if claimable_estimate is None else f"${claimable_estimate:.2f}"))
+            lines.append(row("account_equity_est", "NA" if strategy_equity is None else f"${strategy_equity:.2f}"))
+            lines.append(row(
+                "cash/equity_delta",
+                "NA" if cash_wallet is None or strategy_equity is None else f"{cash_wallet - strategy_equity:+.2f}",
+            ))
+        if self.config.paper_trading:
+            wallet_delta = float(self.balance) - float(self.config.starting_balance)
+        elif self.wallet_balance_live is not None and self.wallet_balance_start_live is not None:
+            wallet_delta = float(self.wallet_balance_live) - float(self.wallet_balance_start_live)
+        else:
+            wallet_delta = None
+        if wallet_delta is not None:
+            lines.append(row("wallet_delta", f"{wallet_delta:+.2f}"))
+        lines.append(row("strategy_rPnL", f"{self.realized_pnl:+.2f}"))
+        lines.append(row("wins/losses", f"{self.total_wins}/{self.total_losses}"))
+
+        lines.append("")
+        lines.append("  MARKET")
+        if market is None:
+            lines.append(row("status", "WAITING"))
+        else:
+            tte = finite_float((snapshot or {}).get("canonical_tte_seconds"))
+            lines.append(row("slug", market.slug))
+            lines.append(row("question", market.question[:92]))
+            lines.append(row("tte_seconds", _fmt(tte, 1)))
+            lines.append(row("tick_size", f"{market.tick_size:g}"))
+        if snapshot is None:
+            wait = "market" if market is None else "btc/pm/local-vol snapshot"
+            lines.append(row("waiting_for", wait))
+        else:
+            lines.append(row("UP", f"bid={_fmt(snapshot.get('up_bid'))} ask={_fmt(snapshot.get('up_ask'))} "
+                             f"mid={_fmt(snapshot.get('up_mid'))} spread={_fmt(snapshot.get('up_spread'))}"))
+            lines.append(row("DOWN", f"bid={_fmt(snapshot.get('down_bid'))} ask={_fmt(snapshot.get('down_ask'))} "
+                             f"mid={_fmt(snapshot.get('down_mid'))} spread={_fmt(snapshot.get('down_spread'))}"))
+
+        if snapshot is not None:
+            blockers = ",".join(decision.blockers) if decision and decision.blockers else "none"
+            selected_side = str((decision.selected_side if decision else None) or "NA")
+            selected_prefix = selected_side.lower()
+            selected_bid = snapshot.get(f"{selected_prefix}_bid") if selected_prefix in {"up", "down"} else None
+            selected_ask = snapshot.get(f"{selected_prefix}_ask") if selected_prefix in {"up", "down"} else None
+            selected_bps = lambda name: snapshot.get(f"{selected_prefix}_{name}") if selected_prefix in {"up", "down"} else None
+            lines.append("")
+            lines.append("  PROBABILITY MODEL")
+            lines.extend([
+                row("fit", "frozen Aug14-Sep14"),
+                row("startup_status", snapshot.get("startup_window_status") or "ACTIVE"),
+                row("selected_side", selected_side),
+                row("selected_bid/ask", f"{_fmt(selected_bid)} / {_fmt(selected_ask)}"),
+                row("TWAP_DZ / VOL_1H", f"{_fmt(snapshot.get('TWAP_DZ'), 4)} / "
+                    f"{_fmt(snapshot.get('local_volatility_1h_bps'), 2)}bps"),
+                row("TWAP_DZ UP/DOWN", f"{_fmt(snapshot.get('up_TWAP_DZ'), 4)} / "
+                    f"{_fmt(snapshot.get('down_TWAP_DZ'), 4)}"),
+                row("UP raw/iso/final", f"{_fmt(snapshot.get('up_p_base_raw'), 5)} / "
+                    f"{_fmt(snapshot.get('up_p_base_iso'), 5)} / {_fmt(snapshot.get('up_p_final'), 5)}"),
+                row("UP edge/style", f"{cents(snapshot.get('up_model_edge'))} / "
+                    f"{snapshot.get('up_diagnostic_style') or 'NA'}"),
+                row("DOWN raw/iso/final", f"{_fmt(snapshot.get('down_p_base_raw'), 5)} / "
+                    f"{_fmt(snapshot.get('down_p_base_iso'), 5)} / {_fmt(snapshot.get('down_p_final'), 5)}"),
+                row("DOWN edge/style", f"{cents(snapshot.get('down_model_edge'))} / "
+                    f"{snapshot.get('down_diagnostic_style') or 'NA'}"),
+                row("p_base_raw", _fmt(snapshot.get("p_base_raw"), 6)),
+                row("p_base_iso", _fmt(snapshot.get("p_base_iso"), 6)),
+                row("p_final", _fmt(snapshot.get("p_final"), 6)),
+                row("model_edge", cents(snapshot.get("model_edge"))),
+                row("C_required", "2.500c (fixed)"),
+                row("eligibility", "ELIGIBLE" if decision and decision.viable else "BLOCKED"),
+                row("blockers", blockers if decision else "NO_DECISION"),
+            ])
+
+            lines.append("")
+            lines.append("  BPS PATH")
+            lines.append(row("selected 15/60/A", f"{_fmt(selected_bps('BPS_15'), 3)} / "
+                             f"{_fmt(selected_bps('BPS_60'), 3)} / {_fmt(selected_bps('BPS_ACCEL_5_15'), 3)}"))
+            lines.append(row("UP 15/60/A", f"{_fmt(snapshot.get('up_BPS_15'), 3)} / "
+                             f"{_fmt(snapshot.get('up_BPS_60'), 3)} / {_fmt(snapshot.get('up_BPS_ACCEL_5_15'), 3)}"))
+            lines.append(row("DOWN 15/60/A", f"{_fmt(snapshot.get('down_BPS_15'), 3)} / "
+                             f"{_fmt(snapshot.get('down_BPS_60'), 3)} / {_fmt(snapshot.get('down_BPS_ACCEL_5_15'), 3)}"))
+            lines.append(row("branch", str(snapshot.get("bps_branch") or "BASE_ONLY")))
+            lines.append(row("BPS source", "Coinbase spot 1s path"))
+            lines.append(row("signed_bps spot", self._dashboard_spot_signed_bps_text(snapshot)))
+
+            lines.append("")
+            lines.append("  P15 DETECTOR")
+            lines.append(row("status/value", f"{str(snapshot.get('detector_status') or 'WARMING')} / "
+                             f"{_fmt(snapshot.get('detector_value'), 5)}"))
+            lines.append(row("Q20 / Q30", f"{_fmt(snapshot.get('detector_q20'), 5)} / "
+                             f"{_fmt(snapshot.get('detector_q30'), 5)}"))
+            lines.append(row("armed/recovery", f"{bool(snapshot.get('detector_armed'))} / "
+                             f"{snapshot.get('detector_recovery_hits', 0)}/{snapshot.get('detector_recovery_required', 3)}"))
+            transition = snapshot.get("detector_last_transition") or "none"
+            transition_at = snapshot.get("detector_last_transition_at_utc")
+            if transition_at:
+                transition = f"{transition} @ {_iso(transition_at)}"
+            lines.append(row("last_transition", transition))
+            lines.append(row("P15_pause", f"{'ACTIVE' if snapshot.get('p15_pause_active') else 'off'} "
+                             f"({_fmt(snapshot.get('p15_pause_remaining_seconds'), 0)}s remaining)"))
+            lines.append(row("blocked_counterf.", snapshot.get("p15_counterfactual_blocked_opportunities", 0)))
+
+        submission_fills, submission_attempts = _submission_fill_attempt_counts(
+            self.entry_fills_by_window, self.entry_attempts_by_window
+        )
+        execution_health = _execution_health_text(
+            self.recent_client_pipeline_ms,
+            self.recent_clob_ack_ms,
+            self.recent_decision_to_response_ms,
+        )
+        execution_status = _execution_health_status(self.recent_clob_ack_ms)
+        submission_state = self._entry_lifecycle_state(market.slug) if market else "NONE"
+        lines.append("")
+        lines.append("  EXECUTION")
+        lines.append(row("fills/attempts", f"{submission_fills} / {submission_attempts}"))
+        lines.append(row("execution_health", execution_status))
+        lines.append(row("latency", execution_health))
+        lines.append(row("submission_state", submission_state))
+        lines.append(row("worker_state", self._entry_submission_state))
+        presign_text = self._presign_dashboard_text(now_utc)
+        lines.append(row("presign", presign_text or "not active"))
+        lines.append(row("order_path", "pre-signed GTC fast limit; post-only maker fallback"))
+        lines.append(row("health_effect", "execution tolerance only; C remains 2.500c"))
+
+        if self._entry_submission is not None:
+            submission_age = max(0.0, (now_utc - self._entry_submission.submitted_at_utc).total_seconds())
+            lines.append(row("submitting", f"{self._entry_submission.policy_side} "
+                             f"attempt={self._entry_submission.attempt_count} age={submission_age:.2f}s"))
+        if pending is not None:
+            age = max(0.0, (now_utc - pending.created_at_utc).total_seconds())
+            lines.append(row("pending_order", pending.order_id))
+            lines.append(row("pending_side", f"{pending.policy_side} {pending.target_shares:.4f} @ "
+                             f"{pending.price:.4f} ({age:.1f}s)"))
+        else:
+            lines.append(row("pending_order", "none"))
+
+        if self.active_position is not None:
+            position = self.active_position
+            current_bid = snapshot.get(f"{position.held_side.lower()}_bid") if snapshot else None
+            unrealized = None
+            if finite_float(current_bid) is not None:
+                unrealized = (float(current_bid) - position.avg_entry_price) * position.shares
+            hold_seconds = max(0.0, (now_utc - position.entry_time_utc).total_seconds())
+            lines.append("")
+            lines.append("  POSITION")
+            lines.append(row("side/shares", f"{position.held_side} / {position.shares:.4f}"))
+            lines.append(row("entry/current", f"{position.avg_entry_price:.4f} / {_fmt(current_bid)}"))
+            lines.append(row("unrealized_pnl", _fmt(unrealized, 4)))
+            lines.append(row("hold_seconds", f"{hold_seconds:.1f}"))
+            lines.append(row("exit_mode", "hold_to_resolution"))
+
+        lines.append("")
+        lines.append("  HEALTH")
+        lines.append(row("feed", "OK" if snapshot is not None else "WAITING"))
+        lines.append(row("market", "OK" if market else "WAITING"))
+        lines.append(row("errors", len(self.window_errors)))
+        if self.settling_positions:
+            lines.append(row("settling", f"{len(self.settling_positions)} position(s)"))
+        if self.recent_events:
+            last = self.recent_events[-1]
+            lines.append(row("recent_event", f"{last.event_type} | {last.message}"))
+        if self.window_errors:
+            lines.append(row("error_detail", " || ".join(self.window_errors)))
+        lines.append(LINE2)
+        for line in lines:
+            log.info(line)
+
+    def _legacy_dashboard(self, now_utc: datetime, snapshot: dict[str, Any] | None, decision: EntryDecision | None, exit_decision: ExitDecision | None) -> None:
         if self.last_dashboard_at is not None:
             if (now_utc - self.last_dashboard_at).total_seconds() < self.config.status_interval_seconds:
                 return
@@ -5925,6 +6607,7 @@ class StatsBot:
                     "vol_p25_p75_three_zone": "vol",
                     "vol_high_lower1": "vol",
                     "style_bounded_monotonic_surface": "field",
+                    "style_bounded_vol_momentum_surface": "vol/mom",
                     "day_group_time_vol_q4": "vol",
                     "day_group_time_contradiction_vol_q4": "118",
                     "day_group_time_contradiction": "30",
@@ -5966,6 +6649,23 @@ class StatsBot:
                 f"{int(min_tte)}-{int(max_tte)}s"
             )
             lines.append(f"    active_edge       : {_active_edge_text()}")
+            field_score = finite_float(snapshot.get("entry_rule_score"))
+            if field_score is not None and str(snapshot.get("entry_rule_source_family") or "") == "style_bounded_vol_momentum_surface":
+                c_edge = finite_float(snapshot.get("entry_rule_c_edge"))
+                mr_edge = finite_float(snapshot.get("entry_rule_mr_edge"))
+                vol_score = finite_float(snapshot.get("entry_rule_vol_score"))
+                mom_score = finite_float(snapshot.get("entry_rule_momentum_score"))
+                mom_feature = str(snapshot.get("entry_rule_momentum_feature") or "mom")
+                mom_value = finite_float(snapshot.get("entry_rule_momentum_value"))
+                lines.append(
+                    f"    edge_field        : C {_fmt(c_edge * 100.0 if c_edge is not None else None, 2)}c | "
+                    f"MR {_fmt(mr_edge * 100.0 if mr_edge is not None else None, 2)}c | "
+                    f"score {_fmt(field_score, 3)}"
+                )
+                lines.append(
+                    f"    field_inputs      : vol {_fmt(vol_score, 3)} | "
+                    f"{mom_feature} {_fmt(mom_value, 3)} -> {_fmt(mom_score, 3)}"
+                )
             if bool(snapshot.get("session_style_guard_active")):
                 session = str(snapshot.get("session_style_guard_session") or "session")
                 style = str(snapshot.get("session_style_guard_style") or "style")
@@ -6040,6 +6740,13 @@ class StatsBot:
                 selected_momentum = snapshot.get("selected_side_dz_delta_2s")
                 if selected_momentum is not None:
                     lines.append(f"    {'selected_dz_mom_2s':<18}: {_fmt(selected_momentum, 3)}")
+            if decision is not None and decision.selected_side:
+                lines.append(
+                    f"    {'raw_delta 15/35/40':<18}: "
+                    f"{_fmt(snapshot.get('selected_raw_delta_15s'), 3)} / "
+                    f"{_fmt(snapshot.get('selected_raw_delta_35s'), 3)} / "
+                    f"{_fmt(snapshot.get('selected_raw_delta_40s'), 3)}"
+                )
             if continuous_signal and decision is not None and decision.selected_side:
                 side_prefix = decision.selected_side.lower()
                 selected_bid = snapshot.get(f"{side_prefix}_bid")
@@ -6206,10 +6913,10 @@ class StatsBot:
 
     def run(self) -> None:
         log.info(LINE)
-        log.info("  STATS BOT — BTC 5-minute macro/local value strategy")
+        log.info("  STATS BOT — frozen BTC 5-minute TWAP_DZ strategy")
         log.info(f"  mode        : {'paper' if self.config.paper_trading else 'live'}")
         log.info(f"  execution   : {self.config.execution_mode}")
-        log.info(f"  kill switch : ${self.config.peak_drawdown_kill_usd:g} drawdown from peak realised session equity")
+        log.info("  strategy controls : fixed C2.50c; MR off; P15 transition pause only")
         if self.config.stake_mode == "min_order_size":
             log.info(f"  stake mode  : flat_shares ({self.config.min_order_size_fallback:g} share fallback)")
         elif self.config.stake_mode == "dynamic_shares":
@@ -6222,7 +6929,9 @@ class StatsBot:
             f"  strategy    : {self.macro_policy.strategy_id} trained "
             f"{self.macro_policy.training_start}..{self.macro_policy.training_end}"
         )
-        if getattr(self.macro_policy, "policy_type", "") == "continuous_surface":
+        if getattr(self.macro_policy, "policy_type", "") == "frozen_twap_dz_probability_stack":
+            log.info(f"  model       : {self.config.macro_policy_bundle} (frozen deployable artifact)")
+        elif getattr(self.macro_policy, "policy_type", "") == "continuous_surface":
             log.info(
                 f"  model       : {self.config.macro_policy_bundle} "
                 f"({len(self.macro_policy):,} continuous surface)"
@@ -6231,8 +6940,30 @@ class StatsBot:
             log.info(f"  policy      : {self.config.macro_policy_bundle} ({len(self.macro_policy):,} hierarchical rows)")
         dynamic_selector = getattr(self.macro_policy, "dynamic_edge_selector", None)
         timed_edges = getattr(self.macro_policy, "timed_entry_overrides", [])
-        if dynamic_selector is not None:
-            if getattr(dynamic_selector, "source_family", "") == "style_bounded_monotonic_surface":
+        if getattr(self.macro_policy, "policy_type", "") == "frozen_twap_dz_probability_stack":
+            log.info("  entry edges : continuation=0.025 fixed; mean_reversion=OFF")
+        elif dynamic_selector is not None:
+            if getattr(dynamic_selector, "source_family", "") == "style_bounded_vol_momentum_surface":
+                log.info(
+                    "  entry edges : style-aware vol/momentum field (%s; C %.2f-%.2fc %s v%.1f-%.1f w%.1f/%.1f; "
+                    "MR %.2f-%.2fc %s v%.1f-%.1f w%.1f/%.1f)",
+                    self.macro_policy.strategy_id,
+                    float(getattr(dynamic_selector, "c_edge_min", 0.0)) * 100.0,
+                    float(getattr(dynamic_selector, "c_edge_max", 0.0)) * 100.0,
+                    str(getattr(dynamic_selector, "c_momentum_feature", "")),
+                    float(getattr(dynamic_selector, "c_vol_low_bps", 0.0)),
+                    float(getattr(dynamic_selector, "c_vol_high_bps", 0.0)),
+                    float(getattr(dynamic_selector, "c_vol_weight", 0.0)),
+                    float(getattr(dynamic_selector, "c_momentum_weight", 0.0)),
+                    float(getattr(dynamic_selector, "mr_edge_min", 0.0)) * 100.0,
+                    float(getattr(dynamic_selector, "mr_edge_max", 0.0)) * 100.0,
+                    str(getattr(dynamic_selector, "mr_momentum_feature", "")),
+                    float(getattr(dynamic_selector, "mr_vol_low_bps", 0.0)),
+                    float(getattr(dynamic_selector, "mr_vol_high_bps", 0.0)),
+                    float(getattr(dynamic_selector, "mr_vol_weight", 0.0)),
+                    float(getattr(dynamic_selector, "mr_momentum_weight", 0.0)),
+                )
+            elif getattr(dynamic_selector, "source_family", "") == "style_bounded_monotonic_surface":
                 log.info(
                     "  entry edges : style-aware price/vol field (%s; C %.2f-%.2fc, MR %.2f-%.2fc, vol %.2f-%.2fbps)",
                     self.macro_policy.strategy_id,
@@ -6273,7 +7004,9 @@ class StatsBot:
             )
         log.info(f"  exit mode   : {self.config.exit_policy_mode}")
         session_names = "/".join(dict.fromkeys(self.macro_policy.session_display_names.values()))
-        if getattr(self.macro_policy, "policy_type", "") == "continuous_surface":
+        if getattr(self.macro_policy, "policy_type", "") == "frozen_twap_dz_probability_stack":
+            log.info("  signal      : TWAP_DZ/VOL_1H + BPS hierarchy; P15 detector uses fixed historical Q20/Q30")
+        elif getattr(self.macro_policy, "policy_type", "") == "continuous_surface":
             log.info(
                 f"  signal      : {self.macro_policy.signal_feature}; causal 1h Coinbase local RV; "
                 f"{session_names} London display context"
@@ -6284,11 +7017,8 @@ class StatsBot:
                 f"{session_names} London calibration segments"
             )
         log.info(
-            "  entry       : pre-signed GTC fast limit when ready "
-            f"(ask+{PRESIGN_ENTRY_TOLERANCE_TICKS} tick, residual-edge guarded; "
-            f"+{int(round(DEGRADED_ENTRY_EDGE_BUMP * 100))}c/"
-            f"+{int(round(POOR_ENTRY_EDGE_BUMP * 100))}c edge in Degraded/Poor health); "
-            "fallback post-only maker @ best_ask-1tick"
+            "  entry       : existing pre-signed GTC fast-limit path; fixed C2.50c; "
+            "configured post-only maker fallback unchanged"
         )
         if not self.config.paper_trading:
             log.info(
@@ -6305,10 +7035,7 @@ class StatsBot:
         bps_yes_guard_enabled = bool(getattr(self.config, "bps_yes_guard_enabled", True))
         if self.config.exit_policy_mode == "hold_to_resolution":
             log.info("  exit        : hold to resolution; all live tactical/guard sells disabled")
-            if bps_yes_guard_enabled:
-                log.info("  guard       : BPS_YES_GUARD entry blocking")
-            else:
-                log.info("  guard       : BPS_YES_GUARD disabled")
+            log.info("  guard       : P15 NORMAL->BAD transition pause only; legacy guards disabled")
         else:
             log.info("  exit        : FOK SELL first; if it fails, repeated FAK SELL until shares are nil excluding dust")
             if bps_yes_guard_enabled:
@@ -6339,7 +7066,7 @@ class StatsBot:
                 window_ts = self._window_ts(now_ts)
                 if self.current_window_ts != window_ts:
                     self._on_new_window(now_utc, window_ts)
-                if self.window_open_btc_price is None:
+                if self.window_open_btc_price is None and self.current_window_ts != self.startup_window_ts:
                     self.window_open_btc_price = self.coinbase.window_open_price(window_ts)
                 self._capture_pm_snapshot(now_utc)
                 self._poll_settling_positions(now_utc)
@@ -6374,6 +7101,21 @@ class StatsBot:
                 if decision is not None:
                     self._log_viable_decision(decision_at_utc, decision)
                 self._record_decision_journal(decision_at_utc, snapshot, decision)
+                if snapshot is not None and bool(snapshot.get("p15_counterfactual_opportunity")):
+                    self._record_decision_journal(
+                        decision_at_utc,
+                        snapshot,
+                        decision,
+                        event_type="p15_counterfactual_block",
+                        extra={
+                            "would_submit_without_p15": 1,
+                            "counterfactual_intended_ladder_shares": snapshot.get(
+                                "p15_counterfactual_intended_ladder_shares"
+                            ),
+                            "counterfactual_model_state": snapshot.get("p15_counterfactual_model_state"),
+                        },
+                        force=True,
+                    )
                 self._manage_pending_entry(now_utc, snapshot, raw_decision)
                 if (
                     not self.config.paper_trading
@@ -6387,9 +7129,6 @@ class StatsBot:
                 exit_decision = None
                 force_exit_reason = None
                 if self.active_position is not None and snapshot is not None:
-                    self._maybe_execute_move_dz_stoploss(now_utc, snapshot)
-                    if self.active_position is not None:
-                        self._maybe_execute_pressure_defence(now_utc, snapshot)
                     if self.active_position is not None and self.config.exit_policy_mode == "hold_to_resolution":
                         exit_decision = self._hold_to_resolution_exit_decision(snapshot)
                     elif self.active_position is not None:

@@ -657,3 +657,213 @@ class CappedLinearPriceBucketSurfaceModel(PriceBucketSurfaceModel):
         if not self.bucket_models:
             raise RuntimeError("No price buckets had enough support to train.")
         return self
+
+
+class SmoothedSlopePriceBucketSurfaceModel(PriceBucketSurfaceModel):
+    """Capped linear price-bucket model with smoothed per-bucket z slopes."""
+
+    def __init__(
+        self,
+        *,
+        model_kind: str,
+        side_mode: str,
+        c_value: float,
+        price_bucket_scheme: str = "asymmetric",
+        momentum_feature: str = "side_dz_delta_2s",
+        price_bucket_min_rows: int = 5000,
+        price_bucket_min_class: int = 100,
+        stagea_time_scheme: str = "current",
+        alpha: float = 1.0,
+        smooth_lambda: float = 10000.0,
+    ) -> None:
+        super().__init__(
+            model_kind=model_kind,
+            side_mode=side_mode,
+            c_value=c_value,
+            price_bucket_scheme=price_bucket_scheme,
+            momentum_feature=momentum_feature,
+            price_bucket_min_rows=price_bucket_min_rows,
+            price_bucket_min_class=price_bucket_min_class,
+            stagea_time_scheme=stagea_time_scheme,
+        )
+        self.alpha = float(alpha)
+        self.smooth_lambda = float(smooth_lambda)
+        self.kind = "smoothed_slope"
+        self.bucket_labels: list[str] = []
+        self.reference_bucket = ""
+        self.model: Ridge | None = None
+        self.fallback_rate = 0.5
+        self.fit_summary: list[dict[str, object]] = []
+
+    def _primary_feature_column(self) -> str:
+        if self.model_kind == "twap_native_spot_z_price_bucket":
+            return "selected_raw_move_dz"
+        if self.model_kind in {"btc_linear_z_price_bucket", *STAGEA_PRICE_BUCKET_MODEL_KINDS}:
+            return "move_dz"
+        raise ValueError(f"Smoothed slope model does not support model_kind={self.model_kind!r}")
+
+    def _bucket_series(self, values: pd.Series) -> pd.Series:
+        return values.map(lambda value: self.bucket_label(value)).astype(object)
+
+    def _target_series(self, frame: pd.DataFrame) -> pd.Series:
+        if "side_win" in frame.columns:
+            return pd.to_numeric(frame["side_win"], errors="coerce")
+        if "outcome" in frame.columns:
+            return pd.to_numeric(frame["outcome"], errors="coerce")
+        raise ValueError("Training frame requires side_win or outcome")
+
+    def _design(self, frame: pd.DataFrame) -> tuple[np.ndarray, list[str]]:
+        buckets = self._bucket_series(frame["selected_ask"])
+        z = pd.to_numeric(frame[self._primary_feature_column()], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        cols: list[str] = ["intercept"]
+        arrays: list[np.ndarray] = [np.ones(len(frame), dtype=float)]
+
+        for bucket in self.bucket_labels:
+            if bucket == self.reference_bucket:
+                continue
+            cols.append(f"bucket::{bucket}")
+            arrays.append(buckets.eq(bucket).to_numpy(dtype=float))
+
+        cols.append("z_global")
+        arrays.append(z)
+
+        for bucket in self.bucket_labels:
+            cols.append(f"zdev::{bucket}")
+            arrays.append(np.where(buckets.eq(bucket), z, 0.0))
+
+        if self.side_mode == "with_side":
+            cols.append("side_down")
+            arrays.append(_side_indicator(frame))
+
+        return np.column_stack(arrays), cols
+
+    def _append_smoothing_rows(
+        self,
+        x: np.ndarray,
+        y: np.ndarray,
+        weights: np.ndarray,
+        cols: list[str],
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if self.smooth_lambda <= 0.0 or len(self.bucket_labels) < 2:
+            return x, y, weights
+        col_index = {col: idx for idx, col in enumerate(cols)}
+        rows: list[np.ndarray] = []
+        scale = float(np.sqrt(self.smooth_lambda))
+        for left, right in zip(self.bucket_labels[:-1], self.bucket_labels[1:]):
+            left_col = f"zdev::{left}"
+            right_col = f"zdev::{right}"
+            if left_col not in col_index or right_col not in col_index:
+                continue
+            row = np.zeros(len(cols), dtype=float)
+            row[col_index[left_col]] = scale
+            row[col_index[right_col]] = -scale
+            rows.append(row)
+        if not rows:
+            return x, y, weights
+        x_aug = np.vstack([x, np.vstack(rows)])
+        y_aug = np.concatenate([y, np.zeros(len(rows), dtype=float)])
+        weight_aug = np.concatenate([weights, np.ones(len(rows), dtype=float)])
+        return x_aug, y_aug, weight_aug
+
+    def fit(self, frame: pd.DataFrame, weights: np.ndarray) -> "SmoothedSlopePriceBucketSurfaceModel":
+        if len(frame) != len(weights):
+            raise ValueError("Training frame and weights length mismatch")
+        train = frame.copy()
+        primary_col = self._primary_feature_column()
+        train["price_bucket"] = self._bucket_series(train["selected_ask"])
+        train["target"] = self._target_series(train)
+        train = train.dropna(subset=[primary_col, "selected_ask", "price_bucket", "target"])
+        if train.empty:
+            raise RuntimeError("Training frame is empty after smoothed-slope cleaning.")
+
+        ordered_labels = [label for _low, _high, label in PRICE_BUCKET_SCHEMES[self.price_bucket_scheme]]
+        counts = train.groupby("price_bucket", observed=True)["target"].agg(["size", "sum"]).reset_index()
+        supported: list[str] = []
+        for label in ordered_labels:
+            row = counts.loc[counts["price_bucket"].eq(label)]
+            if row.empty:
+                continue
+            rows = int(row["size"].iloc[0])
+            wins = float(row["sum"].iloc[0])
+            losses = rows - wins
+            if rows >= self.price_bucket_min_rows and wins >= self.price_bucket_min_class and losses >= self.price_bucket_min_class:
+                supported.append(label)
+        if not supported:
+            raise RuntimeError("No price buckets had enough support to train.")
+
+        train = train.loc[train["price_bucket"].isin(supported)].copy()
+        weight_series = pd.Series(np.asarray(weights, dtype=float), index=frame.index)
+        train_weights = weight_series.loc[train.index].to_numpy(dtype=float)
+        self.bucket_labels = supported
+        self.reference_bucket = supported[0]
+        self.fallback_rate = float(train["target"].astype(float).mean())
+        x, cols = self._design(train)
+        y = train["target"].astype(float).to_numpy()
+        x, y, train_weights = self._append_smoothing_rows(x, y, train_weights, cols)
+
+        model = Ridge(alpha=self.alpha, fit_intercept=False)
+        model.fit(x, y, sample_weight=train_weights)
+        self.model = model
+        self.rows = int(len(train))
+        summary = train.groupby("price_bucket", observed=True)["target"].agg(["size", "mean"]).reset_index()
+        self.fit_summary = summary.rename(columns={"size": "rows", "mean": "outcome_rate"}).to_dict("records")
+        self.bucket_rows = {str(row["price_bucket"]): int(row["rows"]) for row in self.fit_summary}
+        return self
+
+    def predict(self, frame: pd.DataFrame) -> np.ndarray:
+        out = pd.Series(self.fallback_rate, index=frame.index, dtype=float)
+        if self.model is None:
+            return out.clip(0.001, 0.999).to_numpy(dtype=float)
+        primary_col = self._primary_feature_column()
+        valid = frame.dropna(subset=[primary_col, "selected_ask"]).copy()
+        valid["price_bucket"] = self._bucket_series(valid["selected_ask"])
+        valid = valid.loc[valid["price_bucket"].isin(self.bucket_labels)]
+        if valid.empty:
+            return out.clip(0.001, 0.999).to_numpy(dtype=float)
+        x, _cols = self._design(valid)
+        out.loc[valid.index] = self.model.predict(x)
+        return out.clip(0.001, 0.999).to_numpy(dtype=float)
+
+    def predict_one(
+        self,
+        *,
+        move_dz: float,
+        selected_ask: float,
+        side: str,
+        side_dz_delta_2s: float | None = None,
+        selected_raw_move_dz: float | None = None,
+        selected_raw_minus_twap_move_dz: float | None = None,
+        canonical_tte_seconds: float | None = None,
+        timestamp_utc: Any | None = None,
+        timestamp_london: Any | None = None,
+    ) -> float | None:
+        del side_dz_delta_2s, selected_raw_minus_twap_move_dz, canonical_tte_seconds, timestamp_utc, timestamp_london
+        try:
+            ask = float(selected_ask)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(ask) or not EPS < ask < 1.0 - EPS:
+            return None
+        data: dict[str, list[object]] = {
+            "selected_ask": [ask],
+            "side": [str(side).upper()],
+        }
+        if self.model_kind == "twap_native_spot_z_price_bucket":
+            try:
+                raw_z = float(selected_raw_move_dz)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(raw_z):
+                return None
+            data["selected_raw_move_dz"] = [raw_z]
+        else:
+            try:
+                z = float(move_dz)
+            except (TypeError, ValueError):
+                return None
+            if not math.isfinite(z):
+                return None
+            data["move_dz"] = [z]
+        frame = pd.DataFrame(data)
+        value = float(self.predict(frame)[0])
+        return min(max(value, 0.0), 1.0)

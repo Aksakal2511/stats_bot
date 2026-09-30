@@ -23,12 +23,8 @@ DEFAULT_VOLATILITY_EDGES_FILE = (
     REPO_ROOT / "strategy" / "bucket_config" / "volatility_bucket_edges_offset250_12bucket_2h_cb_sources.json"
 )
 DEFAULT_LOG_DIR = REPO_ROOT / "logs"
-DEFAULT_MACRO_POLICY_BUNDLE = (
-    REPO_ROOT
-    / "strategy"
-    / "btc_twap60_native_spot_z_asym_wide_mid_capped_linear_style_field_c05_10_mr7p5_12_pw1_vw2_mrpw1_mrvw7_bps25_85_t75_240_aug14_aug30_v1"
-    / "strategy_manifest.json"
-)
+DEFAULT_MACRO_POLICY_BUNDLE = REPO_ROOT / "model_artifacts" / "btc5m_v1_aug14_sep14" / "final_strategy.json"
+DEFAULT_FINAL_STRATEGY_STATE = REPO_ROOT / "state" / "btc5m_v1_detector_pause.json"
 
 
 def load_env_file(path: Path) -> None:
@@ -73,6 +69,7 @@ def _int_env(name: str, default: int) -> int:
 @dataclass(frozen=True)
 class BotConfig:
     macro_policy_bundle: Path
+    final_strategy_state_file: Path
     policy_file: Path
     exit_thresholds_file: Path
     entry_edge_thresholds_file: Path
@@ -107,12 +104,16 @@ class BotConfig:
     entry_limit_price_mode: str
     entry_edge_preserving_max_catchup_ticks: int
     entry_edge_preserving_buffer_ticks: float
+    entry_mr_edge_buffer: float
+    disable_mean_reversion_entries: bool
     entry_disable_maker_fallback: bool
     entry_on_demand_signed_fallback_enabled: bool
     surplus_adaptive_entry_enabled: bool
     surplus_adaptive_min_edge_surplus: float
     surplus_adaptive_step_edge_surplus: float
     surplus_adaptive_extra_ticks: int
+    entry_pre_submit_ask_revalidation_enabled: bool
+    entry_pre_submit_ask_revalidation_slack_ticks: int
     low_liquidity_no_signal_guard_enabled: bool
     low_liquidity_no_signal_max_price: float
     low_liquidity_no_signal_max_abs_move_dz: float
@@ -128,6 +129,13 @@ class BotConfig:
     twap_lag_cheap_cont_max_twap_move_dz: float
     twap_lag_cheap_cont_max_raw_move_dz: float
     mr_raw_twap_aligned_block_enabled: bool
+    cheap_low_vol_guard_enabled: bool
+    cheap_low_vol_max_price: float
+    cheap_low_vol_max_vol_bps: float
+    c_weak_momentum_low_vol_guard_enabled: bool
+    c_weak_momentum_low_vol_max_vol_bps: float
+    c_weak_momentum_low_vol_delta_seconds: int
+    c_weak_momentum_low_vol_abs_delta_max: float
     policy_no_longer_viable_latch_seconds: float
     live_entry_retry_cooldown_seconds: float
     live_max_entry_attempts_per_window: int
@@ -238,6 +246,9 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         args.macro_policy_bundle
         or os.getenv("STATS_MACRO_POLICY_BUNDLE", str(DEFAULT_MACRO_POLICY_BUNDLE))
     ).resolve()
+    final_strategy_state_file = Path(
+        os.getenv("STATS_FINAL_STRATEGY_STATE_FILE", str(DEFAULT_FINAL_STRATEGY_STATE))
+    ).resolve()
     exit_thresholds_file = Path(
         args.exit_thresholds_file or os.getenv("STATS_EXIT_THRESHOLDS_FILE", str(DEFAULT_EXIT_THRESHOLDS_FILE))
     ).resolve()
@@ -250,10 +261,10 @@ def build_config(args: argparse.Namespace) -> BotConfig:
     ).resolve()
     log_dir = Path(args.log_dir or os.getenv("STATS_LOG_DIR", str(DEFAULT_LOG_DIR))).resolve()
     min_entry_price = float(
-        args.min_entry_price if args.min_entry_price is not None else _float_env("STATS_MIN_ENTRY_PRICE", 0.15)
+        args.min_entry_price if args.min_entry_price is not None else _float_env("STATS_MIN_ENTRY_PRICE", 0.20)
     )
     max_entry_price = float(
-        args.max_entry_price if args.max_entry_price is not None else _float_env("STATS_MAX_ENTRY_PRICE", 0.60)
+        args.max_entry_price if args.max_entry_price is not None else _float_env("STATS_MAX_ENTRY_PRICE", 0.80)
     )
     weekend_min_entry_price = float(
         args.weekend_min_entry_price
@@ -263,7 +274,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
     weekend_max_entry_price = float(
         args.weekend_max_entry_price
         if args.weekend_max_entry_price is not None
-        else _float_env("STATS_WEEKEND_MAX_ENTRY_PRICE", 0.65)
+        else _float_env("STATS_WEEKEND_MAX_ENTRY_PRICE", 0.80)
     )
     if not (0.0 < min_entry_price < max_entry_price < 1.0):
         raise SystemExit("Weekday entry price bounds must satisfy 0 < min < max < 1.")
@@ -286,7 +297,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
     if stake_mode not in {"fixed_usd", "min_order_size", "dynamic_shares", "ladder_shares"}:
         raise SystemExit("STATS_STAKE_MODE must be fixed_usd, min_order_size, dynamic_shares, or ladder_shares.")
 
-    observe_default = False if paper_trading else True
+    observe_default = False
     observe_first_window = _bool_env("STATS_OBSERVE_FIRST_WINDOW", observe_default)
     if args.no_observe_first_window:
         observe_first_window = False
@@ -298,6 +309,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
 
     return BotConfig(
         macro_policy_bundle=macro_policy_bundle,
+        final_strategy_state_file=final_strategy_state_file,
         policy_file=policy_file,
         exit_thresholds_file=exit_thresholds_file,
         entry_edge_thresholds_file=entry_edge_thresholds_file,
@@ -311,7 +323,7 @@ def build_config(args: argparse.Namespace) -> BotConfig:
             float(
                 args.peak_drawdown_kill_usd
                 if args.peak_drawdown_kill_usd is not None
-                else _float_env("STATS_PEAK_DRAWDOWN_KILL_USD", 15.0)
+                else _float_env("STATS_PEAK_DRAWDOWN_KILL_USD", 0.0)
             ),
         ),
         exit_policy_mode=exit_policy_mode,
@@ -339,9 +351,9 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         max_entry_price=max_entry_price,
         weekend_min_entry_price=weekend_min_entry_price,
         weekend_max_entry_price=weekend_max_entry_price,
-        entry_start_block_seconds=max(0, _int_env("STATS_ENTRY_START_BLOCK_SECONDS", 45)),
-        entry_min_tte_seconds=max(0, _int_env("STATS_ENTRY_MIN_TTE_SECONDS", 45)),
-        entry_max_tte_seconds=max(0, _int_env("STATS_ENTRY_MAX_TTE_SECONDS", 200)),
+        entry_start_block_seconds=max(0, _int_env("STATS_ENTRY_START_BLOCK_SECONDS", 0)),
+        entry_min_tte_seconds=max(0, _int_env("STATS_ENTRY_MIN_TTE_SECONDS", 60)),
+        entry_max_tte_seconds=max(0, _int_env("STATS_ENTRY_MAX_TTE_SECONDS", 220)),
         cooldown_seconds=max(0, _int_env("STATS_COOLDOWN_SECONDS", 10)),
         maker_min_spread_ticks=max(1, _int_env("STATS_MAKER_MIN_SPREAD_TICKS", 1)),
         entry_quote_max_age_seconds=max(0.1, _float_env("STATS_ENTRY_QUOTE_MAX_AGE_SECONDS", 1.5)),
@@ -352,12 +364,18 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         entry_limit_price_mode=str(os.getenv("STATS_ENTRY_LIMIT_PRICE_MODE", "tolerance") or "tolerance").strip().lower(),
         entry_edge_preserving_max_catchup_ticks=max(0, _int_env("STATS_ENTRY_EDGE_PRESERVING_MAX_CATCHUP_TICKS", 3)),
         entry_edge_preserving_buffer_ticks=max(0.0, _float_env("STATS_ENTRY_EDGE_PRESERVING_BUFFER_TICKS", 0.0)),
+        entry_mr_edge_buffer=0.0,
+        disable_mean_reversion_entries=True,
         entry_disable_maker_fallback=_bool_env("STATS_ENTRY_DISABLE_MAKER_FALLBACK", False),
         entry_on_demand_signed_fallback_enabled=_bool_env("STATS_ENTRY_ON_DEMAND_SIGNED_FALLBACK_ENABLED", False),
         surplus_adaptive_entry_enabled=_bool_env("STATS_SURPLUS_ADAPTIVE_ENTRY_ENABLED", False),
         surplus_adaptive_min_edge_surplus=max(0.0, _float_env("STATS_SURPLUS_ADAPTIVE_MIN_EDGE_SURPLUS", 0.015)),
         surplus_adaptive_step_edge_surplus=max(0.0001, _float_env("STATS_SURPLUS_ADAPTIVE_STEP_EDGE_SURPLUS", 0.010)),
         surplus_adaptive_extra_ticks=max(0, _int_env("STATS_SURPLUS_ADAPTIVE_EXTRA_TICKS", 1)),
+        entry_pre_submit_ask_revalidation_enabled=_bool_env("STATS_ENTRY_PRE_SUBMIT_ASK_REVALIDATION_ENABLED", False),
+        entry_pre_submit_ask_revalidation_slack_ticks=max(
+            0, _int_env("STATS_ENTRY_PRE_SUBMIT_ASK_REVALIDATION_SLACK_TICKS", 2)
+        ),
         low_liquidity_no_signal_guard_enabled=_bool_env("STATS_LOW_LIQUIDITY_NO_SIGNAL_GUARD_ENABLED", False),
         low_liquidity_no_signal_max_price=max(
             0.0,
@@ -397,6 +415,28 @@ def build_config(args: argparse.Namespace) -> BotConfig:
         twap_lag_cheap_cont_max_twap_move_dz=_float_env("STATS_TWAP_LAG_CHEAP_CONT_MAX_TWAP_MOVE_DZ", 0.50),
         twap_lag_cheap_cont_max_raw_move_dz=_float_env("STATS_TWAP_LAG_CHEAP_CONT_MAX_RAW_MOVE_DZ", 0.0),
         mr_raw_twap_aligned_block_enabled=_bool_env("STATS_MR_RAW_TWAP_ALIGNED_BLOCK_ENABLED", False),
+        cheap_low_vol_guard_enabled=_bool_env("STATS_CHEAP_LOW_VOL_GUARD_ENABLED", False),
+        cheap_low_vol_max_price=max(
+            0.0,
+            min(1.0, _float_env("STATS_CHEAP_LOW_VOL_MAX_PRICE", 0.35)),
+        ),
+        cheap_low_vol_max_vol_bps=max(
+            0.0,
+            _float_env("STATS_CHEAP_LOW_VOL_MAX_VOL_BPS", 20.0),
+        ),
+        c_weak_momentum_low_vol_guard_enabled=_bool_env("STATS_C_WEAK_MOMENTUM_LOW_VOL_GUARD_ENABLED", False),
+        c_weak_momentum_low_vol_max_vol_bps=max(
+            0.0,
+            _float_env("STATS_C_WEAK_MOMENTUM_LOW_VOL_MAX_VOL_BPS", 30.0),
+        ),
+        c_weak_momentum_low_vol_delta_seconds=max(
+            1,
+            _int_env("STATS_C_WEAK_MOMENTUM_LOW_VOL_DELTA_SECONDS", 35),
+        ),
+        c_weak_momentum_low_vol_abs_delta_max=max(
+            0.0,
+            _float_env("STATS_C_WEAK_MOMENTUM_LOW_VOL_ABS_DELTA_MAX", 0.05),
+        ),
         policy_no_longer_viable_latch_seconds=max(
             0.0,
             _float_env("STATS_POLICY_NO_LONGER_VIABLE_LATCH_SECONDS", 1.5),

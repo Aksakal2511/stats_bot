@@ -73,6 +73,13 @@ class DynamicEdgeSelection:
     vol_bucket: str
     time_segment: str
     day_group: str
+    score: float | None = None
+    vol_score: float | None = None
+    momentum_score: float | None = None
+    c_edge: float | None = None
+    mr_edge: float | None = None
+    momentum_feature: str = ""
+    momentum_value: float | None = None
 
 
 class DynamicEdgeSelector:
@@ -156,7 +163,10 @@ class DynamicEdgeSelector:
         local_vol_1h_bps: float | None,
         trade_style: str,
         selected_ask: float | None,
+        selected_side: str | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> DynamicEdgeSelection | None:
+        del selected_side, snapshot
         if trade_style not in {"continuation", "mean_reversion"}:
             return None
         time_segment = self._time_segment(timestamp_london)
@@ -233,8 +243,10 @@ class VolHighContinuationEdgeSelector:
         local_vol_1h_bps: float | None,
         trade_style: str,
         selected_ask: float | None,
+        selected_side: str | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> DynamicEdgeSelection | None:
-        del day_group, timestamp_london, selected_ask
+        del day_group, timestamp_london, selected_ask, selected_side, snapshot
         if trade_style not in {"continuation", "mean_reversion"}:
             return None
         local_vol = finite_float(local_vol_1h_bps)
@@ -302,8 +314,10 @@ class VolThreeZoneEdgeSelector:
         local_vol_1h_bps: float | None,
         trade_style: str,
         selected_ask: float | None,
+        selected_side: str | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> DynamicEdgeSelection | None:
-        del day_group, timestamp_london, selected_ask
+        del day_group, timestamp_london, selected_ask, selected_side, snapshot
         if trade_style not in {"continuation", "mean_reversion"}:
             return None
         local_vol = finite_float(local_vol_1h_bps)
@@ -412,8 +426,10 @@ class StyleAwareBoundedSurfaceEdgeSelector:
         local_vol_1h_bps: float | None,
         trade_style: str,
         selected_ask: float | None,
+        selected_side: str | None = None,
+        snapshot: dict[str, Any] | None = None,
     ) -> DynamicEdgeSelection | None:
-        del day_group, timestamp_london
+        del day_group, timestamp_london, selected_side, snapshot
         if trade_style not in {"continuation", "mean_reversion"}:
             return None
         price_score = 1.0 - self._score_between(selected_ask, self.price_low, self.price_high)
@@ -476,6 +492,198 @@ class StyleAwareBoundedSurfaceEdgeSelector:
             vol_bucket=vol_bucket,
             time_segment="",
             day_group="",
+        )
+
+
+class StyleAwareVolMomentumSurfaceEdgeSelector:
+    def __init__(self, payload: dict[str, Any], *, default_min_tte: int, default_max_tte: int):
+        self.rule_label = str(payload.get("entry_rule_label") or "vol_momentum_field_edges")
+        self.default_min_tte = int(default_min_tte)
+        self.default_max_tte = int(default_max_tte)
+        self.c_edge_min = float(payload["c_edge_min_cents"]) / 100.0
+        self.c_edge_max = float(payload["c_edge_max_cents"]) / 100.0
+        self.mr_edge_min = float(payload["mr_edge_min_cents"]) / 100.0
+        self.mr_edge_max = float(payload["mr_edge_max_cents"]) / 100.0
+        self.c_momentum_feature = str(payload.get("c_momentum_feature") or "delta40").strip().lower()
+        self.mr_momentum_feature = str(payload.get("mr_momentum_feature") or "delta15").strip().lower()
+        self.c_momentum_anchor = self._parse_anchor(payload.get("c_momentum_anchor", "lit0.06"))
+        self.mr_momentum_anchor = self._parse_anchor(payload.get("mr_momentum_anchor", "lit0.08"))
+        self.c_vol_low_bps = float(payload.get("c_vol_low_bps", payload.get("vol_low_bps", 20.0)))
+        self.c_vol_high_bps = float(payload.get("c_vol_high_bps", payload.get("vol_high_bps", 80.0)))
+        self.mr_vol_low_bps = float(payload.get("mr_vol_low_bps", payload.get("vol_low_bps", 20.0)))
+        self.mr_vol_high_bps = float(payload.get("mr_vol_high_bps", payload.get("vol_high_bps", 80.0)))
+        self.c_vol_weight = float(payload.get("c_vol_weight", payload.get("vol_weight", 1.0)))
+        self.c_momentum_weight = float(payload.get("c_momentum_weight", payload.get("momentum_weight", 1.0)))
+        self.mr_vol_weight = float(payload.get("mr_vol_weight", payload.get("vol_weight", 1.0)))
+        self.mr_momentum_weight = float(payload.get("mr_momentum_weight", payload.get("momentum_weight", 1.0)))
+        self.source_family = str(payload.get("source_family") or "style_bounded_vol_momentum_surface")
+        self.support = int(payload.get("support") or 0)
+        if self.c_edge_min > self.c_edge_max or self.mr_edge_min > self.mr_edge_max:
+            raise ValueError("vol/momentum selector requires min edge <= max edge")
+        if self.c_vol_low_bps >= self.c_vol_high_bps or self.mr_vol_low_bps >= self.mr_vol_high_bps:
+            raise ValueError("vol/momentum selector requires low vol < high vol")
+        if self.c_vol_weight + self.c_momentum_weight <= 0.0:
+            raise ValueError("vol/momentum selector requires positive C weights")
+        if self.mr_vol_weight + self.mr_momentum_weight <= 0.0:
+            raise ValueError("vol/momentum selector requires positive MR weights")
+
+    @staticmethod
+    def _parse_anchor(value: Any) -> float:
+        text = str(value).strip().lower()
+        if text.startswith("lit"):
+            return float(text.removeprefix("lit").replace("p", "."))
+        if text.startswith("literal_"):
+            return float(text.removeprefix("literal_").replace("p", "."))
+        return float(text)
+
+    @staticmethod
+    def _score_between(value: float | None, low: float, high: float) -> float:
+        numeric = finite_float(value)
+        if numeric is None:
+            return 0.5
+        denom = float(high) - float(low)
+        if not math.isfinite(denom) or denom <= 1e-12:
+            return 0.5
+        return min(max((numeric - float(low)) / denom, 0.0), 1.0)
+
+    @staticmethod
+    def _momentum_column(feature: str, side: str | None) -> str | None:
+        text = str(feature or "").strip().lower().replace("delta_", "delta")
+        if not text.startswith("delta"):
+            return None
+        horizon = text.removeprefix("delta").removesuffix("s")
+        try:
+            seconds = int(float(horizon))
+        except ValueError:
+            return None
+        side_prefix = str(side or "").strip().lower()
+        if side_prefix not in {"up", "down"}:
+            return None
+        return f"{side_prefix}_raw_delta_{seconds}s"
+
+    @staticmethod
+    def _momentum_term(value: float | None, anchor: float) -> float:
+        numeric = finite_float(value)
+        scaled = 0.0 if numeric is None else min(max(float(numeric) / max(float(anchor), 1e-12), -1.0), 1.0)
+        return min(max(0.5 - 0.5 * scaled, 0.0), 1.0)
+
+    @staticmethod
+    def _edge_pair_label(c_edge: float, mr_edge: float) -> str:
+        def fmt(edge: float) -> str:
+            cents = round(edge * 100.0, 2)
+            if abs(cents - round(cents)) < 1e-9:
+                return f"{int(round(cents)):02d}"
+            return f"{cents:.2f}".rstrip("0").rstrip(".").replace(".", "p")
+
+        return f"C{fmt(c_edge)}_M{fmt(mr_edge)}"
+
+    def _edge(
+        self,
+        *,
+        edge_min: float,
+        edge_max: float,
+        local_vol_1h_bps: float | None,
+        vol_low_bps: float,
+        vol_high_bps: float,
+        vol_weight: float,
+        momentum_value: float | None,
+        momentum_anchor: float,
+        momentum_weight: float,
+    ) -> tuple[float, float, float, float]:
+        vol_term = 1.0 - self._score_between(local_vol_1h_bps, vol_low_bps, vol_high_bps)
+        momentum_term = self._momentum_term(momentum_value, momentum_anchor)
+        score = (
+            float(vol_weight) * vol_term
+            + float(momentum_weight) * momentum_term
+        ) / max(float(vol_weight + momentum_weight), 1e-12)
+        score = min(max(score, 0.0), 1.0)
+        edge = float(edge_min) + (float(edge_max) - float(edge_min)) * score
+        return min(max(edge, float(edge_min)), float(edge_max)), score, vol_term, momentum_term
+
+    def select(
+        self,
+        *,
+        day_group: str,
+        timestamp_london: Any,
+        local_vol_1h_bps: float | None,
+        trade_style: str,
+        selected_ask: float | None,
+        selected_side: str | None = None,
+        snapshot: dict[str, Any] | None = None,
+    ) -> DynamicEdgeSelection | None:
+        del day_group, timestamp_london, selected_ask
+        if trade_style not in {"continuation", "mean_reversion"}:
+            return None
+        snapshot = snapshot or {}
+        side = str(selected_side or "").strip().lower()
+        c_col = self._momentum_column(self.c_momentum_feature, side)
+        mr_col = self._momentum_column(self.mr_momentum_feature, side)
+        c_momentum = finite_float(snapshot.get(c_col)) if c_col else None
+        mr_momentum = finite_float(snapshot.get(mr_col)) if mr_col else None
+        c_edge, c_score, c_vol_score, c_mom_score = self._edge(
+            edge_min=self.c_edge_min,
+            edge_max=self.c_edge_max,
+            local_vol_1h_bps=local_vol_1h_bps,
+            vol_low_bps=self.c_vol_low_bps,
+            vol_high_bps=self.c_vol_high_bps,
+            vol_weight=self.c_vol_weight,
+            momentum_value=c_momentum,
+            momentum_anchor=self.c_momentum_anchor,
+            momentum_weight=self.c_momentum_weight,
+        )
+        mr_edge, mr_score, mr_vol_score, mr_mom_score = self._edge(
+            edge_min=self.mr_edge_min,
+            edge_max=self.mr_edge_max,
+            local_vol_1h_bps=local_vol_1h_bps,
+            vol_low_bps=self.mr_vol_low_bps,
+            vol_high_bps=self.mr_vol_high_bps,
+            vol_weight=self.mr_vol_weight,
+            momentum_value=mr_momentum,
+            momentum_anchor=self.mr_momentum_anchor,
+            momentum_weight=self.mr_momentum_weight,
+        )
+        edge = c_edge if trade_style == "continuation" else mr_edge
+        score = c_score if trade_style == "continuation" else mr_score
+        vol_score = c_vol_score if trade_style == "continuation" else mr_vol_score
+        momentum_score = c_mom_score if trade_style == "continuation" else mr_mom_score
+        momentum_feature = self.c_momentum_feature if trade_style == "continuation" else self.mr_momentum_feature
+        momentum_value = c_momentum if trade_style == "continuation" else mr_momentum
+        local_vol = finite_float(local_vol_1h_bps)
+        low = self.c_vol_low_bps if trade_style == "continuation" else self.mr_vol_low_bps
+        high = self.c_vol_high_bps if trade_style == "continuation" else self.mr_vol_high_bps
+        if local_vol is None:
+            vol_bucket = "unknown"
+        elif local_vol <= low + 1e-12:
+            vol_bucket = "low"
+        elif local_vol >= high - 1e-12:
+            vol_bucket = "high"
+        else:
+            vol_bucket = "mid"
+        return DynamicEdgeSelection(
+            parameters=EntryParameters(edge=edge, min_tte=self.default_min_tte, max_tte=self.default_max_tte),
+            rule_label=self.rule_label,
+            source_family=self.source_family,
+            source_segment=(
+                f"C:{self.c_momentum_feature}/{self.c_edge_min*100:.2f}-{self.c_edge_max*100:.2f}c/"
+                f"v{self.c_vol_low_bps:g}-{self.c_vol_high_bps:g}/w{self.c_vol_weight:g}-{self.c_momentum_weight:g}|"
+                f"MR:{self.mr_momentum_feature}/{self.mr_edge_min*100:.2f}-{self.mr_edge_max*100:.2f}c/"
+                f"v{self.mr_vol_low_bps:g}-{self.mr_vol_high_bps:g}/w{self.mr_vol_weight:g}-{self.mr_momentum_weight:g}"
+            ),
+            child_segment="",
+            fallback_depth=0,
+            support=self.support,
+            edge_pair=self._edge_pair_label(c_edge, mr_edge),
+            contradiction_state="",
+            vol_bucket=vol_bucket,
+            time_segment="",
+            day_group="",
+            score=score,
+            vol_score=vol_score,
+            momentum_score=momentum_score,
+            c_edge=c_edge,
+            mr_edge=mr_edge,
+            momentum_feature=momentum_feature,
+            momentum_value=momentum_value,
         )
 
 
@@ -782,7 +990,7 @@ class MacroLocalPolicy:
         self,
         profile_payload: dict[str, Any],
         manifest_path: Path,
-    ) -> DynamicEdgeSelector | VolHighContinuationEdgeSelector | VolThreeZoneEdgeSelector | StyleAwareBoundedSurfaceEdgeSelector | None:
+    ) -> DynamicEdgeSelector | VolHighContinuationEdgeSelector | VolThreeZoneEdgeSelector | StyleAwareBoundedSurfaceEdgeSelector | StyleAwareVolMomentumSurfaceEdgeSelector | None:
         raw = profile_payload.get("dynamic_edge_selector")
         if not isinstance(raw, dict) or not bool(raw.get("enabled", True)):
             return None
@@ -803,6 +1011,12 @@ class MacroLocalPolicy:
             )
         if selector_kind in {"style_bounded_monotonic_surface", "style_field_edges"}:
             return StyleAwareBoundedSurfaceEdgeSelector(
+                raw,
+                default_min_tte=default_min_tte,
+                default_max_tte=default_max_tte,
+            )
+        if selector_kind in {"style_bounded_vol_momentum_surface", "vol_momentum_field_edges"}:
+            return StyleAwareVolMomentumSurfaceEdgeSelector(
                 raw,
                 default_min_tte=default_min_tte,
                 default_max_tte=default_max_tte,
@@ -949,6 +1163,7 @@ class MacroLocalPolicy:
         snapshot: dict[str, Any],
         trade_style: str,
         selected_ask: float | None,
+        selected_side: str | None = None,
     ) -> DynamicEdgeSelection | None:
         selector = self.dynamic_edge_selector
         if selector is None:
@@ -962,6 +1177,8 @@ class MacroLocalPolicy:
             local_vol_1h_bps=local_vol,
             trade_style=trade_style,
             selected_ask=selected_ask,
+            selected_side=selected_side,
+            snapshot=snapshot,
         )
 
     def _entry_parameters_and_rule_for_snapshot(
@@ -970,8 +1187,9 @@ class MacroLocalPolicy:
         trade_style: str,
         price_bucket: str | None = None,
         selected_ask: float | None = None,
+        selected_side: str | None = None,
     ) -> tuple[EntryParameters, DynamicEdgeSelection | None]:
-        dynamic_selection = self._dynamic_edge_selection_for_snapshot(snapshot, trade_style, selected_ask)
+        dynamic_selection = self._dynamic_edge_selection_for_snapshot(snapshot, trade_style, selected_ask, selected_side)
         if dynamic_selection is not None:
             return dynamic_selection.parameters, dynamic_selection
         bucket_parameters = self._price_bucket_entry_parameters(trade_style, price_bucket)
@@ -990,12 +1208,14 @@ class MacroLocalPolicy:
         trade_style: str,
         price_bucket: str | None = None,
         selected_ask: float | None = None,
+        selected_side: str | None = None,
     ) -> EntryParameters:
         parameters, _ = self._entry_parameters_and_rule_for_snapshot(
             snapshot,
             trade_style,
             price_bucket,
             selected_ask,
+            selected_side,
         )
         return parameters
 
@@ -1025,6 +1245,13 @@ class MacroLocalPolicy:
             snapshot["entry_rule_contradiction_state"] = ""
             snapshot["entry_rule_vol_bucket"] = ""
             snapshot["entry_rule_time_segment"] = ""
+            snapshot["entry_rule_score"] = ""
+            snapshot["entry_rule_vol_score"] = ""
+            snapshot["entry_rule_momentum_score"] = ""
+            snapshot["entry_rule_c_edge"] = ""
+            snapshot["entry_rule_mr_edge"] = ""
+            snapshot["entry_rule_momentum_feature"] = ""
+            snapshot["entry_rule_momentum_value"] = ""
         else:
             snapshot["entry_rule_name"] = dynamic_selection.rule_label
             snapshot["entry_rule_source_family"] = dynamic_selection.source_family
@@ -1036,6 +1263,13 @@ class MacroLocalPolicy:
             snapshot["entry_rule_contradiction_state"] = dynamic_selection.contradiction_state
             snapshot["entry_rule_vol_bucket"] = dynamic_selection.vol_bucket
             snapshot["entry_rule_time_segment"] = dynamic_selection.time_segment
+            snapshot["entry_rule_score"] = dynamic_selection.score
+            snapshot["entry_rule_vol_score"] = dynamic_selection.vol_score
+            snapshot["entry_rule_momentum_score"] = dynamic_selection.momentum_score
+            snapshot["entry_rule_c_edge"] = dynamic_selection.c_edge
+            snapshot["entry_rule_mr_edge"] = dynamic_selection.mr_edge
+            snapshot["entry_rule_momentum_feature"] = dynamic_selection.momentum_feature
+            snapshot["entry_rule_momentum_value"] = dynamic_selection.momentum_value
         snapshot["entry_rule_min_tte"] = parameters.min_tte
         snapshot["entry_rule_max_tte"] = parameters.max_tte
         snapshot["active_edge_trade_style"] = match.trade_style
@@ -1432,6 +1666,7 @@ class MacroLocalPolicy:
                     match.trade_style,
                     match.price_bucket,
                     match.ask,
+                    match.side,
                 )
             else:
                 parameters = EntryParameters(math.inf, int(self.entry["min_tte"]), int(self.entry["max_tte"]))
@@ -1508,6 +1743,7 @@ class MacroLocalPolicy:
                 snapshot,
                 best_match.trade_style,
                 best_match.ask,
+                best_match.side,
             )
             self._store_active_entry_rule(snapshot, best_match, best_parameters, best_dynamic_selection)
             branch_cfg = self._surface_branch_config_for_snapshot(snapshot)
@@ -1523,6 +1759,10 @@ class MacroLocalPolicy:
                 snapshot["selected_raw_move_dz"] = raw_value
             if gap_value is not None:
                 snapshot["selected_raw_minus_twap_move_dz"] = gap_value
+            for horizon_seconds in (15, 35, 40):
+                delta_value = finite_float(snapshot.get(f"{best_match.side.lower()}_raw_delta_{horizon_seconds}s"))
+                if delta_value is not None:
+                    snapshot[f"selected_raw_delta_{horizon_seconds}s"] = delta_value
             snapshot["selected_twap_move_dz"] = best_match.move_z
             return EntryDecision(
                 viable=False,
@@ -1547,6 +1787,7 @@ class MacroLocalPolicy:
             selected.trade_style,
             selected.price_bucket,
             selected.ask,
+            selected.side,
         )
         threshold = selected_parameters.edge
         snapshot.update({
@@ -1577,6 +1818,10 @@ class MacroLocalPolicy:
             snapshot["selected_raw_move_dz"] = raw_value
         if gap_value is not None:
             snapshot["selected_raw_minus_twap_move_dz"] = gap_value
+        for horizon_seconds in (15, 35, 40):
+            delta_value = finite_float(snapshot.get(f"{selected.side.lower()}_raw_delta_{horizon_seconds}s"))
+            if delta_value is not None:
+                snapshot[f"selected_raw_delta_{horizon_seconds}s"] = delta_value
         snapshot["selected_twap_move_dz"] = selected.move_z
         return EntryDecision(
             viable=not blockers,
